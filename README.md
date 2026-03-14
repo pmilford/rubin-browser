@@ -4,11 +4,15 @@ A web browser for Vera Rubin Observatory (LSST) public data products.
 
 ## Features
 
-- **Sky Map Viewer** — Browse HiPS survey images via Aladin Lite
-- **Catalog Search** — TAP/ADQL queries on DP1 catalogs
+- **Sky Map Viewer** — Browse HiPS survey images via Aladin Lite with tiled loading
+- **Time Series Navigation** — Epoch slider with MJD display, play/pause auto-advance
+- **Filter/Band Selector** — Switch between u/g/r/i/z/y filters; RGB composite mode
+- **Survey Overlays** — Layer Gaia DR3, DSS2, 2MASS, SDSS with opacity blending
+- **Blink Mode** — Compare images across epochs/filters/surveys at configurable speed
+- **Image Tools** — Histogram stretch, pixel readout (RA/Dec/value), WCS grid overlay, N/E indicator, scale bar
+- **Catalog Search** — TAP/ADQL queries on DP1 catalogs with coordinate input
 - **Object Browser** — View individual objects with photometry, light curves
 - **Galaxy Analysis** — Extracted image cutouts with time series and stacking
-- **Time Series** — Interactive light curve plots
 - **Authentication** — RSP token-based access for full data
 
 ## Quick Start
