@@ -116,3 +116,34 @@ Unit tests with mocks CANNOT catch rendering failures. We learned this the hard 
    - No console errors during typical user flows
 
 **Key lesson:** Tests that only check `element exists` are nearly useless for visual apps. Tests must verify *outcomes* (image rendered, no error overlay, content changed).
+
+## Testing Philosophy (CRITICAL LESSON)
+
+**Unit tests with mocks CANNOT catch visual/rendering failures.** We learned this the hard way multiple times.
+
+The ONLY way to verify a visual application works is to:
+1. Start the actual dev server
+2. Open a real browser (Playwright)
+3. Verify actual rendered content (canvas pixels, visible elements, computed styles)
+4. Interact with the UI and verify OUTCOMES change
+
+**Every bug that made it to production passed unit tests.** The unit tests verified:
+- DOM elements exist ✓
+- Event handlers are registered ✓
+- Functions return correct values ✓
+
+But they did NOT verify:
+- Images actually render ✗
+- Tiles load from the network ✗
+- Canvas has non-zero pixel content ✗
+- Controls change the display ✗
+- No error overlays appear ✗
+
+### Mandatory Testing Protocol
+
+Before ANY commit that changes viewer/UI code:
+1. `npm run dev` — start the server
+2. `npm run test:ui` — run Playwright visual tests (auto-starts server)
+3. Verify: no error overlays, canvas renders, controls work
+
+If Playwright tests fail, THE CODE IS BROKEN regardless of what unit tests say.
