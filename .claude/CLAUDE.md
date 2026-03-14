@@ -68,6 +68,30 @@ src/
 - **State**: Svelte stores for app state, local state for component UI
 - **Images**: Aladin for sky maps, FITS.js for cutout rendering
 
+## Coverage Requirements (MANDATORY)
+
+Every code change MUST maintain or improve test coverage:
+- **Statements**: ≥ 95%
+- **Branches**: ≥ 95%
+- **Functions**: ≥ 95%
+- **Lines**: ≥ 95%
+
+When adding new code:
+1. Write unit tests alongside the implementation
+2. Add UI tests (Playwright) for any user-visible behavior
+3. Add interface tests for any new TypeScript types/guards
+4. Run `npm run test:coverage` and verify thresholds are met before committing
+5. Do NOT lower coverage thresholds to pass — write more tests instead
+
+## Documentation Requirements (MANDATORY)
+
+When adding new features or making significant changes:
+1. Update `README.md` — keep the feature list, quick start, and architecture sections current
+2. Update `docs/architecture/` — add or update design docs for new subsystems
+3. Update component JSDoc comments — document props, events, and public methods
+4. Update type docstrings — explain fields and constraints
+5. If adding a new API endpoint integration, document it in `docs/architecture/`
+
 ## Don't
 
 - Don't use `any` type without a comment explaining why
@@ -75,3 +99,5 @@ src/
 - Don't bypass the auth module for API calls
 - Don't use Svelte 4 patterns (use Svelte 5 runes: `$state`, `$derived`, `$effect`)
 - Don't skip tests — fix them or update them
+- Don't merge code below 95% coverage
+- Don't add features without updating documentation
