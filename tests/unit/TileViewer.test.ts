@@ -2,46 +2,47 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/svelte';
 import TileViewer from '../../src/views/TileViewer.svelte';
 
-// Mock OpenSeadragon (used by ImageViewer)
-const createMockViewer = () => {
-  const handlers: Record<string, Function[]> = {};
+// Mock Aladin Lite (used by ImageViewer)
+const createMockAladin = () => {
+  const listeners: Record<string, Function[]> = {};
   return {
-    viewport: {
-      zoomBy: vi.fn(),
-      applyConstraints: vi.fn(),
-      goHome: vi.fn(),
-      panTo: vi.fn(),
-      zoomTo: vi.fn(),
-      getCenter: vi.fn(() => ({ x: 0.5, y: 0.5 })),
-    },
-    addHandler: vi.fn((event: string, handler: Function) => {
-      if (!handlers[event]) handlers[event] = [];
-      handlers[event].push(handler);
+    on: vi.fn((event: string, handler: Function) => {
+      if (!listeners[event]) listeners[event] = [];
+      listeners[event].push(handler);
     }),
+    gotoRaDec: vi.fn(),
+    setZoom: vi.fn(),
+    increaseZoom: vi.fn(),
+    decreaseZoom: vi.fn(),
+    getRaDec: vi.fn(() => [62.0, -37.0]),
     destroy: vi.fn(),
-    world: {
-      removeAll: vi.fn(),
-      getItemCount: vi.fn(() => 0),
-    },
-    open: vi.fn(),
-    addTiledImage: vi.fn(),
-    _trigger: (event: string, data?: Record<string, unknown>) => {
-      (handlers[event] || []).forEach(h => h(data || {}));
+    newImageSurvey: vi.fn((url: string) => ({ url, setOpacity: vi.fn() })),
+    addImageSurvey: vi.fn(),
+    removeImageSurvey: vi.fn(),
+    setImageSurvey: vi.fn(),
+    _trigger: (event: string, data?: any) => {
+      (listeners[event] || []).forEach(h => h(data));
     },
   };
 };
 
-let mockViewer: ReturnType<typeof createMockViewer>;
+let mockAladinInstance: ReturnType<typeof createMockAladin>;
 
-vi.mock('openseadragon', () => {
-  const mockFn = vi.fn(() => {
-    mockViewer = createMockViewer();
-    return mockViewer;
-  });
-  (mockFn as any).Point = vi.fn((x: number, y: number) => ({ x, y }));
+const { tileMockAladinFn } = vi.hoisted(() => {
   return {
-    default: mockFn,
-    Point: vi.fn((x: number, y: number) => ({ x, y })),
+    tileMockAladinFn: vi.fn(() => {
+      mockAladinInstance = createMockAladin();
+      return mockAladinInstance;
+    }),
+  };
+});
+
+vi.mock('aladin-lite', () => {
+  return {
+    default: {
+      init: vi.fn(async () => {}),
+      aladin: tileMockAladinFn,
+    },
   };
 });
 
@@ -300,34 +301,51 @@ describe('TileViewer', () => {
       });
     });
 
-    it('zooms in with + key', () => {
+    it('zooms in with + key', async () => {
+      vi.useRealTimers();
       render(TileViewer);
+      // Flush microtasks to let Svelte effect run
+      await new Promise(r => setTimeout(r, 10));
       fireEvent.keyDown(window, { key: '+' });
-      expect(mockViewer.viewport.zoomBy).toHaveBeenCalledWith(1.5);
+      expect(mockAladinInstance.increaseZoom).toHaveBeenCalled();
+      vi.useFakeTimers();
     });
 
-    it('zooms in with = key', () => {
+    it('zooms in with = key', async () => {
+      vi.useRealTimers();
       render(TileViewer);
+      await new Promise(r => setTimeout(r, 10));
       fireEvent.keyDown(window, { key: '=' });
-      expect(mockViewer.viewport.zoomBy).toHaveBeenCalledWith(1.5);
+      expect(mockAladinInstance.increaseZoom).toHaveBeenCalled();
+      vi.useFakeTimers();
     });
 
-    it('zooms out with - key', () => {
+    it('zooms out with - key', async () => {
+      vi.useRealTimers();
       render(TileViewer);
+      await new Promise(r => setTimeout(r, 10));
       fireEvent.keyDown(window, { key: '-' });
-      expect(mockViewer.viewport.zoomBy).toHaveBeenCalledWith(1 / 1.5);
+      expect(mockAladinInstance.decreaseZoom).toHaveBeenCalled();
+      vi.useFakeTimers();
     });
 
-    it('zooms out with _ key', () => {
+    it('zooms out with _ key', async () => {
+      vi.useRealTimers();
       render(TileViewer);
+      await new Promise(r => setTimeout(r, 10));
       fireEvent.keyDown(window, { key: '_' });
-      expect(mockViewer.viewport.zoomBy).toHaveBeenCalledWith(1 / 1.5);
+      expect(mockAladinInstance.decreaseZoom).toHaveBeenCalled();
+      vi.useFakeTimers();
     });
 
-    it('resets view with 0 key', () => {
+    it('resets view with 0 key', async () => {
+      vi.useRealTimers();
       render(TileViewer);
+      await new Promise(r => setTimeout(r, 10));
       fireEvent.keyDown(window, { key: '0' });
-      expect(mockViewer.viewport.goHome).toHaveBeenCalled();
+      expect(mockAladinInstance.gotoRaDec).toHaveBeenCalled();
+      expect(mockAladinInstance.setZoom).toHaveBeenCalled();
+      vi.useFakeTimers();
     });
 
     it('toggles UI visibility with Escape when panel is closed', async () => {
@@ -347,13 +365,16 @@ describe('TileViewer', () => {
   });
 
   describe('viewer state changes', () => {
-    it('updates status bar when viewer state changes', () => {
+    it('updates status bar when viewer state changes', async () => {
+      vi.useRealTimers();
       render(TileViewer);
-      mockViewer._trigger('open');
+      await new Promise(r => setTimeout(r, 10));
+      mockAladinInstance._trigger('positionChanged', { ra: 62.0, dec: -37.0 });
 
       const status = screen.getByRole('status');
       expect(status.textContent).toContain('RA:');
       expect(status.textContent).toContain('Dec:');
+      vi.useFakeTimers();
     });
   });
 

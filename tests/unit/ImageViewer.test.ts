@@ -1,49 +1,65 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/svelte';
+import { render } from '@testing-library/svelte';
 import ImageViewer from '../../src/components/ImageViewer.svelte';
 
-// Create mock OpenSeadragon viewer
-const createMockViewer = () => {
-  const handlers: Record<string, Function[]> = {};
+// Create mock Aladin viewer
+const createMockAladin = () => {
+  const listeners: Record<string, Function[]> = {};
   return {
-    viewport: {
-      zoomBy: vi.fn(),
-      applyConstraints: vi.fn(),
-      goHome: vi.fn(),
-      panTo: vi.fn(),
-      zoomTo: vi.fn(),
-      getCenter: vi.fn(() => ({ x: 0.5, y: 0.5 })),
-    },
-    addHandler: vi.fn((event: string, handler: Function) => {
-      if (!handlers[event]) handlers[event] = [];
-      handlers[event].push(handler);
+    on: vi.fn((event: string, handler: Function) => {
+      if (!listeners[event]) listeners[event] = [];
+      listeners[event].push(handler);
     }),
+    gotoRaDec: vi.fn(),
+    setZoom: vi.fn(),
+    increaseZoom: vi.fn(),
+    decreaseZoom: vi.fn(),
+    getRaDec: vi.fn(() => [62.0, -37.0]),
     destroy: vi.fn(),
-    _trigger: (event: string, data?: Record<string, unknown>) => {
-      (handlers[event] || []).forEach(h => h(data || {}));
+    newImageSurvey: vi.fn((url: string) => ({ url, setOpacity: vi.fn() })),
+    addImageSurvey: vi.fn(),
+    removeImageSurvey: vi.fn(),
+    setImageSurvey: vi.fn(),
+    _trigger: (event: string, data?: any) => {
+      (listeners[event] || []).forEach(h => h(data));
     },
   };
 };
 
-let mockViewer: ReturnType<typeof createMockViewer>;
+let mockAladinInstance: ReturnType<typeof createMockAladin>;
+let mockInitCalled = false;
 
-vi.mock('openseadragon', () => {
-  const OpenSeadragonFn = vi.fn(() => {
-    mockViewer = createMockViewer();
-    return mockViewer;
-  });
-  // Add Point constructor to the default export
-  (OpenSeadragonFn as any).Point = vi.fn((x: number, y: number) => ({ x, y }));
+const { mockAladinFn, mockInitFn } = vi.hoisted(() => {
   return {
-    default: OpenSeadragonFn,
+    mockAladinFn: vi.fn(() => {
+      mockAladinInstance = createMockAladin();
+      return mockAladinInstance;
+    }),
+    mockInitFn: vi.fn(async () => {
+      mockInitCalled = true;
+    }),
+  };
+});
+
+vi.mock('aladin-lite', () => {
+  return {
+    default: {
+      init: mockInitFn,
+      aladin: mockAladinFn,
+    },
   };
 });
 
 // Import after mock setup
-import OpenSeadragon from 'openseadragon';
+import A from 'aladin-lite';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockInitCalled = false;
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('ImageViewer', () => {
@@ -54,49 +70,42 @@ describe('ImageViewer', () => {
       expect(container).toBeTruthy();
     });
 
-    it('initializes OpenSeadragon', () => {
+    it('initializes Aladin Lite', async () => {
       render(ImageViewer);
-      expect(OpenSeadragon).toHaveBeenCalled();
+      // Wait for async init
+      await new Promise(r => setTimeout(r, 50));
+      expect(A.init).toHaveBeenCalled();
+      expect(mockAladinFn).toHaveBeenCalled();
     });
 
-    it('passes custom initial coordinates', () => {
+    it('passes custom initial coordinates', async () => {
       render(ImageViewer, { props: { initialRa: 180, initialDec: 45, initialZoom: 5 } });
-      expect(OpenSeadragon).toHaveBeenCalled();
-      const config = (OpenSeadragon as ReturnType<typeof vi.fn>).mock.calls[0][0];
-      expect(config.element).toBeTruthy();
+      await new Promise(r => setTimeout(r, 50));
+      expect(mockAladinFn).toHaveBeenCalled();
+      const config = mockAladinFn.mock.calls[0][1];
+      expect(config.target).toBe('180 45');
+      expect(config.zoom).toBe(5);
     });
 
-    it('uses public HiPS as default (no token)', () => {
+    it('uses public HiPS as default (no token)', async () => {
       render(ImageViewer);
-      const config = (OpenSeadragon as ReturnType<typeof vi.fn>).mock.calls[0][0];
-      const url = config.tileSources.getTileUrl(3, 0, 0);
-      expect(url).toContain('https://alasky.cds.unistra.fr/DSS/DSSColor');
+      await new Promise(r => setTimeout(r, 50));
+      const config = mockAladinFn.mock.calls[0][1];
+      expect(config.survey).toBe('https://alasky.cds.unistra.fr/DSS/DSSColor');
     });
 
-    it('uses Rubin HiPS when rspToken is provided', () => {
+    it('uses Rubin HiPS when rspToken is provided', async () => {
       render(ImageViewer, { props: { rspToken: 'test-token-123' } });
-      const config = (OpenSeadragon as ReturnType<typeof vi.fn>).mock.calls[0][0];
-      const url = config.tileSources.getTileUrl(3, 0, 0);
-      expect(url).toContain('https://data.lsst.cloud/api/hips/images/color_gri');
+      await new Promise(r => setTimeout(r, 50));
+      const config = mockAladinFn.mock.calls[0][1];
+      expect(config.survey).toBe('https://data.lsst.cloud/api/hips/images/color_gri');
     });
 
-    it('includes auth header when rspToken is provided', () => {
-      render(ImageViewer, { props: { rspToken: 'test-token-123' } });
-      const config = (OpenSeadragon as ReturnType<typeof vi.fn>).mock.calls[0][0];
-      expect(config.tileSources.ajaxHeaders).toEqual({ 'Authorization': 'Bearer test-token-123' });
-    });
-
-    it('does not include auth header when no token', () => {
-      render(ImageViewer);
-      const config = (OpenSeadragon as ReturnType<typeof vi.fn>).mock.calls[0][0];
-      expect(config.tileSources.ajaxHeaders).toBeUndefined();
-    });
-
-    it('uses custom HiPS base URL when specified', () => {
+    it('uses custom HiPS base URL when specified', async () => {
       render(ImageViewer, { props: { hipsBaseUrl: 'https://example.com/hips/custom' } });
-      const config = (OpenSeadragon as ReturnType<typeof vi.fn>).mock.calls[0][0];
-      const url = config.tileSources.getTileUrl(3, 0, 0);
-      expect(url).toContain('https://example.com/hips/custom');
+      await new Promise(r => setTimeout(r, 50));
+      const config = mockAladinFn.mock.calls[0][1];
+      expect(config.survey).toBe('https://example.com/hips/custom');
     });
 
     it('does not show error overlay initially', () => {
@@ -106,270 +115,290 @@ describe('ImageViewer', () => {
     });
   });
 
-  describe('tile URL generation', () => {
-    it('generates correct tile URL structure', () => {
+  describe('Aladin configuration', () => {
+    it('disables all UI controls', async () => {
       render(ImageViewer);
-      const config = (OpenSeadragon as ReturnType<typeof vi.fn>).mock.calls[0][0];
-      const url = config.tileSources.getTileUrl(5, 42, 10);
-      expect(url).toContain('Norder');
-      expect(url).toContain('Dir');
-      expect(url).toContain('Npix');
-      expect(url).toMatch(/\.(png|jpg|jpeg)$/);
+      await new Promise(r => setTimeout(r, 50));
+      const config = mockAladinFn.mock.calls[0][1];
+      expect(config.showFullscreenControl).toBe(false);
+      expect(config.showZoomControl).toBe(false);
+      expect(config.showLayersControl).toBe(false);
+      expect(config.showGotoControl).toBe(false);
+      expect(config.showSimbadPointerControl).toBe(false);
+      expect(config.showCooGrid).toBe(false);
     });
 
-    it('calculates order from level (level - 1)', () => {
+    it('uses J2000 coordinate frame', async () => {
       render(ImageViewer);
-      const config = (OpenSeadragon as ReturnType<typeof vi.fn>).mock.calls[0][0];
-      const url = config.tileSources.getTileUrl(1, 0, 0);
-      expect(url).toContain('Norder0');
-    });
-
-    it('clamps order to minimum 0', () => {
-      render(ImageViewer);
-      const config = (OpenSeadragon as ReturnType<typeof vi.fn>).mock.calls[0][0];
-      // level=0 would give order=-1, should be clamped to 0
-      const url = config.tileSources.getTileUrl(0, 0, 0);
-      expect(url).toContain('Norder0');
-    });
-  });
-
-  describe('OpenSeadragon configuration', () => {
-    it('disables default navigation controls', () => {
-      render(ImageViewer);
-      const config = (OpenSeadragon as ReturnType<typeof vi.fn>).mock.calls[0][0];
-      expect(config.showNavigationControl).toBe(false);
-    });
-
-    it('enables navigator', () => {
-      render(ImageViewer);
-      const config = (OpenSeadragon as ReturnType<typeof vi.fn>).mock.calls[0][0];
-      expect(config.showNavigator).toBe(true);
-      expect(config.navigatorPosition).toBe('BOTTOM_RIGHT');
-    });
-
-    it('sets zoom limits', () => {
-      render(ImageViewer);
-      const config = (OpenSeadragon as ReturnType<typeof vi.fn>).mock.calls[0][0];
-      expect(config.minZoomLevel).toBe(0.5);
-      expect(config.maxZoomLevel).toBe(40);
-    });
-
-    it('enables horizontal wrapping', () => {
-      render(ImageViewer);
-      const config = (OpenSeadragon as ReturnType<typeof vi.fn>).mock.calls[0][0];
-      expect(config.wrapHorizontal).toBe(true);
+      await new Promise(r => setTimeout(r, 50));
+      const config = mockAladinFn.mock.calls[0][1];
+      expect(config.cooFrame).toBe('J2000');
     });
   });
 
   describe('exported methods', () => {
-    it('zoomIn calls viewport.zoomBy with 1.5', async () => {
+    it('zoomIn calls aladin.increaseZoom', async () => {
       const { component } = render(ImageViewer);
+      await new Promise(r => setTimeout(r, 50));
       (component as unknown as ImageViewer).zoomIn();
-      expect(mockViewer.viewport.zoomBy).toHaveBeenCalledWith(1.5);
-      expect(mockViewer.viewport.applyConstraints).toHaveBeenCalled();
+      expect(mockAladinInstance.increaseZoom).toHaveBeenCalled();
     });
 
-    it('zoomOut calls viewport.zoomBy with 1/1.5', async () => {
+    it('zoomOut calls aladin.decreaseZoom', async () => {
       const { component } = render(ImageViewer);
+      await new Promise(r => setTimeout(r, 50));
       (component as unknown as ImageViewer).zoomOut();
-      expect(mockViewer.viewport.zoomBy).toHaveBeenCalledWith(1 / 1.5);
-      expect(mockViewer.viewport.applyConstraints).toHaveBeenCalled();
+      expect(mockAladinInstance.decreaseZoom).toHaveBeenCalled();
     });
 
-    it('resetView calls viewport.goHome', async () => {
-      const { component } = render(ImageViewer);
+    it('resetView calls aladin.gotoRaDec and setZoom', async () => {
+      const { component } = render(ImageViewer, { props: { initialRa: 100, initialDec: 20, initialZoom: 7 } });
+      await new Promise(r => setTimeout(r, 50));
       (component as unknown as ImageViewer).resetView();
-      expect(mockViewer.viewport.goHome).toHaveBeenCalled();
+      expect(mockAladinInstance.gotoRaDec).toHaveBeenCalledWith(100, 20);
+      expect(mockAladinInstance.setZoom).toHaveBeenCalledWith(7);
     });
 
-    it('panTo calls viewport.panTo with converted coordinates', async () => {
+    it('panTo calls aladin.gotoRaDec', async () => {
       const { component } = render(ImageViewer);
+      await new Promise(r => setTimeout(r, 50));
       (component as unknown as ImageViewer).panTo(180, 45);
-      expect(mockViewer.viewport.panTo).toHaveBeenCalled();
-      expect(mockViewer.viewport.applyConstraints).toHaveBeenCalled();
+      expect(mockAladinInstance.gotoRaDec).toHaveBeenCalledWith(180, 45);
     });
 
-    it('setZoom calls viewport.zoomTo', async () => {
+    it('panToAndReload calls aladin.gotoRaDec', async () => {
       const { component } = render(ImageViewer);
-      (component as unknown as ImageViewer).setZoom(10);
-      expect(mockViewer.viewport.zoomTo).toHaveBeenCalledWith(10);
-      expect(mockViewer.viewport.applyConstraints).toHaveBeenCalled();
+      await new Promise(r => setTimeout(r, 50));
+      (component as unknown as ImageViewer).panToAndReload(180, 45);
+      expect(mockAladinInstance.gotoRaDec).toHaveBeenCalledWith(180, 45);
     });
 
-    it('shows error overlay when OpenSeadragon throws', () => {
-      (OpenSeadragon as ReturnType<typeof vi.fn>).mockImplementationOnce(() => {
-        throw new Error('OSD init failed');
-      });
+    it('setZoom calls aladin.setZoom', async () => {
+      const { component } = render(ImageViewer);
+      await new Promise(r => setTimeout(r, 50));
+      (component as unknown as ImageViewer).setZoom(10);
+      expect(mockAladinInstance.setZoom).toHaveBeenCalledWith(10);
+    });
+
+    it('handles error when Aladin init fails', async () => {
+      (A.init as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('Aladin init failed'));
 
       render(ImageViewer);
+      await new Promise(r => setTimeout(r, 50));
+
       const errorOverlay = document.querySelector('.error-overlay');
       expect(errorOverlay).toBeTruthy();
-      expect(errorOverlay?.textContent).toContain('OSD init failed');
+      expect(errorOverlay?.textContent).toContain('Aladin init failed');
     });
 
-    it('handles non-Error exception in catch block', () => {
-      (OpenSeadragon as ReturnType<typeof vi.fn>).mockImplementationOnce(() => {
-        throw 'string error';
-      });
+    it('handles non-Error exception', async () => {
+      (A.init as ReturnType<typeof vi.fn>).mockRejectedValueOnce('string error');
 
       render(ImageViewer);
+      await new Promise(r => setTimeout(r, 50));
+
       const errorOverlay = document.querySelector('.error-overlay');
       expect(errorOverlay).toBeTruthy();
       expect(errorOverlay?.textContent).toContain('Failed to initialize viewer');
     });
+
+    it('does not throw when methods called before init', () => {
+      const { component } = render(ImageViewer);
+      // Methods should not throw before Aladin is initialized
+      expect(() => (component as unknown as ImageViewer).zoomIn()).not.toThrow();
+      expect(() => (component as unknown as ImageViewer).zoomOut()).not.toThrow();
+      expect(() => (component as unknown as ImageViewer).resetView()).not.toThrow();
+      expect(() => (component as unknown as ImageViewer).panTo(0, 0)).not.toThrow();
+      expect(() => (component as unknown as ImageViewer).setZoom(5)).not.toThrow();
+      expect(() => (component as unknown as ImageViewer).panToAndReload(0, 0)).not.toThrow();
+    });
+  });
+
+  describe('overlay methods', () => {
+    it('addOverlay creates new image survey', async () => {
+      const { component } = render(ImageViewer);
+      await new Promise(r => setTimeout(r, 50));
+
+      (component as unknown as ImageViewer).addOverlay('test', 'https://example.com/hips/', 80);
+      expect(mockAladinInstance.newImageSurvey).toHaveBeenCalledWith('https://example.com/hips/');
+      expect(mockAladinInstance.addImageSurvey).toHaveBeenCalled();
+    });
+
+    it('addOverlay does not add duplicate', async () => {
+      const { component } = render(ImageViewer);
+      await new Promise(r => setTimeout(r, 50));
+
+      (component as unknown as ImageViewer).addOverlay('test', 'https://example.com/hips/', 80);
+      (component as unknown as ImageViewer).addOverlay('test', 'https://example.com/hips/', 80);
+      expect(mockAladinInstance.newImageSurvey).toHaveBeenCalledTimes(1);
+    });
+
+    it('removeOverlay removes existing overlay', async () => {
+      const { component } = render(ImageViewer);
+      await new Promise(r => setTimeout(r, 50));
+
+      (component as unknown as ImageViewer).addOverlay('test', 'https://example.com/hips/', 80);
+      (component as unknown as ImageViewer).removeOverlay('test');
+      expect(mockAladinInstance.removeImageSurvey).toHaveBeenCalled();
+    });
+
+    it('removeOverlay does nothing for non-existent overlay', async () => {
+      const { component } = render(ImageViewer);
+      await new Promise(r => setTimeout(r, 50));
+
+      (component as unknown as ImageViewer).removeOverlay('nonexistent');
+      expect(mockAladinInstance.removeImageSurvey).not.toHaveBeenCalled();
+    });
+
+    it('setOverlayOpacity changes opacity of existing overlay', async () => {
+      const { component } = render(ImageViewer);
+      await new Promise(r => setTimeout(r, 50));
+
+      const mockSurvey = { setOpacity: vi.fn() };
+      mockAladinInstance.newImageSurvey.mockReturnValueOnce(mockSurvey);
+
+      (component as unknown as ImageViewer).addOverlay('test', 'https://example.com/hips/', 80);
+      (component as unknown as ImageViewer).setOverlayOpacity('test', 50);
+      expect(mockSurvey.setOpacity).toHaveBeenCalledWith(0.5);
+    });
+
+    it('setOverlayOpacity does nothing for non-existent overlay', async () => {
+      const { component } = render(ImageViewer);
+      await new Promise(r => setTimeout(r, 50));
+
+      // Should not throw
+      expect(() => (component as unknown as ImageViewer).setOverlayOpacity('nonexistent', 50)).not.toThrow();
+    });
   });
 
   describe('event handlers', () => {
-    it('registers zoom handler', () => {
+    it('registers positionChanged handler', async () => {
       render(ImageViewer);
-      expect(mockViewer.addHandler).toHaveBeenCalledWith('zoom', expect.any(Function));
+      await new Promise(r => setTimeout(r, 50));
+      expect(mockAladinInstance.on).toHaveBeenCalledWith('positionChanged', expect.any(Function));
     });
 
-    it('registers pan handler', () => {
+    it('registers zoomChanged handler', async () => {
       render(ImageViewer);
-      expect(mockViewer.addHandler).toHaveBeenCalledWith('pan', expect.any(Function));
+      await new Promise(r => setTimeout(r, 50));
+      expect(mockAladinInstance.on).toHaveBeenCalledWith('zoomChanged', expect.any(Function));
     });
 
-    it('registers open handler', () => {
-      render(ImageViewer);
-      expect(mockViewer.addHandler).toHaveBeenCalledWith('open', expect.any(Function));
-    });
-
-    it('registers open-failed handler', () => {
-      render(ImageViewer);
-      expect(mockViewer.addHandler).toHaveBeenCalledWith('open-failed', expect.any(Function));
-    });
-
-    it('registers tile-load-failed handler', () => {
-      render(ImageViewer);
-      expect(mockViewer.addHandler).toHaveBeenCalledWith('tile-load-failed', expect.any(Function));
-    });
-
-    it('registers tile-load-failed handler', () => {
-      render(ImageViewer);
-      expect(mockViewer.addHandler).toHaveBeenCalledWith('tile-load-failed', expect.any(Function));
-    });
-
-    it('calls onViewerStateChange when pan occurs', () => {
+    it('calls onViewerStateChange when position changes', async () => {
       const onViewerStateChange = vi.fn();
       render(ImageViewer, { props: { onViewerStateChange } });
+      await new Promise(r => setTimeout(r, 50));
 
-      // Trigger the pan handler on the current mock viewer
-      mockViewer._trigger('pan');
+      mockAladinInstance._trigger('positionChanged', { ra: 180, dec: 45 });
 
-      expect(onViewerStateChange).toHaveBeenCalled();
+      expect(onViewerStateChange).toHaveBeenCalledWith(
+        expect.objectContaining({
+          centerRa: 180,
+          centerDec: 45,
+        })
+      );
     });
 
-    it('calls onViewerStateChange when zoom occurs', () => {
+    it('calls onViewerStateChange when zoom changes', async () => {
       const onViewerStateChange = vi.fn();
       render(ImageViewer, { props: { onViewerStateChange } });
+      await new Promise(r => setTimeout(r, 50));
 
-      mockViewer._trigger('zoom', { zoom: 5 });
+      mockAladinInstance._trigger('zoomChanged', 5);
 
-      expect(onViewerStateChange).toHaveBeenCalled();
-    });
-
-    it('registers open event handler that clears errors', () => {
-      render(ImageViewer);
-      // Verify the handler was registered
-      expect(mockViewer.addHandler).toHaveBeenCalledWith('open', expect.any(Function));
-    });
-
-    it('registers open-failed event handler', () => {
-      render(ImageViewer);
-      expect(mockViewer.addHandler).toHaveBeenCalledWith('open-failed', expect.any(Function));
-    });
-
-    it('registers tile-load-failed event handler', () => {
-      render(ImageViewer);
-      expect(mockViewer.addHandler).toHaveBeenCalledWith('tile-load-failed', expect.any(Function));
-    });
-
-    it('pans to initial position when open event fires', () => {
-      render(ImageViewer, { props: { initialRa: 180, initialDec: 0, initialZoom: 5 } });
-
-      mockViewer._trigger('open');
-
-      expect(mockViewer.viewport.panTo).toHaveBeenCalled();
-      expect(mockViewer.viewport.zoomTo).toHaveBeenCalledWith(5);
-    });
-
-    it('shows error overlay on open-failed event', async () => {
-      render(ImageViewer);
-      mockViewer._trigger('open-failed', { message: 'Tile server unavailable' });
-
-      // Wait for Svelte reactivity
-      await new Promise(r => setTimeout(r, 10));
-      const errorOverlay = document.querySelector('.error-overlay');
-      expect(errorOverlay).toBeTruthy();
-      expect(errorOverlay?.textContent).toContain('Tile server unavailable');
-    });
-
-    it('shows default error message on open-failed without message', async () => {
-      render(ImageViewer);
-      mockViewer._trigger('open-failed', {});
-
-      await new Promise(r => setTimeout(r, 10));
-      const errorOverlay = document.querySelector('.error-overlay');
-      expect(errorOverlay).toBeTruthy();
-      expect(errorOverlay?.textContent).toContain('Failed to load image tiles');
-    });
-
-    it('does not show error overlay for individual tile failures', async () => {
-      render(ImageViewer);
-      mockViewer._trigger('tile-load-failed', { message: 'Network timeout' });
-
-      await new Promise(r => setTimeout(r, 10));
-      const errorOverlay = document.querySelector('.error-overlay');
-      // Individual tile failures should NOT show error overlay
-      expect(errorOverlay).toBeNull();
-    });
-
-    it('does not show overlay for single tile failure without message', async () => {
-      render(ImageViewer);
-      mockViewer._trigger('tile-load-failed', {});
-
-      await new Promise(r => setTimeout(r, 10));
-      const errorOverlay = document.querySelector('.error-overlay');
-      expect(errorOverlay).toBeNull();
-    });
-
-    it('clears error state when open event fires after error', async () => {
-      render(ImageViewer);
-
-      // Trigger open-failed first (catastrophic error)
-      mockViewer._trigger('open-failed', { message: 'Connection failed' });
-      await new Promise(r => setTimeout(r, 10));
-      expect(document.querySelector('.error-overlay')).toBeTruthy();
-
-      // Now trigger open which should clear errors
-      mockViewer._trigger('open');
-      await new Promise(r => setTimeout(r, 10));
-      expect(document.querySelector('.error-overlay')).toBeFalsy();
+      expect(onViewerStateChange).toHaveBeenCalledWith(
+        expect.objectContaining({
+          zoomLevel: 5,
+        })
+      );
     });
   });
 
   describe('error display', () => {
-    it('shows error overlay when OSD constructor throws', () => {
-      (OpenSeadragon as ReturnType<typeof vi.fn>).mockImplementationOnce(() => {
-        throw new Error('OSD init failed');
-      });
+    it('shows error overlay when Aladin init throws', async () => {
+      (A.init as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('OSD init failed'));
 
       render(ImageViewer);
+      await new Promise(r => setTimeout(r, 50));
+
       const errorOverlay = document.querySelector('.error-overlay');
       expect(errorOverlay).toBeTruthy();
       expect(errorOverlay?.textContent).toContain('OSD init failed');
     });
 
-    it('shows hint text in error overlay', () => {
-      (OpenSeadragon as ReturnType<typeof vi.fn>).mockImplementationOnce(() => {
-        throw new Error('Failed');
-      });
+    it('shows hint text in error overlay', async () => {
+      (A.init as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('Failed'));
 
       render(ImageViewer);
+      await new Promise(r => setTimeout(r, 50));
+
       const hint = document.querySelector('.hint');
       expect(hint).toBeTruthy();
       expect(hint?.textContent).toContain('different coordinate');
+    });
+
+    it('error overlay has role=alert for accessibility', async () => {
+      (A.init as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('Test error'));
+
+      render(ImageViewer);
+      await new Promise(r => setTimeout(r, 50));
+
+      const errorOverlay = document.querySelector('.error-overlay');
+      expect(errorOverlay?.getAttribute('role')).toBe('alert');
+    });
+
+    it('auto-dismisses error overlay after timeout', async () => {
+      vi.useFakeTimers();
+      (A.init as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('Temp error'));
+
+      render(ImageViewer);
+
+      // Flush all microtasks (for the async effect)
+      for (let i = 0; i < 10; i++) {
+        await Promise.resolve();
+      }
+      // Also flush any pending macrotasks
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(document.querySelector('.error-overlay')).toBeTruthy();
+
+      // Fast-forward past the 5 second auto-dismiss
+      await vi.advanceTimersByTimeAsync(5000);
+
+      expect(document.querySelector('.error-overlay')).toBeFalsy();
+    });
+  });
+
+  describe('cleanup', () => {
+    it('destroys aladin viewer on unmount', async () => {
+      const { unmount } = render(ImageViewer);
+      await Promise.resolve();
+      await Promise.resolve();
+
+      unmount();
+      expect(mockAladinInstance.destroy).toHaveBeenCalled();
+    });
+
+    it('clears error dismiss timer on unmount', async () => {
+      vi.useFakeTimers();
+      const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout');
+      (A.init as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('Timer test'));
+
+      const { unmount } = render(ImageViewer);
+
+      for (let i = 0; i < 10; i++) {
+        await Promise.resolve();
+      }
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Error is shown, timer is active
+      expect(document.querySelector('.error-overlay')).toBeTruthy();
+
+      unmount();
+
+      // clearTimeout should have been called during cleanup
+      expect(clearTimeoutSpy).toHaveBeenCalled();
+      clearTimeoutSpy.mockRestore();
     });
   });
 });
