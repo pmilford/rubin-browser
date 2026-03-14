@@ -7,6 +7,7 @@
   import TimeSlider from '../components/TimeSlider.svelte';
   import FilterSelector from '../components/FilterSelector.svelte';
   import SurveySelector from '../components/SurveySelector.svelte';
+  import BlinkController from '../components/BlinkController.svelte';
   import type { ScalingFunction, ColorMapName, InterpolationMethod, ViewerState, Epoch } from '../types/image.js';
   import { mjdToIso } from '../types/image.js';
   import { DEFAULT_MOCK_EPOCHS, type SurveyInfo } from '../constants.js';
@@ -33,6 +34,15 @@
     opacity: number;
   }
   let surveyOverlays: OverlayEntry[] = $state([]);
+
+  // Blink state
+  let blinkPlaying = $state(false);
+  let blinkRate = $state(1.0);
+  const blinkTargets = $derived(mockEpochs.map((e, i) => ({
+    id: `epoch-${i}`,
+    label: `Epoch ${i + 1} (${e.filter ?? '?'})`
+  })));
+  let blinkIndex = $state(0);
 
   // Time series state
   const mockEpochs: Epoch[] = DEFAULT_MOCK_EPOCHS.map(e => ({
@@ -96,6 +106,15 @@
     statusMessage = `${entry?.survey.name ?? surveyId} opacity: ${opacity}%`;
   }
 
+  function handleBlinkTargetChange(index: number) {
+    blinkIndex = index;
+    currentEpochIndex = index;
+    const epoch = mockEpochs[index];
+    if (epoch) {
+      statusMessage = `Blink: Epoch ${index + 1} (${epoch.filter ?? '—'})`;
+    }
+  }
+
   function handleKeydown(e: KeyboardEvent) {
     if (e.key === 'h' || e.key === 'H') {
       helpOpen = !helpOpen;
@@ -151,6 +170,16 @@
     onOverlayAdd={handleOverlayAdd}
     onOverlayRemove={handleOverlayRemove}
     onOpacityChange={handleOpacityChange}
+  />
+
+  <BlinkController
+    targets={blinkTargets}
+    currentIndex={blinkIndex}
+    playing={blinkPlaying}
+    rate={blinkRate}
+    onTargetChange={handleBlinkTargetChange}
+    onPlayStateChange={(p) => { blinkPlaying = p; }}
+    onRateChange={(r) => { blinkRate = r; }}
   />
 
   <div class="viewer-area">

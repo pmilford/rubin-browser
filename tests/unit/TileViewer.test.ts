@@ -279,8 +279,8 @@ describe('TileViewer', () => {
 
     it('shows epoch count', () => {
       render(TileViewer);
-      const counter = screen.getByText(/\/ 30/);
-      expect(counter).toBeTruthy();
+      const counter = screen.getByTitle('Current epoch / total');
+      expect(counter.textContent).toContain('/ 30');
     });
 
     it('updates status when epoch changes', async () => {
@@ -293,21 +293,23 @@ describe('TileViewer', () => {
 
     it('steps through epochs with next button', async () => {
       render(TileViewer);
-      expect(screen.getByText('1 / 30')).toBeTruthy();
+      const epochCounter = screen.getByTitle('Current epoch / total');
+      expect(epochCounter.textContent).toContain('1 / 30');
 
       await fireEvent.click(screen.getByLabelText('Next epoch'));
-      expect(screen.getByText('2 / 30')).toBeTruthy();
+      expect(epochCounter.textContent).toContain('2 / 30');
     });
 
     it('steps backward with previous button', async () => {
       render(TileViewer);
+      const epochCounter = screen.getByTitle('Current epoch / total');
       // Move forward first
       await fireEvent.click(screen.getByLabelText('Next epoch'));
-      expect(screen.getByText('2 / 30')).toBeTruthy();
+      expect(epochCounter.textContent).toContain('2 / 30');
 
       // Then back
       await fireEvent.click(screen.getByLabelText('Previous epoch'));
-      expect(screen.getByText('1 / 30')).toBeTruthy();
+      expect(epochCounter.textContent).toContain('1 / 30');
     });
   });
 
@@ -409,6 +411,41 @@ describe('TileViewer', () => {
       await fireEvent.click(screen.getByLabelText('Toggle Gaia DR3'));
       await fireEvent.click(screen.getByLabelText('Toggle DSS2 Color'));
       expect(screen.getByText('(2)')).toBeTruthy();
+    });
+  });
+
+  describe('blink controller integration', () => {
+    it('renders blink controller', () => {
+      render(TileViewer);
+      expect(screen.getByRole('region', { name: 'Blink controls' })).toBeTruthy();
+    });
+
+    it('renders blink controls', () => {
+      render(TileViewer);
+      expect(screen.getByLabelText('Start blink')).toBeTruthy();
+      expect(screen.getByLabelText('Blink step forward')).toBeTruthy();
+      expect(screen.getByLabelText('Blink step back')).toBeTruthy();
+    });
+
+    it('updates status when blink target changes', async () => {
+      render(TileViewer);
+      await fireEvent.click(screen.getByLabelText('Blink step forward'));
+      const status = screen.getByRole('status');
+      expect(status.textContent).toContain('Blink: Epoch 2');
+    });
+
+    it('toggles blink play state', async () => {
+      render(TileViewer);
+      await fireEvent.click(screen.getByLabelText('Start blink'));
+      expect(screen.getByLabelText('Stop blink')).toBeTruthy();
+      await fireEvent.click(screen.getByLabelText('Stop blink'));
+      expect(screen.getByLabelText('Start blink')).toBeTruthy();
+    });
+
+    it('renders all blink targets', () => {
+      render(TileViewer);
+      const items = screen.getAllByRole('listitem');
+      expect(items.length).toBeGreaterThan(0);
     });
   });
 });
