@@ -920,6 +920,30 @@
     onkeydown={onKeyDown}
   ></canvas>
 
+  <!-- FOV Minimap (Issue #2) -->
+  <div class="fov-minimap" aria-label="Sky position minimap">
+    <svg width={MINIMAP_W} height={MINIMAP_H} viewBox={`0 0 ${MINIMAP_W} ${MINIMAP_H}`}>
+      <!-- Full sky background -->
+      <rect x="0" y="0" width={MINIMAP_W} height={MINIMAP_H} fill="rgba(10,10,30,0.85)" stroke="rgba(100,100,255,0.3)" stroke-width="1" rx="3" />
+      <!-- Grid lines -->
+      <line x1={MINIMAP_W / 2} y1="0" x2={MINIMAP_W / 2} y2={MINIMAP_H} stroke="rgba(100,100,255,0.15)" stroke-width="0.5" />
+      <line x1="0" y1={MINIMAP_H / 2} x2={MINIMAP_W} y2={MINIMAP_H / 2} stroke="rgba(100,100,255,0.15)" stroke-width="0.5" />
+      <!-- Equator -->
+      <line x1="0" y1={MINIMAP_H / 2} x2={MINIMAP_W} y2={MINIMAP_H / 2} stroke="rgba(100,100,255,0.25)" stroke-width="0.5" stroke-dasharray="2,2" />
+      <!-- Current FOV rectangle -->
+      <rect
+        x={Math.max(0, minimapRect().x)}
+        y={Math.max(0, minimapRect().y)}
+        width={Math.min(MINIMAP_W - Math.max(0, minimapRect().x), Math.max(1, minimapRect().w))}
+        height={Math.min(MINIMAP_H - Math.max(0, minimapRect().y), Math.max(1, minimapRect().h))}
+        fill="rgba(100,100,255,0.2)"
+        stroke="rgba(150,150,255,0.8)"
+        stroke-width="1"
+        rx="1"
+      />
+    </svg>
+  </div>
+
   <!-- FOV Indicator (Issue #7) -->
   <div class="fov-indicator" aria-label="Field of view indicator">
     <div class="fov-row">
@@ -965,6 +989,16 @@
 
   .hips-canvas:active {
     cursor: grabbing;
+  }
+
+  .fov-minimap {
+    position: absolute;
+    bottom: 88px;
+    right: 12px;
+    z-index: 5;
+    pointer-events: none;
+    border-radius: 5px;
+    overflow: hidden;
   }
 
   .fov-indicator {

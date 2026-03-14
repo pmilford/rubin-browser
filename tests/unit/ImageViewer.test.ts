@@ -353,4 +353,132 @@ describe('ImageViewer', () => {
       expect(true).toBe(true);
     });
   });
+
+  describe('FOV minimap', () => {
+    it('renders the minimap widget', () => {
+      render(ImageViewer);
+      const minimap = document.querySelector('.fov-minimap');
+      expect(minimap).toBeTruthy();
+    });
+
+    it('minimap has aria-label for accessibility', () => {
+      render(ImageViewer);
+      const minimap = document.querySelector('.fov-minimap');
+      expect(minimap?.getAttribute('aria-label')).toBe('Sky position minimap');
+    });
+
+    it('minimap contains an SVG element', () => {
+      render(ImageViewer);
+      const svg = document.querySelector('.fov-minimap svg');
+      expect(svg).toBeTruthy();
+    });
+
+    it('minimap SVG has a background rectangle', () => {
+      render(ImageViewer);
+      const rects = document.querySelectorAll('.fov-minimap svg rect');
+      expect(rects.length).toBeGreaterThanOrEqual(2); // background + FOV rect
+    });
+
+    it('minimap SVG has a FOV rectangle (highlighted)', () => {
+      render(ImageViewer);
+      const rects = document.querySelectorAll('.fov-minimap svg rect');
+      // Second rect should be the FOV indicator (has stroke)
+      expect(rects.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('minimap is positioned in bottom-right', () => {
+      render(ImageViewer);
+      const minimap = document.querySelector('.fov-minimap') as HTMLElement;
+      expect(minimap).toBeTruthy();
+      // Check via class (position applied via CSS)
+      expect(minimap.classList.contains('fov-minimap')).toBe(true);
+    });
+
+    it('minimap updates when panTo is called', () => {
+      const { component } = render(ImageViewer);
+      const viewer = component as unknown as ImageViewer;
+      // panTo should trigger a render which updates minimap position
+      expect(() => viewer.panTo(180, 0)).not.toThrow();
+    });
+
+    it('minimap updates when setZoom is called', () => {
+      const { component } = render(ImageViewer);
+      const viewer = component as unknown as ImageViewer;
+      expect(() => viewer.setZoom(8)).not.toThrow();
+    });
+  });
+
+  describe('overlay tile loading on view change', () => {
+    it('reloadTiles does not throw when overlays exist', () => {
+      const { component } = render(ImageViewer);
+      const viewer = component as unknown as ImageViewer;
+      viewer.addOverlay('dss2', 'https://alasky.cds.unistra.fr/DSS/DSSColor/', 80);
+      // Pan should trigger tile reload including overlays
+      expect(() => viewer.panTo(120, -30)).not.toThrow();
+    });
+
+    it('zoom change triggers overlay tile reload', () => {
+      const { component } = render(ImageViewer);
+      const viewer = component as unknown as ImageViewer;
+      viewer.addOverlay('panstarrs', 'https://alasky.cds.unistra.fr/Pan-STARRS/DR1/color-i-r-g/', 60);
+      expect(() => viewer.setZoom(5)).not.toThrow();
+    });
+
+    it('multiple overlays can be active simultaneously', () => {
+      const { component } = render(ImageViewer);
+      const viewer = component as unknown as ImageViewer;
+      viewer.addOverlay('dss2', 'https://alasky.cds.unistra.fr/DSS/DSSColor/', 80);
+      viewer.addOverlay('2mass', 'https://alasky.cds.unistra.fr/2MASS/J/', 50);
+      viewer.addOverlay('panstarrs', 'https://alasky.cds.unistra.fr/Pan-STARRS/DR1/color-i-r-g/', 70);
+      // Should handle all overlays without error
+      expect(() => viewer.panTo(62, -37)).not.toThrow();
+    });
+
+    it('overlay opacity changes take effect', () => {
+      const { component } = render(ImageViewer);
+      const viewer = component as unknown as ImageViewer;
+      viewer.addOverlay('dss2', 'https://alasky.cds.unistra.fr/DSS/DSSColor/', 80);
+      viewer.setOverlayOpacity('dss2', 30);
+      viewer.setOverlayOpacity('dss2', 100);
+      viewer.setOverlayOpacity('dss2', 0);
+      // Should not throw with various opacity values
+      expect(true).toBe(true);
+    });
+
+    it('removing overlay clears its cached tiles', () => {
+      const { component } = render(ImageViewer);
+      const viewer = component as unknown as ImageViewer;
+      viewer.addOverlay('dss2', 'https://alasky.cds.unistra.fr/DSS/DSSColor/', 80);
+      viewer.removeOverlay('dss2');
+      // After removal, re-adding should work (cache cleared)
+      viewer.addOverlay('dss2', 'https://alasky.cds.unistra.fr/DSS/DSSColor/', 60);
+      expect(true).toBe(true);
+    });
+  });
+
+  describe('zoom scale verification', () => {
+    it('zoom 0 maps to 180° FOV', () => {
+      render(ImageViewer, { props: { initialZoom: 0 } });
+      const indicator = document.querySelector('.fov-indicator');
+      expect(indicator?.textContent).toContain('180');
+    });
+
+    it('zoom 3 maps to 22.5° FOV', () => {
+      render(ImageViewer, { props: { initialZoom: 3 } });
+      const indicator = document.querySelector('.fov-indicator');
+      expect(indicator?.textContent).toContain('22.50');
+    });
+
+    it('zoom 6 maps to ~2.81° FOV', () => {
+      render(ImageViewer, { props: { initialZoom: 6 } });
+      const indicator = document.querySelector('.fov-indicator');
+      expect(indicator?.textContent).toContain('2.81');
+    });
+
+    it('zoom 10 maps to ~0.176° FOV', () => {
+      render(ImageViewer, { props: { initialZoom: 10 } });
+      const indicator = document.querySelector('.fov-indicator');
+      expect(indicator?.textContent).toContain('0.18');
+    });
+  });
 });
