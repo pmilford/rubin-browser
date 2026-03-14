@@ -1,6 +1,8 @@
 <script lang="ts">
   import { getAuthHeader } from '../api/auth.js';
   import { radecToTileIndex } from '../api/hips.js';
+  import { applyScaling } from '../utils/scaling.js';
+  import { applyColorMap } from '../utils/colormap.js';
   import type { ViewerState, ScalingFunction, ColorMapName, InterpolationMethod } from '../types/image.js';
 
   let {
@@ -201,6 +203,11 @@
       if (img && img.complete && img.naturalWidth > 0) {
         drawTile(ctx, img, tile.order, tile.pixelIndex);
       }
+    }
+
+    // Post-processing: apply scaling and colormap if not default
+    if (scaling !== 'linear' || colorMap !== 'grayscale') {
+      applyPostProcessing();
     }
   }
 
@@ -653,9 +660,38 @@
     };
   });
 
+  function applyPostProcessing() {
+    if (!ctx) return;
+    const imageData = ctx.getImageData(0, 0, canvasWidth, canvasHeight);
+    const pixels = imageData.data;
+
+    // Convert RGB to grayscale luminance values
+    const gray = new Float64Array(canvasWidth * canvasHeight);
+    for (let i = 0; i < gray.length; i++) {
+      const r = pixels[i * 4];
+      const g = pixels[i * 4 + 1];
+      const b = pixels[i * 4 + 2];
+      gray[i] = 0.299 * r + 0.587 * g + 0.114 * b;
+    }
+
+    // Apply scaling (normalized output 0-1)
+    const scaled = applyScaling(gray, { method: scaling });
+
+    // Apply colormap (RGB output 0-255)
+    const colored = applyColorMap(scaled.data, colorMap);
+
+    // Write back to canvas
+    for (let i = 0; i < gray.length; i++) {
+      pixels[i * 4] = colored[i * 3];
+      pixels[i * 4 + 1] = colored[i * 3 + 1];
+      pixels[i * 4 + 2] = colored[i * 3 + 2];
+    }
+
+    ctx.putImageData(imageData, 0, 0);
+  }
+
   // Re-render when processing props change
   $effect(() => {
-    // Track these props for reactivity
     void scaling;
     void colorMap;
     void interpolation;
