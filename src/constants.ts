@@ -77,6 +77,13 @@ export const SURVEY_OVERLAYS: readonly SurveyInfo[] = [
     description: 'Sloan Digital Sky Survey color composite',
     waveband: 'Optical (ugr)',
   },
+  {
+    id: 'panstarrs-dr1',
+    name: 'PanSTARRS DR1',
+    hipsUrl: 'https://alasky.cds.unistra.fr/Pan-STARRS/DR1/color-i-r-g/',
+    description: 'Panoramic Survey Telescope and Rapid Response System DR1',
+    waveband: 'Optical (grizy)',
+  },
 ] as const;
 
 /** Get survey info by ID */

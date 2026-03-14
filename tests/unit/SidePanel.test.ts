@@ -192,6 +192,34 @@ describe('SidePanel', () => {
       await fireEvent.change(screen.getByLabelText('Interpolation'), { target: { value: 'bicubic' } });
       expect(onInterpolationChange).toHaveBeenCalledWith('bicubic');
     });
+
+    it('shows invert checkbox', () => {
+      render(SidePanel, { props: { open: true } });
+      const checkbox = screen.getByLabelText('Invert');
+      expect(checkbox).toBeTruthy();
+      expect(checkbox.tagName).toBe('INPUT');
+      expect((checkbox as HTMLInputElement).type).toBe('checkbox');
+    });
+
+    it('invert checkbox is unchecked by default', () => {
+      render(SidePanel, { props: { open: true } });
+      const checkbox = screen.getByLabelText('Invert') as HTMLInputElement;
+      expect(checkbox.checked).toBe(false);
+    });
+
+    it('invert checkbox is checked when invert=true', () => {
+      render(SidePanel, { props: { open: true, invert: true } });
+      const checkbox = screen.getByLabelText('Invert') as HTMLInputElement;
+      expect(checkbox.checked).toBe(true);
+    });
+
+    it('calls onInvertChange when invert checkbox toggled', async () => {
+      const onInvertChange = vi.fn();
+      render(SidePanel, { props: { open: true, onInvertChange } });
+
+      await fireEvent.click(screen.getByLabelText('Invert'));
+      expect(onInvertChange).toHaveBeenCalledWith(true);
+    });
   });
 
   describe('overlay click-through', () => {

@@ -201,6 +201,40 @@ describe('histogramEqualize', () => {
     expect(result.length).toBe(1);
     expect(result[0]).toBeCloseTo(0.5);
   });
+
+  it('excludes zero pixels from histogram computation', () => {
+    // Many zeros (background) + few signal pixels
+    const pixels = new Float64Array([0, 0, 0, 0, 0, 0, 0, 0, 50, 100, 200]);
+    const result = histogramEqualize(pixels);
+    // Zero pixels should map to 0
+    expect(result[0]).toBe(0);
+    expect(result[7]).toBe(0);
+    // Signal pixels should be spread across [0, 1]
+    expect(result[8]).toBeGreaterThan(0);
+    expect(result[10]).toBeCloseTo(1, 1);
+  });
+
+  it('returns all zeros when all pixels are zero', () => {
+    const pixels = new Float64Array([0, 0, 0, 0]);
+    const result = histogramEqualize(pixels);
+    for (let i = 0; i < result.length; i++) {
+      expect(result[i]).toBe(0);
+    }
+  });
+
+  it('does not let zero pixels skew the histogram', () => {
+    // 90% zeros, 10% real signal — equalization should work on signal only
+    const pixels = new Float64Array(100);
+    for (let i = 0; i < 90; i++) pixels[i] = 0;
+    for (let i = 90; i < 100; i++) pixels[i] = (i - 89) * 10; // 10, 20, ..., 100
+    const result = histogramEqualize(pixels);
+    // Zeros stay at 0
+    expect(result[0]).toBe(0);
+    expect(result[89]).toBe(0);
+    // Non-zeros get proper equalization
+    expect(result[90]).toBeGreaterThan(0);
+    expect(result[99]).toBeCloseTo(1, 1);
+  });
 });
 
 describe('zscaleRange', () => {
@@ -273,6 +307,31 @@ describe('zscaleRange', () => {
     const { min, max } = zscaleRange(new Float64Array([1, 2, 3]));
     expect(Number.isFinite(min)).toBe(true);
     expect(Number.isFinite(max)).toBe(true);
+  });
+
+  it('excludes zero pixels from range computation', () => {
+    // Many zeros + real signal
+    const pixels = new Float64Array([0, 0, 0, 0, 0, 50, 60, 70, 80, 90, 100]);
+    const { min, max } = zscaleRange(pixels);
+    // Range should be based on non-zero values only
+    expect(min).toBeGreaterThanOrEqual(50);
+    expect(max).toBeLessThanOrEqual(100);
+  });
+
+  it('returns {0, 0} when all pixels are zero', () => {
+    const { min, max } = zscaleRange(new Float64Array([0, 0, 0, 0]));
+    expect(min).toBe(0);
+    expect(max).toBe(0);
+  });
+
+  it('handles array with mostly zeros and sparse signal', () => {
+    const pixels = new Float64Array(1000);
+    for (let i = 0; i < 950; i++) pixels[i] = 0;
+    for (let i = 950; i < 1000; i++) pixels[i] = 100 + Math.random() * 100;
+    const { min, max } = zscaleRange(pixels);
+    expect(Number.isFinite(min)).toBe(true);
+    expect(Number.isFinite(max)).toBe(true);
+    expect(min).toBeGreaterThanOrEqual(100);
   });
 });
 

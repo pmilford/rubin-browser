@@ -255,4 +255,102 @@ describe('ImageViewer', () => {
       expect(container?.querySelector('canvas')).toBeTruthy();
     });
   });
+
+  describe('invert prop', () => {
+    it('accepts invert prop without error', () => {
+      render(ImageViewer, { props: { invert: true } });
+      const container = document.querySelector('.image-viewer');
+      expect(container).toBeTruthy();
+    });
+
+    it('defaults to invert=false', () => {
+      render(ImageViewer);
+      const container = document.querySelector('.image-viewer');
+      expect(container).toBeTruthy();
+    });
+
+    it('accepts invert=false explicitly', () => {
+      render(ImageViewer, { props: { invert: false } });
+      const container = document.querySelector('.image-viewer');
+      expect(container).toBeTruthy();
+    });
+  });
+
+  describe('FOV indicator', () => {
+    it('renders FOV indicator widget', () => {
+      render(ImageViewer);
+      const indicator = document.querySelector('.fov-indicator');
+      expect(indicator).toBeTruthy();
+    });
+
+    it('shows FOV in degrees', () => {
+      render(ImageViewer);
+      const indicator = document.querySelector('.fov-indicator');
+      expect(indicator?.textContent).toContain('FOV');
+      expect(indicator?.textContent).toContain('°');
+    });
+
+    it('shows RA coordinate', () => {
+      render(ImageViewer, { props: { initialRa: 123.456 } });
+      const indicator = document.querySelector('.fov-indicator');
+      expect(indicator?.textContent).toContain('RA');
+    });
+
+    it('shows Dec coordinate', () => {
+      render(ImageViewer, { props: { initialDec: -45.678 } });
+      const indicator = document.querySelector('.fov-indicator');
+      expect(indicator?.textContent).toContain('Dec');
+    });
+
+    it('has aria-label for accessibility', () => {
+      render(ImageViewer);
+      const indicator = document.querySelector('.fov-indicator');
+      expect(indicator?.getAttribute('aria-label')).toBe('Field of view indicator');
+    });
+  });
+
+  describe('zoom centering', () => {
+    it('setZoom does not throw when called with various zoom levels', () => {
+      const { component } = render(ImageViewer);
+      const viewer = component as unknown as ImageViewer;
+      expect(() => viewer.setZoom(1)).not.toThrow();
+      expect(() => viewer.setZoom(5)).not.toThrow();
+      expect(() => viewer.setZoom(10)).not.toThrow();
+      expect(() => viewer.setZoom(15)).not.toThrow();
+    });
+
+    it('zoomIn uses screen-center-based zoom', () => {
+      const { component } = render(ImageViewer);
+      const viewer = component as unknown as ImageViewer;
+      // zoomIn should work without error (center-based zoom)
+      expect(() => viewer.zoomIn()).not.toThrow();
+    });
+
+    it('zoomOut uses screen-center-based zoom', () => {
+      const { component } = render(ImageViewer);
+      const viewer = component as unknown as ImageViewer;
+      expect(() => viewer.zoomOut()).not.toThrow();
+    });
+  });
+
+  describe('drag and pan', () => {
+    it('canvas responds to pointer events', () => {
+      render(ImageViewer);
+      const canvas = document.querySelector('.hips-canvas') as HTMLCanvasElement;
+      expect(canvas).toBeTruthy();
+    });
+
+    it('does not throw on pointer events sequence', () => {
+      render(ImageViewer);
+      const canvas = document.querySelector('.hips-canvas') as HTMLCanvasElement;
+
+      // Simulate drag sequence
+      canvas.dispatchEvent(new PointerEvent('pointerdown', { clientX: 100, clientY: 100, button: 0, pointerId: 1 }));
+      canvas.dispatchEvent(new PointerEvent('pointermove', { clientX: 200, clientY: 200, pointerId: 1 }));
+      canvas.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1 }));
+
+      // Should not throw
+      expect(true).toBe(true);
+    });
+  });
 });

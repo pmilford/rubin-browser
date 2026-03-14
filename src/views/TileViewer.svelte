@@ -16,6 +16,7 @@
   let scaling: ScalingFunction = $state('linear');
   let colorMap: ColorMapName = $state('grayscale');
   let interpolation: InterpolationMethod = $state('bilinear');
+  let invert = $state(false);
   let helpOpen = $state(false);
 
   // UI state
@@ -184,6 +185,14 @@
         return;
       }
     }
+    // I toggles invert
+    if (e.key === 'i' || e.key === 'I') {
+      if (!e.ctrlKey && !e.metaKey) {
+        invert = !invert;
+        statusMessage = `Invert: ${invert ? 'ON' : 'OFF'}`;
+        return;
+      }
+    }
     // +/- for zoom
     if (e.key === '+' || e.key === '=') {
       imageViewerRef?.zoomIn();
@@ -207,6 +216,7 @@
     <CompactToolbar
       panelOpen={panelOpen}
       {isFullscreen}
+      {invert}
       onZoomIn={() => imageViewerRef?.zoomIn()}
       onZoomOut={() => imageViewerRef?.zoomOut()}
       onResetView={() => imageViewerRef?.resetView()}
@@ -214,6 +224,7 @@
       onTogglePanel={togglePanel}
       onToggleFullscreen={toggleFullscreen}
       onToggleHelp={() => { helpOpen = !helpOpen; }}
+      onToggleInvert={() => { invert = !invert; statusMessage = `Invert: ${invert ? 'ON' : 'OFF'}`; }}
     />
   {/if}
 
@@ -222,6 +233,7 @@
     {scaling}
     {colorMap}
     {interpolation}
+    {invert}
     epochs={mockEpochs}
     {currentEpochIndex}
     {isPlaying}
@@ -236,6 +248,7 @@
     onScalingChange={(s) => { scaling = s; statusMessage = `Scaling: ${s}`; }}
     onColorMapChange={(c) => { colorMap = c; statusMessage = `Color map: ${c}`; }}
     onInterpolationChange={(i) => { interpolation = i; statusMessage = `Interpolation: ${i}`; }}
+    onInvertChange={(v) => { invert = v; statusMessage = `Invert: ${v ? 'ON' : 'OFF'}`; }}
     onEpochChange={handleEpochChange}
     onPlayStateChange={(p) => { isPlaying = p; }}
     onFilterChange={handleFilterChange}
@@ -256,6 +269,7 @@
       {scaling}
       {colorMap}
       {interpolation}
+      {invert}
       initialRa={62.0}
       initialDec={-37.0}
       initialZoom={3}

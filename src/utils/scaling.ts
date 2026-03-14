@@ -63,39 +63,59 @@ export function histogramEqualize(pixels: Float64Array): Float64Array {
   if (pixels.length === 0) return new Float64Array(0);
 
   const clean = sanitizeArray(pixels);
-  let min = clean[0];
-  let max = clean[0];
-  for (let i = 1; i < clean.length; i++) {
-    if (clean[i] < min) min = clean[i];
-    if (clean[i] > max) max = clean[i];
+
+  // Filter out zero/black pixels for astronomical images
+  const nonZero: number[] = [];
+  for (let i = 0; i < clean.length; i++) {
+    if (clean[i] > 0) nonZero.push(clean[i]);
+  }
+
+  // If all pixels are zero, return uniform
+  if (nonZero.length === 0) {
+    const result = new Float64Array(pixels.length);
+    result.fill(0);
+    return result;
+  }
+
+  let min = nonZero[0]!;
+  let max = nonZero[0]!;
+  for (let i = 1; i < nonZero.length; i++) {
+    if (nonZero[i]! < min) min = nonZero[i]!;
+    if (nonZero[i]! > max) max = nonZero[i]!;
   }
 
   if (min === max) {
     const result = new Float64Array(pixels.length);
-    result.fill(HISTOGRAM_UNIFORM_VALUE);
+    for (let i = 0; i < clean.length; i++) {
+      result[i] = clean[i] > 0 ? HISTOGRAM_UNIFORM_VALUE : 0;
+    }
     return result;
   }
 
   const histogram = new Uint32Array(HISTOGRAM_BINS);
   const range = max - min;
 
-  for (let i = 0; i < clean.length; i++) {
-    const bin = Math.min(HISTOGRAM_BINS - 1, Math.floor(((clean[i] - min) / range) * (HISTOGRAM_BINS - 1)));
+  for (let i = 0; i < nonZero.length; i++) {
+    const bin = Math.min(HISTOGRAM_BINS - 1, Math.floor(((nonZero[i]! - min) / range) * (HISTOGRAM_BINS - 1)));
     histogram[bin]++;
   }
 
   // Build cumulative histogram
   const cumulative = new Float64Array(HISTOGRAM_BINS);
-  cumulative[0] = histogram[0];
+  cumulative[0] = histogram[0]!;
   for (let i = 1; i < HISTOGRAM_BINS; i++) {
-    cumulative[i] = cumulative[i - 1] + histogram[i];
+    cumulative[i] = cumulative[i - 1]! + histogram[i]!;
   }
 
-  const totalPixels = clean.length;
+  const totalPixels = nonZero.length;
   const result = new Float64Array(pixels.length);
   for (let i = 0; i < clean.length; i++) {
-    const bin = Math.min(HISTOGRAM_BINS - 1, Math.floor(((clean[i] - min) / range) * (HISTOGRAM_BINS - 1)));
-    result[i] = cumulative[bin] / totalPixels;
+    if (clean[i] <= 0) {
+      result[i] = 0; // Black pixels stay black
+    } else {
+      const bin = Math.min(HISTOGRAM_BINS - 1, Math.floor(((clean[i]! - min) / range) * (HISTOGRAM_BINS - 1)));
+      result[i] = cumulative[bin]! / totalPixels;
+    }
   }
 
   return result;
@@ -106,15 +126,24 @@ export function zscaleRange(pixels: Float64Array, contrast: number = ZSCALE_DEFA
 
   const clean = sanitizeArray(pixels);
 
+  // Filter out zero/black pixels for astronomical images
+  const nonZero: number[] = [];
+  for (let i = 0; i < clean.length; i++) {
+    if (clean[i]! > 0) nonZero.push(clean[i]!);
+  }
+
+  if (nonZero.length === 0) return { min: 0, max: 0 };
+  if (nonZero.length === 1) return { min: nonZero[0]!, max: nonZero[0]! };
+
   // Sample pixels if array is large
   let sample: number[];
-  if (clean.length <= ZSCALE_MAX_SAMPLES) {
-    sample = Array.from(clean);
+  if (nonZero.length <= ZSCALE_MAX_SAMPLES) {
+    sample = nonZero;
   } else {
     sample = [];
-    const step = clean.length / ZSCALE_MAX_SAMPLES;
+    const step = nonZero.length / ZSCALE_MAX_SAMPLES;
     for (let i = 0; i < ZSCALE_MAX_SAMPLES; i++) {
-      sample.push(clean[Math.floor(i * step)]);
+      sample.push(nonZero[Math.floor(i * step)]!);
     }
   }
 
@@ -122,7 +151,7 @@ export function zscaleRange(pixels: Float64Array, contrast: number = ZSCALE_DEFA
   const n = sample.length;
 
   if (n === 0) return { min: 0, max: 0 };
-  if (n === 1) return { min: sample[0], max: sample[0] };
+  if (n === 1) return { min: sample[0]!, max: sample[0]! };
 
   // Fit a line to the central portion of sorted pixels
   const quarterStart = Math.floor(n * 0.25);
@@ -130,7 +159,7 @@ export function zscaleRange(pixels: Float64Array, contrast: number = ZSCALE_DEFA
   const centralLength = quarterEnd - quarterStart;
 
   if (centralLength < 2) {
-    return { min: sample[0], max: sample[n - 1] };
+    return { min: sample[0]!, max: sample[n - 1]! };
   }
 
   // Simple linear regression on central portion: y = pixel value, x = index
@@ -141,7 +170,7 @@ export function zscaleRange(pixels: Float64Array, contrast: number = ZSCALE_DEFA
 
   for (let i = quarterStart; i < quarterEnd; i++) {
     const x = i - quarterStart;
-    const y = sample[i];
+    const y = sample[i]!;
     sumX += x;
     sumY += y;
     sumXY += x * y;
@@ -151,10 +180,10 @@ export function zscaleRange(pixels: Float64Array, contrast: number = ZSCALE_DEFA
   const meanX = sumX / centralLength;
   const meanY = sumY / centralLength;
   const slope = (sumXY - centralLength * meanX * meanY) / (sumXX - centralLength * meanX * meanX);
-  const median = sample[Math.floor(n / 2)];
+  const median = sample[Math.floor(n / 2)]!;
 
-  const zmin = median - (median - sample[0]) * contrast;
-  const zmax = median + (sample[n - 1] - median) * contrast;
+  const zmin = median - (median - sample[0]!) * contrast;
+  const zmax = median + (sample[n - 1]! - median) * contrast;
 
   // Adjust by slope — steeper slope means narrower range
   const slopeAdjust = Math.abs(slope) > 0 ? 1 / (1 + Math.abs(slope) * contrast) : 1;
@@ -162,8 +191,8 @@ export function zscaleRange(pixels: Float64Array, contrast: number = ZSCALE_DEFA
   const adjustedMax = median + (zmax - median) * slopeAdjust;
 
   return {
-    min: Math.max(sample[0], adjustedMin),
-    max: Math.min(sample[n - 1], adjustedMax),
+    min: Math.max(sample[0]!, adjustedMin),
+    max: Math.min(sample[n - 1]!, adjustedMax),
   };
 }
 

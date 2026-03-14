@@ -14,6 +14,7 @@
     scaling = 'linear' as ScalingFunction,
     colorMap = 'grayscale' as ColorMapName,
     interpolation = 'bilinear' as InterpolationMethod,
+    invert = false,
     epochs = [] as Epoch[],
     currentEpochIndex = 0,
     isPlaying = false,
@@ -28,6 +29,7 @@
     onScalingChange,
     onColorMapChange,
     onInterpolationChange,
+    onInvertChange,
     onEpochChange,
     onPlayStateChange,
     onFilterChange,
@@ -44,6 +46,7 @@
     scaling?: ScalingFunction;
     colorMap?: ColorMapName;
     interpolation?: InterpolationMethod;
+    invert?: boolean;
     epochs?: Epoch[];
     currentEpochIndex?: number;
     isPlaying?: boolean;
@@ -58,6 +61,7 @@
     onScalingChange?: (s: ScalingFunction) => void;
     onColorMapChange?: (c: ColorMapName) => void;
     onInterpolationChange?: (i: InterpolationMethod) => void;
+    onInvertChange?: (v: boolean) => void;
     onEpochChange?: (index: number, epoch: Epoch) => void;
     onPlayStateChange?: (playing: boolean) => void;
     onFilterChange?: (filter: FilterBand | null) => void;
@@ -72,7 +76,7 @@
   } = $props();
 
   const scalingOptions: ScalingFunction[] = ['linear', 'log', 'sqrt', 'asinh', 'histogram', 'zscale', 'percentile'];
-  const colorMapOptions: ColorMapName[] = ['grayscale', 'viridis', 'plasma', 'inferno', 'hot', 'cool'];
+  const colorMapOptions: ColorMapName[] = ['grayscale', 'viridis', 'plasma', 'inferno', 'hot', 'cool', 'red', 'green', 'blue'];
   const interpolationOptions: InterpolationMethod[] = ['nearest', 'bilinear', 'bicubic', 'lanczos'];
 
   let activeSection = $state<string | null>('display');
@@ -143,6 +147,15 @@
                   <option value={opt}>{opt}</option>
                 {/each}
               </select>
+            </div>
+            <div class="control-row">
+              <label for="invert-toggle">Invert</label>
+              <input
+                id="invert-toggle"
+                type="checkbox"
+                checked={invert}
+                onchange={(e) => onInvertChange?.(e.currentTarget.checked)}
+              />
             </div>
           </div>
         {/if}

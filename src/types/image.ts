@@ -2,7 +2,7 @@
 
 export type ScalingFunction = 'linear' | 'log' | 'sqrt' | 'asinh' | 'histogram' | 'zscale' | 'percentile';
 
-export type ColorMapName = 'grayscale' | 'viridis' | 'plasma' | 'inferno' | 'hot' | 'cool';
+export type ColorMapName = 'grayscale' | 'viridis' | 'plasma' | 'inferno' | 'hot' | 'cool' | 'red' | 'green' | 'blue';
 
 export type InterpolationMethod = 'nearest' | 'bilinear' | 'bicubic' | 'lanczos';
 
@@ -83,7 +83,7 @@ export interface ViewerState {
 }
 
 const SCALING_FUNCTIONS: readonly ScalingFunction[] = ['linear', 'log', 'sqrt', 'asinh', 'histogram', 'zscale', 'percentile'];
-const COLOR_MAP_NAMES: readonly ColorMapName[] = ['grayscale', 'viridis', 'plasma', 'inferno', 'hot', 'cool'];
+const COLOR_MAP_NAMES: readonly ColorMapName[] = ['grayscale', 'viridis', 'plasma', 'inferno', 'hot', 'cool', 'red', 'green', 'blue'];
 const INTERPOLATION_METHODS: readonly InterpolationMethod[] = ['nearest', 'bilinear', 'bicubic', 'lanczos'];
 
 /** Type guard: validates a string is a valid ScalingFunction */

@@ -85,6 +85,21 @@ const COOL_STOPS: ColorStop[] = [
   { t: 1.0, color: { r: 255, g: 0, b: 255 } },
 ];
 
+const RED_STOPS: ColorStop[] = [
+  { t: 0.0, color: { r: 0, g: 0, b: 0 } },
+  { t: 1.0, color: { r: 255, g: 0, b: 0 } },
+];
+
+const GREEN_STOPS: ColorStop[] = [
+  { t: 0.0, color: { r: 0, g: 0, b: 0 } },
+  { t: 1.0, color: { r: 0, g: 255, b: 0 } },
+];
+
+const BLUE_STOPS: ColorStop[] = [
+  { t: 0.0, color: { r: 0, g: 0, b: 0 } },
+  { t: 1.0, color: { r: 0, g: 0, b: 255 } },
+];
+
 const COLOR_MAP_STOPS: Record<ColorMapName, ColorStop[]> = {
   grayscale: GRAYSCALE_STOPS,
   viridis: VIRIDIS_STOPS,
@@ -92,6 +107,9 @@ const COLOR_MAP_STOPS: Record<ColorMapName, ColorStop[]> = {
   inferno: INFERNO_STOPS,
   hot: HOT_STOPS,
   cool: COOL_STOPS,
+  red: RED_STOPS,
+  green: GREEN_STOPS,
+  blue: BLUE_STOPS,
 };
 
 /** Get a color map by name */

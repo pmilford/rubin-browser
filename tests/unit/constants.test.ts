@@ -69,8 +69,8 @@ describe('constants', () => {
   });
 
   describe('SURVEY_OVERLAYS', () => {
-    it('defines 4 surveys', () => {
-      expect(SURVEY_OVERLAYS).toHaveLength(4);
+    it('defines 5 surveys', () => {
+      expect(SURVEY_OVERLAYS).toHaveLength(5);
     });
 
     it('has Gaia DR3', () => {
@@ -95,6 +95,12 @@ describe('constants', () => {
       const sdss = SURVEY_OVERLAYS.find(s => s.id === 'sdss-color');
       expect(sdss).toBeDefined();
       expect(sdss?.hipsUrl).toContain('SDSS');
+    });
+
+    it('has PanSTARRS DR1', () => {
+      const ps = SURVEY_OVERLAYS.find(s => s.id === 'panstarrs-dr1');
+      expect(ps).toBeDefined();
+      expect(ps?.hipsUrl).toContain('Pan-STARRS');
     });
 
     it('all surveys have valid URLs', () => {

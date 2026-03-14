@@ -47,15 +47,18 @@ describe('interpolateColorMap', () => {
 });
 
 describe('getColorMapNames', () => {
-  it('returns all 6 color map names', () => {
+  it('returns all 9 color map names', () => {
     const names = getColorMapNames();
-    expect(names).toHaveLength(6);
+    expect(names).toHaveLength(9);
     expect(names).toContain('grayscale');
     expect(names).toContain('viridis');
     expect(names).toContain('plasma');
     expect(names).toContain('inferno');
     expect(names).toContain('hot');
     expect(names).toContain('cool');
+    expect(names).toContain('red');
+    expect(names).toContain('green');
+    expect(names).toContain('blue');
   });
 });
 
@@ -180,6 +183,66 @@ describe('cool color map', () => {
     expect(color.r).toBe(128);
     expect(color.g).toBe(128);
     expect(color.b).toBe(255);
+  });
+});
+
+describe('red color map (RGB channel)', () => {
+  const cm = getColorMap('red');
+
+  it('returns black at t=0', () => {
+    expect(cm.lookup(0)).toEqual({ r: 0, g: 0, b: 0 });
+  });
+
+  it('returns pure red at t=1', () => {
+    expect(cm.lookup(1)).toEqual({ r: 255, g: 0, b: 0 });
+  });
+
+  it('only has red channel active', () => {
+    for (const t of [0, 0.25, 0.5, 0.75, 1]) {
+      const color = cm.lookup(t);
+      expect(color.g).toBe(0);
+      expect(color.b).toBe(0);
+    }
+  });
+});
+
+describe('green color map (RGB channel)', () => {
+  const cm = getColorMap('green');
+
+  it('returns black at t=0', () => {
+    expect(cm.lookup(0)).toEqual({ r: 0, g: 0, b: 0 });
+  });
+
+  it('returns pure green at t=1', () => {
+    expect(cm.lookup(1)).toEqual({ r: 0, g: 255, b: 0 });
+  });
+
+  it('only has green channel active', () => {
+    for (const t of [0, 0.25, 0.5, 0.75, 1]) {
+      const color = cm.lookup(t);
+      expect(color.r).toBe(0);
+      expect(color.b).toBe(0);
+    }
+  });
+});
+
+describe('blue color map (RGB channel)', () => {
+  const cm = getColorMap('blue');
+
+  it('returns black at t=0', () => {
+    expect(cm.lookup(0)).toEqual({ r: 0, g: 0, b: 0 });
+  });
+
+  it('returns pure blue at t=1', () => {
+    expect(cm.lookup(1)).toEqual({ r: 0, g: 0, b: 255 });
+  });
+
+  it('only has blue channel active', () => {
+    for (const t of [0, 0.25, 0.5, 0.75, 1]) {
+      const color = cm.lookup(t);
+      expect(color.r).toBe(0);
+      expect(color.g).toBe(0);
+    }
   });
 });
 

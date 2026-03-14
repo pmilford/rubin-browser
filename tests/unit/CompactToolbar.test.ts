@@ -170,6 +170,14 @@ describe('CompactToolbar', () => {
       await fireEvent.click(screen.getByLabelText('Help'));
       expect(onToggleHelp).toHaveBeenCalled();
     });
+
+    it('calls onToggleInvert when invert button clicked', async () => {
+      const onToggleInvert = vi.fn();
+      render(CompactToolbar, { props: { onToggleInvert } });
+
+      await fireEvent.click(screen.getByLabelText('Invert image'));
+      expect(onToggleInvert).toHaveBeenCalled();
+    });
   });
 
   describe('panel state', () => {
@@ -196,6 +204,26 @@ describe('CompactToolbar', () => {
     it('shows expand icon when not fullscreen', () => {
       render(CompactToolbar, { props: { isFullscreen: false } });
       expect(screen.getByLabelText('Toggle fullscreen')).toBeTruthy();
+    });
+  });
+
+  describe('invert state', () => {
+    it('invert button is not active by default', () => {
+      render(CompactToolbar);
+      const button = screen.getByLabelText('Invert image');
+      expect(button.classList.contains('active')).toBe(false);
+    });
+
+    it('invert button is active when invert=true', () => {
+      render(CompactToolbar, { props: { invert: true } });
+      const button = screen.getByLabelText('Invert image');
+      expect(button.classList.contains('active')).toBe(true);
+    });
+
+    it('invert button has aria-pressed attribute', () => {
+      render(CompactToolbar, { props: { invert: true } });
+      const button = screen.getByLabelText('Invert image');
+      expect(button.getAttribute('aria-pressed')).toBe('true');
     });
   });
 

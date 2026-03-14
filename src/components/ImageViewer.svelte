@@ -15,6 +15,7 @@
     scaling = 'linear' as ScalingFunction,
     colorMap = 'grayscale' as ColorMapName,
     interpolation = 'bilinear' as InterpolationMethod,
+    invert = false,
     onViewerStateChange,
   }: {
     hipsBaseUrl?: string;
@@ -26,6 +27,7 @@
     scaling?: ScalingFunction;
     colorMap?: ColorMapName;
     interpolation?: InterpolationMethod;
+    invert?: boolean;
     onViewerStateChange?: (state: ViewerState) => void;
   } = $props();
 
@@ -44,6 +46,10 @@
   let containerEl: HTMLDivElement;
   let ctx: CanvasRenderingContext2D | null = null;
 
+  // Offscreen canvas for post-processing
+  let offscreenCanvas: HTMLCanvasElement | null = null;
+  let offscreenCtx: CanvasRenderingContext2D | null = null;
+
   // Snapshot initial values so resetView uses the actual initial props
   const initRa = initialRa;
   const initDec = initialDec;
@@ -56,6 +62,10 @@
   let fov = $state(zoomToFov(initZoom));
   let canvasWidth = $state(800);
   let canvasHeight = $state(600);
+
+  // Canvas offset for smooth dragging (Issue #2, #3)
+  let panOffsetX = $state(0);
+  let panOffsetY = $state(0);
 
   // Error handling
   let hasError = $state(false);
@@ -87,7 +97,10 @@
     return Math.max(0, Math.min(13, order));
   }
 
-  /** Gnomonic projection: sky coords (deg) → canvas coords (px) */
+  /**
+   * Gnomonic projection: sky coords (deg) → canvas coords (px).
+   * Pure projection without pan offset — offset is applied in render().
+   */
   function skyToCanvas(skyRa: number, skyDec: number): [number, number] {
     const cosDec0 = Math.cos((dec * Math.PI) / 180);
     const sinDec0 = Math.sin((dec * Math.PI) / 180);
@@ -107,11 +120,18 @@
     return [canvasWidth / 2 + u * scale, canvasHeight / 2 - v * scale];
   }
 
-  /** Canvas coords (px) → sky coords (deg) */
+  /**
+   * Canvas coords (px, relative to canvas) → sky coords (deg).
+   * Accounts for current pan offset so coordinate readout is correct during drag.
+   */
   function canvasToSky(px: number, py: number): [number, number] {
+    // Undo pan offset to get logical canvas position
+    const logicalX = px - panOffsetX;
+    const logicalY = py - panOffsetY;
+
     const scale = canvasWidth / ((fov * Math.PI) / 180);
-    const u = (px - canvasWidth / 2) / scale;
-    const v = -(py - canvasHeight / 2) / scale;
+    const u = (logicalX - canvasWidth / 2) / scale;
+    const v = -(logicalY - canvasHeight / 2) / scale;
     const rho = Math.sqrt(u * u + v * v);
     const c = Math.atan(rho);
     const cosDec0 = Math.cos((dec * Math.PI) / 180);
@@ -182,12 +202,64 @@
 
   // --- Rendering ---
 
+  /**
+   * Main render function.
+   * Uses canvas translate for pan offset so old tiles remain visible during drag (Issue #3).
+   */
   function render() {
     if (!ctx) return;
 
+    const needsPostProcessing = scaling !== 'linear' || colorMap !== 'grayscale' || invert;
+
+    if (needsPostProcessing) {
+      renderWithPostProcessing();
+    } else {
+      renderDirect();
+    }
+  }
+
+  function renderDirect() {
+    if (!ctx) return;
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
+    ctx.save();
+    ctx.translate(panOffsetX, panOffsetY);
+    drawAllTiles(ctx);
+    ctx.restore();
+  }
+
+  function renderWithPostProcessing() {
+    if (!ctx) return;
+
+    // Create/reuse offscreen canvas
+    if (!offscreenCanvas) {
+      offscreenCanvas = document.createElement('canvas');
+      offscreenCtx = offscreenCanvas.getContext('2d');
+    }
+    if (offscreenCanvas.width !== canvasWidth || offscreenCanvas.height !== canvasHeight) {
+      offscreenCanvas.width = canvasWidth;
+      offscreenCanvas.height = canvasHeight;
+    }
+    if (!offscreenCtx) return;
+
+    // Draw tiles to offscreen canvas (no pan offset — we composite with offset later)
+    offscreenCtx.fillStyle = '#000';
+    offscreenCtx.fillRect(0, 0, canvasWidth, canvasHeight);
+    drawAllTiles(offscreenCtx);
+
+    // Apply post-processing
+    const imageData = offscreenCtx.getImageData(0, 0, canvasWidth, canvasHeight);
+    applyPostProcessing(imageData);
+    offscreenCtx.putImageData(imageData, 0, 0);
+
+    // Composite to main canvas with pan offset
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+    ctx.drawImage(offscreenCanvas, panOffsetX, panOffsetY);
+  }
+
+  function drawAllTiles(context: CanvasRenderingContext2D) {
     const order = zoomToOrder(zoomLevel);
     const fmt = resolveFormat();
     const visibleTiles = getVisibleTiles(ra, dec, fov, order);
@@ -201,13 +273,24 @@
 
       const img = tileCache.get(cacheKey);
       if (img && img.complete && img.naturalWidth > 0) {
-        drawTile(ctx, img, tile.order, tile.pixelIndex);
+        drawTile(context, img, tile.order, tile.pixelIndex);
       }
     }
 
-    // Post-processing: apply scaling and colormap if not default
-    if (scaling !== 'linear' || colorMap !== 'grayscale') {
-      applyPostProcessing();
+    // Draw overlay tiles
+    for (const [, overlay] of overlays) {
+      for (const tile of visibleTiles) {
+        const cacheKey = `overlay-${overlay.id}-${tile.order}-${tile.pixelIndex}`;
+        if (drawn.has(cacheKey)) continue;
+        drawn.add(cacheKey);
+
+        const img = tileCache.get(cacheKey);
+        if (img && img.complete && img.naturalWidth > 0) {
+          context.globalAlpha = overlay.opacity / 100;
+          drawTile(context, img, tile.order, tile.pixelIndex);
+          context.globalAlpha = 1.0;
+        }
+      }
     }
   }
 
@@ -221,21 +304,7 @@
     const totalPixels = 12 * nside * nside;
     if (pixelIndex < 0 || pixelIndex >= totalPixels) return;
 
-    // Get tile center from a reference pixel in the tile
-    const testRa = ra;
-    const testDec = dec;
-    const tileOfView = radecToTileIndex(
-      ((testRa % 360) + 360) % 360,
-      Math.max(-89.99, Math.min(89.99, testDec)),
-      order
-    );
-
-    // Compute approximate tile center RA/Dec from its pixel index
-    // Use a simple approach: sample the tile's corner offsets
     const tileAngularSize = 180 / nside;
-
-    // Get tile center from the pixel index by finding a point in the tile
-    // We estimate the tile center by finding a position that maps to this pixel
     const tileCenter = estimateTileCenter(pixelIndex, order, ra, dec);
     if (!tileCenter) return;
 
@@ -254,7 +323,7 @@
     const [cx, cy] = skyToCanvas(tileRa, tileDec);
     if (isNaN(cx) || isNaN(cy)) return;
 
-    // Check if tile is on-screen (with generous margin)
+    // Check if tile is on-screen (with generous margin for pan offset)
     const margin = TILE_SIZE * 2;
     if (cx < -margin || cx > canvasWidth + margin || cy < -margin || cy > canvasHeight + margin) return;
 
@@ -265,7 +334,7 @@
 
     // Compute rotation from projected tile edges
     const halfSize = tileAngularSize / 2;
-    const cosDecE = Math.cos(((tileDec) * Math.PI) / 180) || 0.01;
+    const cosDecE = Math.cos((tileDec * Math.PI) / 180) || 0.01;
     const [ex, ey] = skyToCanvas(tileRa + halfSize / cosDecE, tileDec);
     if (isNaN(ex) || isNaN(ey)) return;
 
@@ -289,7 +358,6 @@
 
   /**
    * Estimate tile center RA/Dec from pixel index by searching around the current view center.
-   * This avoids implementing a full HEALPix NESTED → RA/Dec inverse function.
    */
   function estimateTileCenter(
     pixelIndex: number,
@@ -305,7 +373,6 @@
     let bestDec = viewDec;
     let minDist = Infinity;
 
-    // Grid search around the view center to find the tile center
     for (let di = -steps; di <= steps; di++) {
       for (let ri = -steps; ri <= steps; ri++) {
         const testDec = viewDec + (di / steps) * range;
@@ -318,7 +385,6 @@
         const pix = radecToTileIndex(normalizedRa, Math.max(-89.99, Math.min(89.99, testDec)), order);
 
         if (pix === pixelIndex) {
-          // Found it — compute distance from view center
           const raDiff = Math.min(
             Math.abs(normalizedRa - viewRa),
             360 - Math.abs(normalizedRa - viewRa)
@@ -334,8 +400,6 @@
     }
 
     if (minDist < Infinity) return [bestRa, bestDec];
-
-    // Fallback: return view center (shouldn't happen in practice)
     return null;
   }
 
@@ -435,16 +499,16 @@
   let isDragging = false;
   let dragStartX = 0;
   let dragStartY = 0;
-  let dragStartRa = 0;
-  let dragStartDec = 0;
+  let dragStartOffsetX = 0;
+  let dragStartOffsetY = 0;
 
   function onPointerDown(e: PointerEvent) {
     if (e.button !== 0) return;
     isDragging = true;
     dragStartX = e.clientX;
     dragStartY = e.clientY;
-    dragStartRa = ra;
-    dragStartDec = dec;
+    dragStartOffsetX = panOffsetX;
+    dragStartOffsetY = panOffsetY;
     (e.target as Element).setPointerCapture(e.pointerId);
   }
 
@@ -452,26 +516,60 @@
     if (!isDragging) return;
     const dx = e.clientX - dragStartX;
     const dy = e.clientY - dragStartY;
-    const scale = canvasWidth / ((fov * Math.PI) / 180);
-    const cosDec = Math.cos((dragStartDec * Math.PI) / 180) || 0.01;
 
-    ra = ((dragStartRa - (dx / scale) * (180 / Math.PI) / cosDec) % 360 + 360) % 360;
-    dec = Math.max(-89.99, Math.min(89.99, dragStartDec + (dy / scale) * (180 / Math.PI)));
+    // Update canvas offset for smooth panning (Issue #3: old tiles stay visible)
+    panOffsetX = dragStartOffsetX + dx;
+    panOffsetY = dragStartOffsetY + dy;
+
     scheduleRender();
     emitState();
   }
 
   function onPointerUp() {
-    if (isDragging) {
-      isDragging = false;
-      loadTiles();
+    if (!isDragging) return;
+    isDragging = false;
+
+    // Recenter if offset exceeds threshold (Issue #2: continuous panning)
+    const thresholdX = canvasWidth * 0.5;
+    const thresholdY = canvasHeight * 0.5;
+
+    if (Math.abs(panOffsetX) > thresholdX || Math.abs(panOffsetY) > thresholdY) {
+      // Convert current screen center to sky coordinates
+      const [newRa, newDec] = canvasToSky(canvasWidth / 2, canvasHeight / 2);
+      ra = newRa;
+      dec = newDec;
+      panOffsetX = 0;
+      panOffsetY = 0;
     }
+
+    loadTiles();
+    emitState();
   }
 
+  /**
+   * Zoom centered on screen center (Issue #1: zoom centering).
+   * The sky point at screen center remains fixed when zooming.
+   */
   function onWheel(e: WheelEvent) {
     e.preventDefault();
     const delta = e.deltaY > 0 ? -0.5 : 0.5;
-    setZoom(zoomLevel + delta);
+
+    // Find the sky point currently at screen center (accounting for pan offset)
+    const [centerRa, centerDec] = canvasToSky(canvasWidth / 2, canvasHeight / 2);
+
+    // Apply zoom
+    zoomLevel = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoomLevel + delta));
+    fov = zoomToFov(zoomLevel);
+
+    // Set that sky point as the new center so it stays at screen center
+    ra = centerRa;
+    dec = centerDec;
+    panOffsetX = 0;
+    panOffsetY = 0;
+
+    scheduleRender();
+    loadTiles();
+    emitState();
   }
 
   function onDblClick(e: MouseEvent) {
@@ -481,6 +579,8 @@
     const [newRa, newDec] = canvasToSky(px, py);
     ra = newRa;
     dec = newDec;
+    panOffsetX = 0;
+    panOffsetY = 0;
     scheduleRender();
     loadTiles();
     emitState();
@@ -501,6 +601,8 @@
       case 'ArrowLeft':
         e.preventDefault();
         ra = ((ra - panStep) % 360 + 360) % 360;
+        panOffsetX = 0;
+        panOffsetY = 0;
         scheduleRender();
         loadTiles();
         emitState();
@@ -508,6 +610,8 @@
       case 'ArrowRight':
         e.preventDefault();
         ra = ((ra + panStep) % 360 + 360) % 360;
+        panOffsetX = 0;
+        panOffsetY = 0;
         scheduleRender();
         loadTiles();
         emitState();
@@ -515,6 +619,8 @@
       case 'ArrowUp':
         e.preventDefault();
         dec = Math.min(89.99, dec + panStep);
+        panOffsetX = 0;
+        panOffsetY = 0;
         scheduleRender();
         loadTiles();
         emitState();
@@ -522,6 +628,8 @@
       case 'ArrowDown':
         e.preventDefault();
         dec = Math.max(-89.99, dec - panStep);
+        panOffsetX = 0;
+        panOffsetY = 0;
         scheduleRender();
         loadTiles();
         emitState();
@@ -560,12 +668,16 @@
   export function resetView() {
     ra = initRa;
     dec = initDec;
+    panOffsetX = 0;
+    panOffsetY = 0;
     setZoom(initZoom);
   }
 
   export function panTo(newRa: number, newDec: number) {
     ra = ((newRa % 360) + 360) % 360;
     dec = Math.max(-90, Math.min(90, newDec));
+    panOffsetX = 0;
+    panOffsetY = 0;
     scheduleRender();
     emitState();
   }
@@ -575,9 +687,22 @@
     loadTiles();
   }
 
+  /**
+   * Set zoom level, centered on screen center (Issue #1).
+   */
   export function setZoom(level: number) {
+    // Find the sky point at screen center
+    const [centerRa, centerDec] = canvasToSky(canvasWidth / 2, canvasHeight / 2);
+
     zoomLevel = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, level));
     fov = zoomToFov(zoomLevel);
+
+    // Keep the screen center sky point fixed
+    ra = centerRa;
+    dec = centerDec;
+    panOffsetX = 0;
+    panOffsetY = 0;
+
     scheduleRender();
     loadTiles();
     emitState();
@@ -629,6 +754,53 @@
     }
   }
 
+  // --- Post-Processing ---
+
+  /**
+   * Apply scaling, colormap, and invert to image data.
+   * Operates on RGBA ImageData in-place.
+   */
+  function applyPostProcessing(imageData: ImageData) {
+    const pixels = imageData.data;
+
+    // Convert RGB to grayscale luminance values
+    const gray = new Float64Array(canvasWidth * canvasHeight);
+    for (let i = 0; i < gray.length; i++) {
+      const r = pixels[i * 4]!;
+      const g = pixels[i * 4 + 1]!;
+      const b = pixels[i * 4 + 2]!;
+      gray[i] = 0.299 * r + 0.587 * g + 0.114 * b;
+    }
+
+    // Apply scaling (normalized output 0-1)
+    const scaled = applyScaling(gray, { method: scaling });
+
+    // Apply colormap (RGBA output 0-255, 4 bytes per pixel)
+    const colored = applyColorMap(scaled.data, colorMap);
+
+    // Write back to canvas
+    for (let i = 0; i < gray.length; i++) {
+      const srcOffset = i * 4;
+      const dstOffset = i * 4;
+
+      let r = colored[srcOffset]!;
+      let g = colored[srcOffset + 1]!;
+      let b = colored[srcOffset + 2]!;
+
+      // Apply invert (Issue #5)
+      if (invert) {
+        r = 255 - r;
+        g = 255 - g;
+        b = 255 - b;
+      }
+
+      pixels[dstOffset] = r;
+      pixels[dstOffset + 1] = g;
+      pixels[dstOffset + 2] = b;
+      // Alpha stays 255 from colormap
+    }
+  }
+
   // --- Svelte Effects ---
 
   $effect(() => {
@@ -660,44 +832,18 @@
     };
   });
 
-  function applyPostProcessing() {
-    if (!ctx) return;
-    const imageData = ctx.getImageData(0, 0, canvasWidth, canvasHeight);
-    const pixels = imageData.data;
-
-    // Convert RGB to grayscale luminance values
-    const gray = new Float64Array(canvasWidth * canvasHeight);
-    for (let i = 0; i < gray.length; i++) {
-      const r = pixels[i * 4];
-      const g = pixels[i * 4 + 1];
-      const b = pixels[i * 4 + 2];
-      gray[i] = 0.299 * r + 0.587 * g + 0.114 * b;
-    }
-
-    // Apply scaling (normalized output 0-1)
-    const scaled = applyScaling(gray, { method: scaling });
-
-    // Apply colormap (RGB output 0-255)
-    const colored = applyColorMap(scaled.data, colorMap);
-
-    // Write back to canvas
-    for (let i = 0; i < gray.length; i++) {
-      pixels[i * 4] = colored[i * 3];
-      pixels[i * 4 + 1] = colored[i * 3 + 1];
-      pixels[i * 4 + 2] = colored[i * 3 + 2];
-    }
-
-    ctx.putImageData(imageData, 0, 0);
-  }
-
   // Re-render when processing props change
   $effect(() => {
     void scaling;
     void colorMap;
     void interpolation;
+    void invert;
     scheduleRender();
   });
 
+  /**
+   * Resize canvas to container. Called on init, resize, and fullscreen change (Issue #8).
+   */
   function resizeToContainer() {
     if (!containerEl || !canvasEl) return;
     const w = containerEl.offsetWidth || 800;
@@ -707,9 +853,20 @@
       canvasHeight = h;
       canvasEl.width = w;
       canvasEl.height = h;
+      // Reset offscreen canvas so it gets recreated at new size
+      if (offscreenCanvas) {
+        offscreenCanvas.width = w;
+        offscreenCanvas.height = h;
+      }
       scheduleRender();
     }
   }
+
+  // --- Computed Properties for FOV Indicator (Issue #7) ---
+
+  const fovDegrees = $derived(fov.toFixed(2));
+  const centerRaDisplay = $derived(ra.toFixed(4));
+  const centerDecDisplay = $derived(dec.toFixed(4));
 </script>
 
 <div class="image-viewer" bind:this={containerEl}>
@@ -727,6 +884,23 @@
     ondblclick={onDblClick}
     onkeydown={onKeyDown}
   ></canvas>
+
+  <!-- FOV Indicator (Issue #7) -->
+  <div class="fov-indicator" aria-label="Field of view indicator">
+    <div class="fov-row">
+      <span class="fov-label">FOV</span>
+      <span class="fov-value">{fovDegrees}°</span>
+    </div>
+    <div class="fov-row">
+      <span class="fov-label">RA</span>
+      <span class="fov-value">{centerRaDisplay}°</span>
+    </div>
+    <div class="fov-row">
+      <span class="fov-label">Dec</span>
+      <span class="fov-value">{centerDecDisplay}°</span>
+    </div>
+  </div>
+
   {#if hasError}
     <div class="error-overlay" role="alert">
       <p>⚠️ {errorMessage}</p>
@@ -756,6 +930,38 @@
 
   .hips-canvas:active {
     cursor: grabbing;
+  }
+
+  .fov-indicator {
+    position: absolute;
+    bottom: 12px;
+    right: 12px;
+    background: rgba(10, 10, 30, 0.8);
+    border: 1px solid rgba(100, 100, 255, 0.3);
+    border-radius: 6px;
+    padding: 6px 10px;
+    color: #aac;
+    font-size: 11px;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    z-index: 5;
+    pointer-events: none;
+    line-height: 1.5;
+  }
+
+  .fov-row {
+    display: flex;
+    gap: 8px;
+    justify-content: space-between;
+  }
+
+  .fov-label {
+    color: #88a;
+    min-width: 24px;
+  }
+
+  .fov-value {
+    color: #ccf;
+    text-align: right;
   }
 
   .error-overlay {

@@ -9,8 +9,10 @@
     onTogglePanel,
     onToggleFullscreen,
     onToggleHelp,
+    onToggleInvert,
     panelOpen = false,
     isFullscreen = false,
+    invert = false,
   }: {
     onZoomIn?: () => void;
     onZoomOut?: () => void;
@@ -19,8 +21,10 @@
     onTogglePanel?: () => void;
     onToggleFullscreen?: () => void;
     onToggleHelp?: () => void;
+    onToggleInvert?: () => void;
     panelOpen?: boolean;
     isFullscreen?: boolean;
+    invert?: boolean;
   } = $props();
 
   let searchQuery = $state('');
@@ -152,6 +156,21 @@
 
   <div class="spacer"></div>
 
+  <!-- Invert toggle -->
+  <button
+    class="icon-button"
+    class:active={invert}
+    onclick={() => onToggleInvert?.()}
+    title="Invert image (I)"
+    aria-label="Invert image"
+    aria-pressed={invert}
+  >
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="10"/>
+      <path d="M12 2a10 10 0 0 1 0 20z" fill="currentColor"/>
+    </svg>
+  </button>
+
   <!-- Fullscreen toggle -->
   <button class="icon-button" onclick={() => onToggleFullscreen?.()} title="Toggle fullscreen (F)" aria-label="Toggle fullscreen">
     {#if isFullscreen}
@@ -247,6 +266,12 @@
   }
 
   .menu-button.active {
+    background: #3a3a5e;
+    color: #6a6aff;
+    border-color: #6a6aff;
+  }
+
+  .icon-button.active {
     background: #3a3a5e;
     color: #6a6aff;
     border-color: #6a6aff;
