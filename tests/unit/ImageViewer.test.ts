@@ -315,31 +315,30 @@ describe('ImageViewer', () => {
       expect(errorOverlay?.textContent).toContain('Failed to load image tiles');
     });
 
-    it('shows error overlay on tile-load-failed event', async () => {
+    it('does not show error overlay for individual tile failures', async () => {
       render(ImageViewer);
       mockViewer._trigger('tile-load-failed', { message: 'Network timeout' });
 
       await new Promise(r => setTimeout(r, 10));
       const errorOverlay = document.querySelector('.error-overlay');
-      expect(errorOverlay).toBeTruthy();
-      expect(errorOverlay?.textContent).toContain('Network timeout');
+      // Individual tile failures should NOT show error overlay
+      expect(errorOverlay).toBeNull();
     });
 
-    it('shows default error message on tile-load-failed without message', async () => {
+    it('does not show overlay for single tile failure without message', async () => {
       render(ImageViewer);
       mockViewer._trigger('tile-load-failed', {});
 
       await new Promise(r => setTimeout(r, 10));
       const errorOverlay = document.querySelector('.error-overlay');
-      expect(errorOverlay).toBeTruthy();
-      expect(errorOverlay?.textContent).toContain('Failed to load tiles');
+      expect(errorOverlay).toBeNull();
     });
 
     it('clears error state when open event fires after error', async () => {
       render(ImageViewer);
 
-      // Trigger an error first
-      mockViewer._trigger('tile-load-failed', { message: 'Error' });
+      // Trigger open-failed first (catastrophic error)
+      mockViewer._trigger('open-failed', { message: 'Connection failed' });
       await new Promise(r => setTimeout(r, 10));
       expect(document.querySelector('.error-overlay')).toBeTruthy();
 

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { lookupObject } from '../data/objects.js';
+
   let {
     onZoomIn,
     onZoomOut,
@@ -28,6 +30,13 @@
     searchError = '';
     const query = searchQuery.trim();
     if (!query) return;
+
+    // First, try to resolve as a named object (Messier, NGC, star name)
+    const namedObj = lookupObject(query);
+    if (namedObj) {
+      onSearch?.(namedObj.ra, namedObj.dec);
+      return;
+    }
 
     // Try to parse "RA, Dec" format
     const parts = query.split(/[,\s]+/).filter(s => s.length > 0);
@@ -69,7 +78,7 @@
       return;
     }
 
-    searchError = 'Enter RA,Dec or sexagesimal';
+    searchError = 'Enter coords or object name (e.g. M42)';
   }
 
   function handleKeydown(e: KeyboardEvent) {
@@ -99,10 +108,10 @@
     <input
       type="text"
       class="search-input"
-      placeholder="RA, Dec"
+      placeholder="62.0, -37.0 or M42"
       bind:value={searchQuery}
       onkeydown={handleKeydown}
-      title="Enter coordinates as 'RA, Dec' in degrees or sexagesimal"
+      title="Enter coordinates or object name (e.g. M42, Orion Nebula)"
       aria-label="Search coordinates"
     />
     <button class="icon-button search-button" onclick={handleSearch} title="Go to coordinates" aria-label="Go">
@@ -188,7 +197,7 @@
     border-radius: 4px;
     padding: 4px 8px;
     font-size: 12px;
-    width: 140px;
+    width: 180px;
   }
 
   .search-input::placeholder {
@@ -203,7 +212,7 @@
   .search-error {
     color: #f66;
     font-size: 11px;
-    max-width: 160px;
+    max-width: 180px;
   }
 
   .separator {

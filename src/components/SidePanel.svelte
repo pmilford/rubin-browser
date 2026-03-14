@@ -208,7 +208,7 @@
             <div class="section-content">
               <TimeSlider
                 {epochs}
-                {currentEpochIndex}
+                currentIndex={currentEpochIndex}
                 playing={isPlaying}
                 interval={1000}
                 {onEpochChange}
@@ -258,7 +258,7 @@
         </button>
         {#if activeSection === 'pixel'}
           <div class="section-content">
-            <PixelReadout ra={0} dec={0} value={0} x={0} y={0} filterName="r" />
+            <PixelReadout ra={0} dec={0} pixelValue={0} pixelX={0} pixelY={0} visible={true} />
           </div>
         {/if}
       </section>
