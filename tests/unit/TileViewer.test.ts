@@ -310,4 +310,57 @@ describe('TileViewer', () => {
       expect(screen.getByText('1 / 30')).toBeTruthy();
     });
   });
+
+  describe('filter selector integration', () => {
+    it('renders filter selector', () => {
+      render(TileViewer);
+      expect(screen.getByRole('group', { name: 'Filter selection' })).toBeTruthy();
+    });
+
+    it('renders all filter buttons', () => {
+      render(TileViewer);
+      expect(screen.getByLabelText('u filter')).toBeTruthy();
+      expect(screen.getByLabelText('y filter')).toBeTruthy();
+    });
+
+    it('updates status when filter is selected', async () => {
+      render(TileViewer);
+      await fireEvent.click(screen.getByLabelText('r filter'));
+      const status = screen.getByRole('status');
+      expect(status.textContent).toContain('Filter: r');
+    });
+
+    it('updates status when filter is deselected', async () => {
+      render(TileViewer);
+      await fireEvent.click(screen.getByLabelText('r filter'));
+      await fireEvent.click(screen.getByLabelText('r filter'));
+      const status = screen.getByRole('status');
+      expect(status.textContent).toContain('Filter: none');
+    });
+
+    it('shows composite mode toggle', () => {
+      render(TileViewer);
+      expect(screen.getByLabelText('RGB composite mode')).toBeTruthy();
+      expect(screen.getByLabelText('Single filter mode')).toBeTruthy();
+    });
+
+    it('updates status when composite channels are assigned', async () => {
+      render(TileViewer);
+      await fireEvent.click(screen.getByLabelText('RGB composite mode'));
+      await fireEvent.click(screen.getByLabelText('R channel'));
+      await fireEvent.click(screen.getByLabelText('r filter'));
+      const status = screen.getByRole('status');
+      expect(status.textContent).toContain('Composite: R:r');
+    });
+
+    it('updates status when composite is cleared', async () => {
+      render(TileViewer);
+      await fireEvent.click(screen.getByLabelText('RGB composite mode'));
+      await fireEvent.click(screen.getByLabelText('R channel'));
+      await fireEvent.click(screen.getByLabelText('r filter'));
+      await fireEvent.click(screen.getByLabelText('Clear composite'));
+      const status = screen.getByRole('status');
+      expect(status.textContent).toContain('Composite: cleared');
+    });
+  });
 });

@@ -5,6 +5,7 @@
   import StatusBar from '../components/StatusBar.svelte';
   import HelpModal from '../components/HelpModal.svelte';
   import TimeSlider from '../components/TimeSlider.svelte';
+  import FilterSelector from '../components/FilterSelector.svelte';
   import type { ScalingFunction, ColorMapName, InterpolationMethod, ViewerState, Epoch } from '../types/image.js';
   import { mjdToIso } from '../types/image.js';
   import { DEFAULT_MOCK_EPOCHS } from '../constants.js';
@@ -19,6 +20,11 @@
   let currentDec = $state(-37.0);
   let zoomLevel = $state(3);
   let statusMessage = $state('Ready');
+
+  // Filter state
+  let activeFilter: FilterBand | null = $state(null);
+  let compositeMode = $state(false);
+  let compositeChannels: { r: FilterBand | null; g: FilterBand | null; b: FilterBand | null } = $state({ r: null, g: null, b: null });
 
   // Time series state
   const mockEpochs: Epoch[] = DEFAULT_MOCK_EPOCHS.map(e => ({
@@ -47,6 +53,20 @@
   function handleEpochChange(index: number, epoch: Epoch) {
     currentEpochIndex = index;
     statusMessage = `Epoch ${index + 1}: MJD ${epoch.mjd.toFixed(2)} (${epoch.filter ?? '—'})`;
+  }
+
+  function handleFilterChange(filter: FilterBand | null) {
+    activeFilter = filter;
+    statusMessage = filter ? `Filter: ${filter}` : 'Filter: none';
+  }
+
+  function handleCompositeChange(channels: { r: FilterBand | null; g: FilterBand | null; b: FilterBand | null }) {
+    compositeChannels = channels;
+    const parts = [];
+    if (channels.r) parts.push(`R:${channels.r}`);
+    if (channels.g) parts.push(`G:${channels.g}`);
+    if (channels.b) parts.push(`B:${channels.b}`);
+    statusMessage = parts.length > 0 ? `Composite: ${parts.join(' ')}` : 'Composite: cleared';
   }
 
   function handleKeydown(e: KeyboardEvent) {
@@ -89,6 +109,14 @@
     interval={1000}
     onEpochChange={handleEpochChange}
     onPlayStateChange={(p) => { isPlaying = p; }}
+  />
+
+  <FilterSelector
+    bind:activeFilter={activeFilter}
+    {compositeMode}
+    {compositeChannels}
+    onFilterChange={handleFilterChange}
+    onCompositeChange={handleCompositeChange}
   />
 
   <div class="viewer-area">
