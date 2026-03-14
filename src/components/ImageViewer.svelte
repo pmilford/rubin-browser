@@ -5,6 +5,7 @@
   let {
     hipsBaseUrl = '',
     rspToken = '',
+    tileFormat = '',
     initialRa = 62.0,
     initialDec = -37.0,
     initialZoom = 3,
@@ -12,6 +13,7 @@
   }: {
     hipsBaseUrl?: string;
     rspToken?: string;
+    tileFormat?: string;
     initialRa?: number;
     initialDec?: number;
     initialZoom?: number;
@@ -22,9 +24,12 @@
   const PUBLIC_HIPS = 'https://alasky.cds.unistra.fr/DSS/DSSColor';
   const RUBIN_HIPS = 'https://data.lsst.cloud/api/hips/images/color_gri';
 
-  // Resolve which HiPS endpoint to use
+  // Resolve which HiPS endpoint and format to use
   const resolvedBaseUrl = $derived(
     hipsBaseUrl || (rspToken ? RUBIN_HIPS : PUBLIC_HIPS)
+  );
+  const resolvedFormat = $derived(
+    tileFormat || (rspToken ? 'png' : 'jpg')
   );
 
   let containerEl: HTMLDivElement;
@@ -115,7 +120,7 @@
             const nside = Math.pow(2, order);
             const pixelIndex = y * nside + x;
             const dir = Math.floor(pixelIndex / 10000) * 10000;
-            return `${resolvedBaseUrl}/Norder${order}/Dir${dir}/Npix${pixelIndex}.png`;
+            return `${resolvedBaseUrl}/Norder${order}/Dir${dir}/Npix${pixelIndex}.${resolvedFormat}`;
           },
         },
       });
@@ -172,7 +177,7 @@
 
 <div class="image-viewer" bind:this={containerEl}>
   {#if hasError}
-    <div class="error-overlay">
+    <div class="error-overlay" role="alert">
       <p>⚠️ {errorMessage}</p>
       <p class="hint">Try a different coordinate or check your connection.</p>
     </div>

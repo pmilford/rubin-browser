@@ -114,7 +114,7 @@ describe('ImageViewer', () => {
       expect(url).toContain('Norder');
       expect(url).toContain('Dir');
       expect(url).toContain('Npix');
-      expect(url).toMatch(/\.png$/);
+      expect(url).toMatch(/\.(png|jpg|jpeg)$/);
     });
 
     it('calculates order from level (level - 1)', () => {
