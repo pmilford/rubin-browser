@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/svelte';
 import TileViewer from '../../src/views/TileViewer.svelte';
 
@@ -46,8 +46,13 @@ const mockCtx = {
 };
 
 beforeEach(() => {
+  vi.useFakeTimers();
   vi.clearAllMocks();
   HTMLCanvasElement.prototype.getContext = vi.fn(() => mockCtx as unknown as CanvasRenderingContext2D);
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('TileViewer', () => {
@@ -197,6 +202,36 @@ describe('TileViewer', () => {
       await screen.findByRole('dialog');
       expect(screen.getByRole('dialog')).toBeTruthy();
     });
+
+    it('zooms in with + key', () => {
+      render(TileViewer);
+      fireEvent.keyDown(window, { key: '+' });
+      expect(mockViewer.viewport.zoomBy).toHaveBeenCalledWith(1.5);
+    });
+
+    it('zooms in with = key', () => {
+      render(TileViewer);
+      fireEvent.keyDown(window, { key: '=' });
+      expect(mockViewer.viewport.zoomBy).toHaveBeenCalledWith(1.5);
+    });
+
+    it('zooms out with - key', () => {
+      render(TileViewer);
+      fireEvent.keyDown(window, { key: '-' });
+      expect(mockViewer.viewport.zoomBy).toHaveBeenCalledWith(1 / 1.5);
+    });
+
+    it('zooms out with _ key', () => {
+      render(TileViewer);
+      fireEvent.keyDown(window, { key: '_' });
+      expect(mockViewer.viewport.zoomBy).toHaveBeenCalledWith(1 / 1.5);
+    });
+
+    it('resets view with 0 key', () => {
+      render(TileViewer);
+      fireEvent.keyDown(window, { key: '0' });
+      expect(mockViewer.viewport.goHome).toHaveBeenCalled();
+    });
   });
 
   describe('viewer state changes', () => {
@@ -223,6 +258,56 @@ describe('TileViewer', () => {
       render(TileViewer);
       const viewerArea = document.querySelector('.viewer-area');
       expect(viewerArea).toBeTruthy();
+    });
+  });
+
+  describe('time slider integration', () => {
+    it('renders time slider controls', () => {
+      render(TileViewer);
+      expect(screen.getByRole('region', { name: 'Time series controls' })).toBeTruthy();
+    });
+
+    it('renders epoch play button', () => {
+      render(TileViewer);
+      expect(screen.getByLabelText('Play')).toBeTruthy();
+    });
+
+    it('renders epoch slider', () => {
+      render(TileViewer);
+      expect(screen.getByLabelText('Epoch slider')).toBeTruthy();
+    });
+
+    it('shows epoch count', () => {
+      render(TileViewer);
+      const counter = screen.getByText(/\/ 30/);
+      expect(counter).toBeTruthy();
+    });
+
+    it('updates status when epoch changes', async () => {
+      render(TileViewer);
+      await fireEvent.click(screen.getByLabelText('Next epoch'));
+
+      const status = screen.getByRole('status');
+      expect(status.textContent).toContain('Epoch');
+    });
+
+    it('steps through epochs with next button', async () => {
+      render(TileViewer);
+      expect(screen.getByText('1 / 30')).toBeTruthy();
+
+      await fireEvent.click(screen.getByLabelText('Next epoch'));
+      expect(screen.getByText('2 / 30')).toBeTruthy();
+    });
+
+    it('steps backward with previous button', async () => {
+      render(TileViewer);
+      // Move forward first
+      await fireEvent.click(screen.getByLabelText('Next epoch'));
+      expect(screen.getByText('2 / 30')).toBeTruthy();
+
+      // Then back
+      await fireEvent.click(screen.getByLabelText('Previous epoch'));
+      expect(screen.getByText('1 / 30')).toBeTruthy();
     });
   });
 });

@@ -152,3 +152,41 @@ export function isViewerState(v: unknown): v is ViewerState {
     isInterpolationMethod(String(o.interpolation))
   );
 }
+
+/** Observation epoch for time series browsing */
+export interface Epoch {
+  /** Modified Julian Date of observation */
+  mjd: number;
+  /** Human-readable date string (ISO format) */
+  isoDate: string;
+  /** Optional filter/band observed in this epoch */
+  filter?: string;
+  /** Optional exposure ID */
+  exposureId?: string;
+}
+
+/** Type guard: validates a value is a valid Epoch */
+export function isEpoch(v: unknown): v is Epoch {
+  if (!v || typeof v !== 'object') return false;
+  const o = v as Record<string, unknown>;
+  return (
+    typeof o.mjd === 'number' &&
+    typeof o.isoDate === 'string' &&
+    (o.filter === undefined || typeof o.filter === 'string') &&
+    (o.exposureId === undefined || typeof o.exposureId === 'string')
+  );
+}
+
+/** Convert MJD (Modified Julian Date) to ISO date string */
+export function mjdToIso(mjd: number): string {
+  // MJD epoch: November 17, 1858 00:00:00 UTC
+  const unixMs = (mjd - 40587) * 86400 * 1000;
+  return new Date(unixMs).toISOString().split('T')[0] ?? '';
+}
+
+/** Convert ISO date string to MJD */
+export function isoToMjd(iso: string): number {
+  const date = new Date(iso);
+  const unixMs = date.getTime();
+  return unixMs / (86400 * 1000) + 40587;
+}

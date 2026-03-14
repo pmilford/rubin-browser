@@ -4,7 +4,11 @@
   import ColorBar from '../components/ColorBar.svelte';
   import StatusBar from '../components/StatusBar.svelte';
   import HelpModal from '../components/HelpModal.svelte';
-  import type { ScalingFunction, ColorMapName, InterpolationMethod, ViewerState } from '../types/image.js';
+  import TimeSlider from '../components/TimeSlider.svelte';
+  import type { ScalingFunction, ColorMapName, InterpolationMethod, ViewerState, Epoch } from '../types/image.js';
+  import { mjdToIso } from '../types/image.js';
+  import { DEFAULT_MOCK_EPOCHS } from '../constants.js';
+  import type { FilterBand } from '../constants.js';
 
   let scaling: ScalingFunction = $state('linear');
   let colorMap: ColorMapName = $state('grayscale');
@@ -15,6 +19,15 @@
   let currentDec = $state(-37.0);
   let zoomLevel = $state(3);
   let statusMessage = $state('Ready');
+
+  // Time series state
+  const mockEpochs: Epoch[] = DEFAULT_MOCK_EPOCHS.map(e => ({
+    mjd: e.mjd,
+    isoDate: mjdToIso(e.mjd),
+    filter: e.filter,
+  }));
+  let currentEpochIndex = $state(0);
+  let isPlaying = $state(false);
 
   let imageViewerRef: ImageViewer | undefined = $state();
 
@@ -29,6 +42,11 @@
     currentDec = dec;
     imageViewerRef?.panTo(ra, dec);
     statusMessage = `Go to RA=${ra.toFixed(2)}°, Dec=${dec.toFixed(2)}°`;
+  }
+
+  function handleEpochChange(index: number, epoch: Epoch) {
+    currentEpochIndex = index;
+    statusMessage = `Epoch ${index + 1}: MJD ${epoch.mjd.toFixed(2)} (${epoch.filter ?? '—'})`;
   }
 
   function handleKeydown(e: KeyboardEvent) {
@@ -62,6 +80,15 @@
     onResetView={() => imageViewerRef?.resetView()}
     onSearch={handleSearch}
     onHelpClick={() => { helpOpen = true; }}
+  />
+
+  <TimeSlider
+    epochs={mockEpochs}
+    currentIndex={currentEpochIndex}
+    playing={isPlaying}
+    interval={1000}
+    onEpochChange={handleEpochChange}
+    onPlayStateChange={(p) => { isPlaying = p; }}
   />
 
   <div class="viewer-area">
