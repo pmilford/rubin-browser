@@ -16,15 +16,33 @@
   let zoomLevel = $state(3);
   let statusMessage = $state('Ready');
 
+  let imageViewerRef: ImageViewer | undefined = $state();
+
   function handleViewerStateChange(state: ViewerState) {
     currentRa = state.centerRa;
     currentDec = state.centerDec;
     zoomLevel = state.zoomLevel;
   }
 
+  function handleSearch(ra: number, dec: number) {
+    currentRa = ra;
+    currentDec = dec;
+    imageViewerRef?.panTo(ra, dec);
+    statusMessage = `Go to RA=${ra.toFixed(2)}°, Dec=${dec.toFixed(2)}°`;
+  }
+
   function handleKeydown(e: KeyboardEvent) {
     if (e.key === 'h' || e.key === 'H') {
       helpOpen = !helpOpen;
+    }
+    if (e.key === '+' || e.key === '=') {
+      imageViewerRef?.zoomIn();
+    }
+    if (e.key === '-' || e.key === '_') {
+      imageViewerRef?.zoomOut();
+    }
+    if (e.key === '0') {
+      imageViewerRef?.resetView();
     }
   }
 </script>
@@ -39,11 +57,16 @@
     onScalingChange={(s) => { scaling = s; statusMessage = `Scaling: ${s}`; }}
     onColorMapChange={(c) => { colorMap = c; statusMessage = `Color map: ${c}`; }}
     onInterpolationChange={(i) => { interpolation = i; statusMessage = `Interpolation: ${i}`; }}
+    onZoomIn={() => imageViewerRef?.zoomIn()}
+    onZoomOut={() => imageViewerRef?.zoomOut()}
+    onResetView={() => imageViewerRef?.resetView()}
+    onSearch={handleSearch}
     onHelpClick={() => { helpOpen = true; }}
   />
 
   <div class="viewer-area">
     <ImageViewer
+      bind:this={imageViewerRef}
       initialRa={62.0}
       initialDec={-37.0}
       initialZoom={3}
