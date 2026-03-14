@@ -12,6 +12,7 @@
   import { mjdToIso } from '../types/image.js';
   import { DEFAULT_MOCK_EPOCHS, type SurveyInfo } from '../constants.js';
   import type { FilterBand } from '../constants.js';
+  import { getToken } from '../api/auth.js';
 
   let scaling: ScalingFunction = $state('linear');
   let colorMap: ColorMapName = $state('grayscale');
@@ -54,6 +55,7 @@
   let isPlaying = $state(false);
 
   let imageViewerRef: ImageViewer | undefined = $state();
+  let rspToken = $state(getToken() || '');
 
   function handleViewerStateChange(state: ViewerState) {
     currentRa = state.centerRa;
@@ -185,6 +187,7 @@
   <div class="viewer-area">
     <ImageViewer
       bind:this={imageViewerRef}
+      {rspToken}
       initialRa={62.0}
       initialDec={-37.0}
       initialZoom={3}

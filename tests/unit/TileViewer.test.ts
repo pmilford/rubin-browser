@@ -39,6 +39,13 @@ vi.mock('openseadragon', () => {
   };
 });
 
+// Mock auth module
+vi.mock('../../src/api/auth.js', () => ({
+  getToken: vi.fn(() => null),
+  isAuthenticated: vi.fn(() => false),
+  getAuthHeader: vi.fn(() => ({})),
+}));
+
 // Mock canvas context for ColorBar
 const mockCtx = {
   imageSmoothingEnabled: true,

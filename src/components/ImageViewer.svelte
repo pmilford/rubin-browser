@@ -3,18 +3,29 @@
   import type { ViewerState } from '../types/image.js';
 
   let {
-    hipsBaseUrl = 'https://data.lsst.cloud/api/hips/images/color_gri',
+    hipsBaseUrl = '',
+    rspToken = '',
     initialRa = 62.0,
     initialDec = -37.0,
     initialZoom = 3,
     onViewerStateChange,
   }: {
     hipsBaseUrl?: string;
+    rspToken?: string;
     initialRa?: number;
     initialDec?: number;
     initialZoom?: number;
     onViewerStateChange?: (state: ViewerState) => void;
   } = $props();
+
+  // Default to public DSS2 Color HiPS (no auth needed)
+  const PUBLIC_HIPS = 'https://alasky.cds.unistra.fr/DSS/DSSColor';
+  const RUBIN_HIPS = 'https://data.lsst.cloud/api/hips/images/color_gri';
+
+  // Resolve which HiPS endpoint to use
+  const resolvedBaseUrl = $derived(
+    hipsBaseUrl || (rspToken ? RUBIN_HIPS : PUBLIC_HIPS)
+  );
 
   let containerEl: HTMLDivElement;
   let osdViewer: OpenSeadragon.Viewer | null = null;
@@ -78,6 +89,12 @@
     if (!containerEl) return;
 
     try {
+      // Build auth headers if we have an RSP token
+      const ajaxHeaders: Record<string, string> = {};
+      if (rspToken) {
+        ajaxHeaders['Authorization'] = `Bearer ${rspToken}`;
+      }
+
       const viewer = OpenSeadragon({
         element: containerEl,
         showNavigationControl: false,
@@ -92,12 +109,13 @@
           height: 256 * Math.pow(2, 10),
           width: 256 * Math.pow(2, 10),
           tileSize: 256,
+          ajaxHeaders: Object.keys(ajaxHeaders).length > 0 ? ajaxHeaders : undefined,
           getTileUrl: function (level: number, x: number, y: number) {
             const order = Math.max(0, level - 1);
             const nside = Math.pow(2, order);
             const pixelIndex = y * nside + x;
             const dir = Math.floor(pixelIndex / 10000) * 10000;
-            return `${hipsBaseUrl}/Norder${order}/Dir${dir}/Npix${pixelIndex}.png`;
+            return `${resolvedBaseUrl}/Norder${order}/Dir${dir}/Npix${pixelIndex}.png`;
           },
         },
       });

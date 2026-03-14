@@ -66,14 +66,33 @@ describe('ImageViewer', () => {
       expect(config.element).toBeTruthy();
     });
 
-    it('uses default HiPS base URL', () => {
+    it('uses public HiPS as default (no token)', () => {
       render(ImageViewer);
+      const config = (OpenSeadragon as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      const url = config.tileSources.getTileUrl(3, 0, 0);
+      expect(url).toContain('https://alasky.cds.unistra.fr/DSS/DSSColor');
+    });
+
+    it('uses Rubin HiPS when rspToken is provided', () => {
+      render(ImageViewer, { props: { rspToken: 'test-token-123' } });
       const config = (OpenSeadragon as ReturnType<typeof vi.fn>).mock.calls[0][0];
       const url = config.tileSources.getTileUrl(3, 0, 0);
       expect(url).toContain('https://data.lsst.cloud/api/hips/images/color_gri');
     });
 
-    it('uses custom HiPS base URL', () => {
+    it('includes auth header when rspToken is provided', () => {
+      render(ImageViewer, { props: { rspToken: 'test-token-123' } });
+      const config = (OpenSeadragon as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(config.tileSources.ajaxHeaders).toEqual({ 'Authorization': 'Bearer test-token-123' });
+    });
+
+    it('does not include auth header when no token', () => {
+      render(ImageViewer);
+      const config = (OpenSeadragon as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(config.tileSources.ajaxHeaders).toBeUndefined();
+    });
+
+    it('uses custom HiPS base URL when specified', () => {
       render(ImageViewer, { props: { hipsBaseUrl: 'https://example.com/hips/custom' } });
       const config = (OpenSeadragon as ReturnType<typeof vi.fn>).mock.calls[0][0];
       const url = config.tileSources.getTileUrl(3, 0, 0);
