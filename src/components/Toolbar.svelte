@@ -40,25 +40,27 @@
     if (!query) return;
 
     // Try to parse "RA, Dec" format (e.g., "62.0, -37.0" or "62.0 -37.0")
-    const parts = query.split(/[,\s]+/).map(s => parseFloat(s));
-    if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
-      const ra = parts[0];
-      const dec = parts[1];
-      if (ra < 0 || ra > 360) {
-        searchError = 'RA must be 0-360';
+    const parts = query.split(/[,\s]+/).filter(s => s.length > 0);
+    if (parts.length === 2) {
+      const ra = Number(parts[0]);
+      const dec = Number(parts[1]);
+      if (!isNaN(ra) && !isNaN(dec) && isFinite(ra) && isFinite(dec)) {
+        if (ra < 0 || ra > 360) {
+          searchError = 'RA must be 0-360';
+          return;
+        }
+        if (dec < -90 || dec > 90) {
+          searchError = 'Dec must be -90 to 90';
+          return;
+        }
+        onSearch?.(ra, dec);
         return;
       }
-      if (dec < -90 || dec > 90) {
-        searchError = 'Dec must be -90 to 90';
-        return;
-      }
-      onSearch?.(ra, dec);
-      return;
     }
 
     // Try to parse sexagesimal format (e.g., "04h08m00s -37d00m00s")
-    const raMatch = query.match(/(\d+)h\s*(\d+)?m?\s*([\d.]+)?s?/i);
-    const decMatch = query.match(/([+-]?\d+)d?\s*(\d+)?m?\s*([\d.]+)?s?/i);
+    const raMatch = query.match(/(\d+)h\s*(?:(\d+)m)?\s*(?:(\d+(?:\.\d+)?)s)?/i);
+    const decMatch = query.match(/([+-]?\d+)d\s*(?:(\d+)m)?\s*(?:(\d+(?:\.\d+)?)s)?/i);
     if (raMatch && decMatch) {
       const raH = parseFloat(raMatch[1] || '0');
       const raM = parseFloat(raMatch[2] || '0');

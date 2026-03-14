@@ -201,45 +201,56 @@ describe('Toolbar', () => {
   });
 
   describe('search - sexagesimal format', () => {
-    // NOTE: The decimal regex (`split(/[,\s]+/)` + parseFloat) actually matches first
-    // for most sexagesimal inputs because parseFloat extracts the leading number.
-    // So "12h 30d" becomes decimal ra=12, dec=30 (not sexagesimal 180°, 30°).
-    // These tests document the actual code behavior.
+    // With the stricter parsing (Number instead of parseFloat), sexagesimal inputs
+    // like "4h8m0s" are NOT treated as valid decimal numbers, so they correctly
+    // fall through to sexagesimal parsing.
 
-    it('treats "4h8m0s -37d0m0s" as decimal (parseFloat extracts leading numbers)', async () => {
+    it('parses "4h8m0s -37d0m0s" as sexagesimal ra=62°, dec=-37°', async () => {
       const onSearch = vi.fn();
       render(Toolbar, { props: { onSearch } });
       const input = screen.getByLabelText('Search coordinates');
       await fireEvent.input(input, { target: { value: '4h8m0s -37d0m0s' } });
       await fireEvent.click(screen.getByLabelText('Go'));
-      expect(onSearch).toHaveBeenCalledWith(4, -37); // parseFloat("4h8m0s")=4, parseFloat("-37d0m0s")=-37
+      expect(onSearch).toHaveBeenCalled();
+      const [ra, dec] = onSearch.mock.calls[0];
+      expect(ra).toBeCloseTo(62, 0);
+      expect(dec).toBeCloseTo(-37, 0);
     });
 
-    it('treats "12h 30d" as decimal ra=12, dec=30', async () => {
+    it('treats "12h 30d" as sexagesimal ra=180°, dec=30°', async () => {
       const onSearch = vi.fn();
       render(Toolbar, { props: { onSearch } });
       const input = screen.getByLabelText('Search coordinates');
       await fireEvent.input(input, { target: { value: '12h 30d' } });
       await fireEvent.click(screen.getByLabelText('Go'));
-      expect(onSearch).toHaveBeenCalledWith(12, 30); // parseFloat("12h")=12, parseFloat("30d")=30
+      expect(onSearch).toHaveBeenCalled();
+      const [ra, dec] = onSearch.mock.calls[0];
+      expect(ra).toBeCloseTo(180, 0);
+      expect(dec).toBeCloseTo(30, 0);
     });
 
-    it('treats "6h30m0s 0d0m0s" as decimal ra=6, dec=0', async () => {
+    it('parses "6h30m0s 0d0m0s" as sexagesimal ra=97.5°, dec=0°', async () => {
       const onSearch = vi.fn();
       render(Toolbar, { props: { onSearch } });
       const input = screen.getByLabelText('Search coordinates');
       await fireEvent.input(input, { target: { value: '6h30m0s 0d0m0s' } });
       await fireEvent.click(screen.getByLabelText('Go'));
-      expect(onSearch).toHaveBeenCalledWith(6, 0); // parseFloat("6h30m0s")=6, parseFloat("0d0m0s")=0
+      expect(onSearch).toHaveBeenCalled();
+      const [ra, dec] = onSearch.mock.calls[0];
+      expect(ra).toBeCloseTo(97.5, 0);
+      expect(dec).toBeCloseTo(0, 0);
     });
 
-    it('treats "0h -45d30m" as decimal ra=0, dec=-45', async () => {
+    it('parses "0h -45d30m" as sexagesimal ra=0°, dec=-45.5°', async () => {
       const onSearch = vi.fn();
       render(Toolbar, { props: { onSearch } });
       const input = screen.getByLabelText('Search coordinates');
       await fireEvent.input(input, { target: { value: '0h -45d30m' } });
       await fireEvent.click(screen.getByLabelText('Go'));
-      expect(onSearch).toHaveBeenCalledWith(0, -45); // parseFloat("0h")=0, parseFloat("-45d30m")=-45
+      expect(onSearch).toHaveBeenCalled();
+      const [ra, dec] = onSearch.mock.calls[0];
+      expect(ra).toBeCloseTo(0, 0);
+      expect(dec).toBeCloseTo(-45.5, 0);
     });
 
     it('actually reaches sexagesimal parsing when decimal fails (multiple space-separated parts)', async () => {

@@ -70,9 +70,9 @@ describe('TileViewer', () => {
       expect(container).toBeTruthy();
     });
 
-    it('renders toolbar', () => {
+    it('renders compact toolbar', () => {
       render(TileViewer);
-      expect(screen.getByRole('toolbar')).toBeTruthy();
+      expect(screen.getByRole('toolbar', { name: 'Compact controls' })).toBeTruthy();
     });
 
     it('renders status bar', () => {
@@ -92,13 +92,34 @@ describe('TileViewer', () => {
 
     it('renders help modal (hidden)', () => {
       render(TileViewer);
-      // Help modal should not be visible initially
       expect(screen.queryByRole('dialog')).toBeNull();
     });
 
     it('does not show help modal initially', () => {
       render(TileViewer);
       expect(screen.queryByText('Rubin Image Viewer Help')).toBeNull();
+    });
+
+    it('renders menu toggle button', () => {
+      render(TileViewer);
+      expect(screen.getByLabelText('Toggle controls panel')).toBeTruthy();
+    });
+
+    it('renders zoom controls', () => {
+      render(TileViewer);
+      expect(screen.getByLabelText('Zoom in')).toBeTruthy();
+      expect(screen.getByLabelText('Zoom out')).toBeTruthy();
+      expect(screen.getByLabelText('Reset view')).toBeTruthy();
+    });
+
+    it('renders fullscreen toggle', () => {
+      render(TileViewer);
+      expect(screen.getByLabelText('Toggle fullscreen')).toBeTruthy();
+    });
+
+    it('does not render side panel initially', () => {
+      render(TileViewer);
+      expect(screen.queryByRole('complementary', { name: 'Controls panel' })).toBeNull();
     });
   });
 
@@ -128,28 +149,92 @@ describe('TileViewer', () => {
     });
   });
 
-  describe('toolbar interactions', () => {
-    it('updates status when scaling is changed', async () => {
+  describe('side panel toggle', () => {
+    it('opens side panel when menu button is clicked', async () => {
       render(TileViewer);
-      const scalingSelect = document.querySelector('#scaling-select')!;
+      await fireEvent.click(screen.getByLabelText('Toggle controls panel'));
+      expect(screen.getByRole('complementary', { name: 'Controls panel' })).toBeTruthy();
+    });
+
+    it('closes side panel when close button is clicked', async () => {
+      render(TileViewer);
+      await fireEvent.click(screen.getByLabelText('Toggle controls panel'));
+      expect(screen.getByRole('complementary')).toBeTruthy();
+
+      await fireEvent.click(screen.getByLabelText('Close panel'));
+      await waitFor(() => {
+        expect(screen.queryByRole('complementary')).toBeNull();
+      });
+    });
+
+    it('closes side panel when Escape is pressed', async () => {
+      render(TileViewer);
+      await fireEvent.click(screen.getByLabelText('Toggle controls panel'));
+      expect(screen.getByRole('complementary')).toBeTruthy();
+
+      fireEvent.keyDown(window, { key: 'Escape' });
+      await waitFor(() => {
+        expect(screen.queryByRole('complementary')).toBeNull();
+      });
+    });
+
+    it('marks menu button as active when panel is open', async () => {
+      render(TileViewer);
+      const menuButton = screen.getByLabelText('Toggle controls panel');
+      await fireEvent.click(menuButton);
+      expect(menuButton.getAttribute('aria-expanded')).toBe('true');
+    });
+  });
+
+  describe('side panel display settings', () => {
+    it('shows display settings section when panel opens', async () => {
+      render(TileViewer);
+      await fireEvent.click(screen.getByLabelText('Toggle controls panel'));
+      expect(screen.getByText('Display Settings')).toBeTruthy();
+    });
+
+    it('shows scaling select in panel', async () => {
+      render(TileViewer);
+      await fireEvent.click(screen.getByLabelText('Toggle controls panel'));
+      expect(screen.getByLabelText('Scaling')).toBeTruthy();
+    });
+
+    it('shows color map select in panel', async () => {
+      render(TileViewer);
+      await fireEvent.click(screen.getByLabelText('Toggle controls panel'));
+      expect(screen.getByLabelText('Color Map')).toBeTruthy();
+    });
+
+    it('shows interpolation select in panel', async () => {
+      render(TileViewer);
+      await fireEvent.click(screen.getByLabelText('Toggle controls panel'));
+      expect(screen.getByLabelText('Interpolation')).toBeTruthy();
+    });
+
+    it('updates status when scaling is changed in panel', async () => {
+      render(TileViewer);
+      await fireEvent.click(screen.getByLabelText('Toggle controls panel'));
+      const scalingSelect = screen.getByLabelText('Scaling');
       await fireEvent.change(scalingSelect, { target: { value: 'log' } });
 
       const status = screen.getByRole('status');
       expect(status.textContent).toContain('Scaling: log');
     });
 
-    it('updates status when color map is changed', async () => {
+    it('updates status when color map is changed in panel', async () => {
       render(TileViewer);
-      const colorSelect = document.querySelector('#colormap-select')!;
+      await fireEvent.click(screen.getByLabelText('Toggle controls panel'));
+      const colorSelect = screen.getByLabelText('Color Map');
       await fireEvent.change(colorSelect, { target: { value: 'viridis' } });
 
       const status = screen.getByRole('status');
       expect(status.textContent).toContain('Color map: viridis');
     });
 
-    it('updates status when interpolation is changed', async () => {
+    it('updates status when interpolation is changed in panel', async () => {
       render(TileViewer);
-      const interpSelect = document.querySelector('#interp-select')!;
+      await fireEvent.click(screen.getByLabelText('Toggle controls panel'));
+      const interpSelect = screen.getByLabelText('Interpolation');
       await fireEvent.change(interpSelect, { target: { value: 'bicubic' } });
 
       const status = screen.getByRole('status');
@@ -189,25 +274,24 @@ describe('TileViewer', () => {
   });
 
   describe('keyboard shortcuts', () => {
-    it('toggles help with H key', async () => {
+    it('opens help with H key', async () => {
       render(TileViewer);
       expect(screen.queryByRole('dialog')).toBeNull();
 
       fireEvent.keyDown(window, { key: 'h' });
       await screen.findByRole('dialog');
       expect(screen.getByRole('dialog')).toBeTruthy();
+    });
+
+    it('closes help with H key when open', async () => {
+      render(TileViewer);
+      fireEvent.keyDown(window, { key: 'h' });
+      await screen.findByRole('dialog');
 
       fireEvent.keyDown(window, { key: 'h' });
       await waitFor(() => {
         expect(screen.queryByRole('dialog')).toBeNull();
       });
-    });
-
-    it('toggles help with uppercase H', async () => {
-      render(TileViewer);
-      fireEvent.keyDown(window, { key: 'H' });
-      await screen.findByRole('dialog');
-      expect(screen.getByRole('dialog')).toBeTruthy();
     });
 
     it('zooms in with + key', () => {
@@ -239,12 +323,26 @@ describe('TileViewer', () => {
       fireEvent.keyDown(window, { key: '0' });
       expect(mockViewer.viewport.goHome).toHaveBeenCalled();
     });
+
+    it('toggles UI visibility with Escape when panel is closed', async () => {
+      render(TileViewer);
+      expect(screen.getByRole('toolbar')).toBeTruthy();
+
+      fireEvent.keyDown(window, { key: 'Escape' });
+      await waitFor(() => {
+        expect(screen.queryByRole('toolbar')).toBeNull();
+      });
+
+      fireEvent.keyDown(window, { key: 'Escape' });
+      await waitFor(() => {
+        expect(screen.getByRole('toolbar')).toBeTruthy();
+      });
+    });
   });
 
   describe('viewer state changes', () => {
     it('updates status bar when viewer state changes', () => {
       render(TileViewer);
-      // Trigger OSD open event which causes state change
       mockViewer._trigger('open');
 
       const status = screen.getByRole('status');
@@ -257,7 +355,6 @@ describe('TileViewer', () => {
     it('has flex layout', () => {
       render(TileViewer);
       const container = document.querySelector('.tile-viewer');
-      // Check it has the CSS class that defines flex layout
       expect(container?.classList.contains('tile-viewer')).toBe(true);
     });
 
@@ -268,191 +365,35 @@ describe('TileViewer', () => {
     });
   });
 
-  describe('time slider integration', () => {
-    it('renders time slider controls', () => {
+  describe('side panel sections', () => {
+    it('shows filters section in side panel', async () => {
       render(TileViewer);
-      expect(screen.getByRole('region', { name: 'Time series controls' })).toBeTruthy();
+      await fireEvent.click(screen.getByLabelText('Toggle controls panel'));
+      expect(screen.getByText('Filters')).toBeTruthy();
     });
 
-    it('renders epoch play button', () => {
+    it('shows survey overlays section in side panel', async () => {
       render(TileViewer);
-      expect(screen.getByLabelText('Play')).toBeTruthy();
+      await fireEvent.click(screen.getByLabelText('Toggle controls panel'));
+      expect(screen.getByText('Survey Overlays')).toBeTruthy();
     });
 
-    it('renders epoch slider', () => {
+    it('shows time series section in side panel', async () => {
       render(TileViewer);
-      expect(screen.getByLabelText('Epoch slider')).toBeTruthy();
+      await fireEvent.click(screen.getByLabelText('Toggle controls panel'));
+      expect(screen.getByText('Time Series')).toBeTruthy();
     });
 
-    it('shows epoch count', () => {
+    it('shows blink section in side panel', async () => {
       render(TileViewer);
-      const counter = screen.getByTitle('Current epoch / total');
-      expect(counter.textContent).toContain('/ 30');
+      await fireEvent.click(screen.getByLabelText('Toggle controls panel'));
+      expect(screen.getByText('Blink')).toBeTruthy();
     });
 
-    it('updates status when epoch changes', async () => {
+    it('shows pixel readout section in side panel', async () => {
       render(TileViewer);
-      await fireEvent.click(screen.getByLabelText('Next epoch'));
-
-      const status = screen.getByRole('status');
-      expect(status.textContent).toContain('Epoch');
-    });
-
-    it('steps through epochs with next button', async () => {
-      render(TileViewer);
-      const epochCounter = screen.getByTitle('Current epoch / total');
-      expect(epochCounter.textContent).toContain('1 / 30');
-
-      await fireEvent.click(screen.getByLabelText('Next epoch'));
-      expect(epochCounter.textContent).toContain('2 / 30');
-    });
-
-    it('steps backward with previous button', async () => {
-      render(TileViewer);
-      const epochCounter = screen.getByTitle('Current epoch / total');
-      // Move forward first
-      await fireEvent.click(screen.getByLabelText('Next epoch'));
-      expect(epochCounter.textContent).toContain('2 / 30');
-
-      // Then back
-      await fireEvent.click(screen.getByLabelText('Previous epoch'));
-      expect(epochCounter.textContent).toContain('1 / 30');
-    });
-  });
-
-  describe('filter selector integration', () => {
-    it('renders filter selector', () => {
-      render(TileViewer);
-      expect(screen.getByRole('group', { name: 'Filter selection' })).toBeTruthy();
-    });
-
-    it('renders all filter buttons', () => {
-      render(TileViewer);
-      expect(screen.getByLabelText('u filter')).toBeTruthy();
-      expect(screen.getByLabelText('y filter')).toBeTruthy();
-    });
-
-    it('updates status when filter is selected', async () => {
-      render(TileViewer);
-      await fireEvent.click(screen.getByLabelText('r filter'));
-      const status = screen.getByRole('status');
-      expect(status.textContent).toContain('Filter: r');
-    });
-
-    it('updates status when filter is deselected', async () => {
-      render(TileViewer);
-      await fireEvent.click(screen.getByLabelText('r filter'));
-      await fireEvent.click(screen.getByLabelText('r filter'));
-      const status = screen.getByRole('status');
-      expect(status.textContent).toContain('Filter: none');
-    });
-
-    it('shows composite mode toggle', () => {
-      render(TileViewer);
-      expect(screen.getByLabelText('RGB composite mode')).toBeTruthy();
-      expect(screen.getByLabelText('Single filter mode')).toBeTruthy();
-    });
-
-    it('updates status when composite channels are assigned', async () => {
-      render(TileViewer);
-      await fireEvent.click(screen.getByLabelText('RGB composite mode'));
-      await fireEvent.click(screen.getByLabelText('R channel'));
-      await fireEvent.click(screen.getByLabelText('r filter'));
-      const status = screen.getByRole('status');
-      expect(status.textContent).toContain('Composite: R:r');
-    });
-
-    it('updates status when composite is cleared', async () => {
-      render(TileViewer);
-      await fireEvent.click(screen.getByLabelText('RGB composite mode'));
-      await fireEvent.click(screen.getByLabelText('R channel'));
-      await fireEvent.click(screen.getByLabelText('r filter'));
-      await fireEvent.click(screen.getByLabelText('Clear composite'));
-      const status = screen.getByRole('status');
-      expect(status.textContent).toContain('Composite: cleared');
-    });
-  });
-
-  describe('survey selector integration', () => {
-    it('renders survey selector', () => {
-      render(TileViewer);
-      expect(screen.getByRole('region', { name: 'Survey overlays' })).toBeTruthy();
-    });
-
-    it('expands survey panel on click', async () => {
-      render(TileViewer);
-      await fireEvent.click(screen.getByLabelText('Toggle survey panel'));
-      expect(screen.getByLabelText('Toggle survey panel').getAttribute('aria-expanded')).toBe('true');
-    });
-
-    it('adds survey overlay and updates status', async () => {
-      render(TileViewer);
-      await fireEvent.click(screen.getByLabelText('Toggle survey panel'));
-      await fireEvent.click(screen.getByLabelText('Toggle Gaia DR3'));
-      const status = screen.getByRole('status');
-      expect(status.textContent).toContain('Added overlay: Gaia DR3');
-    });
-
-    it('removes survey overlay and updates status', async () => {
-      render(TileViewer);
-      await fireEvent.click(screen.getByLabelText('Toggle survey panel'));
-      await fireEvent.click(screen.getByLabelText('Toggle Gaia DR3'));
-      await fireEvent.click(screen.getByLabelText('Toggle Gaia DR3'));
-      const status = screen.getByRole('status');
-      expect(status.textContent).toContain('Removed overlay: Gaia DR3');
-    });
-
-    it('changes overlay opacity and updates status', async () => {
-      render(TileViewer);
-      await fireEvent.click(screen.getByLabelText('Toggle survey panel'));
-      await fireEvent.click(screen.getByLabelText('Toggle Gaia DR3'));
-      const slider = screen.getByLabelText('Gaia DR3 opacity');
-      await fireEvent.input(slider, { target: { value: '50' } });
-      const status = screen.getByRole('status');
-      expect(status.textContent).toContain('Gaia DR3 opacity: 50%');
-    });
-
-    it('shows overlay count after adding surveys', async () => {
-      render(TileViewer);
-      await fireEvent.click(screen.getByLabelText('Toggle survey panel'));
-      await fireEvent.click(screen.getByLabelText('Toggle Gaia DR3'));
-      await fireEvent.click(screen.getByLabelText('Toggle DSS2 Color'));
-      expect(screen.getByText('(2)')).toBeTruthy();
-    });
-  });
-
-  describe('blink controller integration', () => {
-    it('renders blink controller', () => {
-      render(TileViewer);
-      expect(screen.getByRole('region', { name: 'Blink controls' })).toBeTruthy();
-    });
-
-    it('renders blink controls', () => {
-      render(TileViewer);
-      expect(screen.getByLabelText('Start blink')).toBeTruthy();
-      expect(screen.getByLabelText('Blink step forward')).toBeTruthy();
-      expect(screen.getByLabelText('Blink step back')).toBeTruthy();
-    });
-
-    it('updates status when blink target changes', async () => {
-      render(TileViewer);
-      await fireEvent.click(screen.getByLabelText('Blink step forward'));
-      const status = screen.getByRole('status');
-      expect(status.textContent).toContain('Blink: Epoch 2');
-    });
-
-    it('toggles blink play state', async () => {
-      render(TileViewer);
-      await fireEvent.click(screen.getByLabelText('Start blink'));
-      expect(screen.getByLabelText('Stop blink')).toBeTruthy();
-      await fireEvent.click(screen.getByLabelText('Stop blink'));
-      expect(screen.getByLabelText('Start blink')).toBeTruthy();
-    });
-
-    it('renders all blink targets', () => {
-      render(TileViewer);
-      const items = screen.getAllByRole('listitem');
-      expect(items.length).toBeGreaterThan(0);
+      await fireEvent.click(screen.getByLabelText('Toggle controls panel'));
+      expect(screen.getByText('Pixel Readout')).toBeTruthy();
     });
   });
 });

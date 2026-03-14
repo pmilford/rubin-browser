@@ -1,13 +1,10 @@
 <script lang="ts">
   import ImageViewer from '../components/ImageViewer.svelte';
-  import Toolbar from '../components/Toolbar.svelte';
+  import CompactToolbar from '../components/CompactToolbar.svelte';
+  import SidePanel from '../components/SidePanel.svelte';
   import ColorBar from '../components/ColorBar.svelte';
   import StatusBar from '../components/StatusBar.svelte';
   import HelpModal from '../components/HelpModal.svelte';
-  import TimeSlider from '../components/TimeSlider.svelte';
-  import FilterSelector from '../components/FilterSelector.svelte';
-  import SurveySelector from '../components/SurveySelector.svelte';
-  import BlinkController from '../components/BlinkController.svelte';
   import type { ScalingFunction, ColorMapName, InterpolationMethod, ViewerState, Epoch } from '../types/image.js';
   import { mjdToIso } from '../types/image.js';
   import { DEFAULT_MOCK_EPOCHS, type SurveyInfo } from '../constants.js';
@@ -18,6 +15,11 @@
   let colorMap: ColorMapName = $state('grayscale');
   let interpolation: InterpolationMethod = $state('bilinear');
   let helpOpen = $state(false);
+
+  // UI state
+  let panelOpen = $state(false);
+  let isFullscreen = $state(false);
+  let uiVisible = $state(true);
 
   let currentRa = $state(62.0);
   let currentDec = $state(-37.0);
@@ -117,10 +119,49 @@
     }
   }
 
-  function handleKeydown(e: KeyboardEvent) {
-    if (e.key === 'h' || e.key === 'H') {
-      helpOpen = !helpOpen;
+  function togglePanel() {
+    panelOpen = !panelOpen;
+  }
+
+  function toggleFullscreen() {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen?.();
+      isFullscreen = true;
+    } else {
+      document.exitFullscreen?.();
+      isFullscreen = false;
     }
+  }
+
+  function handleFullscreenChange() {
+    isFullscreen = !!document.fullscreenElement;
+  }
+
+  function handleKeydown(e: KeyboardEvent) {
+    // Escape toggles UI visibility / closes panel
+    if (e.key === 'Escape') {
+      if (panelOpen) {
+        panelOpen = false;
+      } else {
+        uiVisible = !uiVisible;
+      }
+      return;
+    }
+    // H toggles help
+    if (e.key === 'h' || e.key === 'H') {
+      if (!e.ctrlKey && !e.metaKey) {
+        helpOpen = !helpOpen;
+        return;
+      }
+    }
+    // F toggles fullscreen
+    if (e.key === 'f' || e.key === 'F') {
+      if (!e.ctrlKey && !e.metaKey) {
+        toggleFullscreen();
+        return;
+      }
+    }
+    // +/- for zoom
     if (e.key === '+' || e.key === '=') {
       imageViewerRef?.zoomIn();
     }
@@ -133,55 +174,56 @@
   }
 </script>
 
-<svelte:window onkeydown={handleKeydown} />
+<svelte:window
+  onkeydown={handleKeydown}
+  onfullscreenchange={handleFullscreenChange}
+/>
 
-<div class="tile-viewer">
-  <Toolbar
+<div class="tile-viewer" class:ui-hidden={!uiVisible}>
+  {#if uiVisible}
+    <CompactToolbar
+      panelOpen={panelOpen}
+      {isFullscreen}
+      onZoomIn={() => imageViewerRef?.zoomIn()}
+      onZoomOut={() => imageViewerRef?.zoomOut()}
+      onResetView={() => imageViewerRef?.resetView()}
+      onSearch={handleSearch}
+      onTogglePanel={togglePanel}
+      onToggleFullscreen={toggleFullscreen}
+      onToggleHelp={() => { helpOpen = !helpOpen; }}
+    />
+  {/if}
+
+  <SidePanel
+    open={panelOpen}
     {scaling}
     {colorMap}
     {interpolation}
+    epochs={mockEpochs}
+    {currentEpochIndex}
+    {isPlaying}
+    {activeFilter}
+    {compositeMode}
+    {compositeChannels}
+    {surveyOverlays}
+    {blinkTargets}
+    {blinkIndex}
+    {blinkPlaying}
+    {blinkRate}
     onScalingChange={(s) => { scaling = s; statusMessage = `Scaling: ${s}`; }}
     onColorMapChange={(c) => { colorMap = c; statusMessage = `Color map: ${c}`; }}
     onInterpolationChange={(i) => { interpolation = i; statusMessage = `Interpolation: ${i}`; }}
-    onZoomIn={() => imageViewerRef?.zoomIn()}
-    onZoomOut={() => imageViewerRef?.zoomOut()}
-    onResetView={() => imageViewerRef?.resetView()}
-    onSearch={handleSearch}
-    onHelpClick={() => { helpOpen = true; }}
-  />
-
-  <TimeSlider
-    epochs={mockEpochs}
-    currentIndex={currentEpochIndex}
-    playing={isPlaying}
-    interval={1000}
     onEpochChange={handleEpochChange}
     onPlayStateChange={(p) => { isPlaying = p; }}
-  />
-
-  <FilterSelector
-    bind:activeFilter={activeFilter}
-    {compositeMode}
-    {compositeChannels}
     onFilterChange={handleFilterChange}
     onCompositeChange={handleCompositeChange}
-  />
-
-  <SurveySelector
-    overlays={surveyOverlays}
     onOverlayAdd={handleOverlayAdd}
     onOverlayRemove={handleOverlayRemove}
     onOpacityChange={handleOpacityChange}
-  />
-
-  <BlinkController
-    targets={blinkTargets}
-    currentIndex={blinkIndex}
-    playing={blinkPlaying}
-    rate={blinkRate}
-    onTargetChange={handleBlinkTargetChange}
-    onPlayStateChange={(p) => { blinkPlaying = p; }}
-    onRateChange={(r) => { blinkRate = r; }}
+    onBlinkTargetChange={handleBlinkTargetChange}
+    onBlinkPlayStateChange={(p) => { blinkPlaying = p; }}
+    onBlinkRateChange={(r) => { blinkRate = r; }}
+    onClose={() => { panelOpen = false; }}
   />
 
   <div class="viewer-area">
@@ -195,8 +237,11 @@
     />
   </div>
 
-  <ColorBar {colorMap} minValue={0} maxValue={1} />
-  <StatusBar ra={currentRa} dec={currentDec} {zoomLevel} message={statusMessage} />
+  {#if uiVisible}
+    <ColorBar {colorMap} minValue={0} maxValue={1} />
+    <StatusBar ra={currentRa} dec={currentDec} {zoomLevel} message={statusMessage} />
+  {/if}
+
   <HelpModal open={helpOpen} onClose={() => { helpOpen = false; }} />
 </div>
 
@@ -212,5 +257,9 @@
     flex: 1;
     position: relative;
     overflow: hidden;
+  }
+
+  .ui-hidden .viewer-area {
+    height: 100vh;
   }
 </style>
