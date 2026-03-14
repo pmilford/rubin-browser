@@ -3,19 +3,82 @@ import { test, expect } from '@playwright/test';
 test.describe('Tile Viewer', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
+    // Wait for initial render
+    await page.waitForTimeout(1000);
   });
 
   test('page loads with correct title', async ({ page }) => {
     await expect(page).toHaveTitle(/Rubin Browser/);
   });
 
-  test('toolbar is visible with controls', async ({ page }) => {
+  // === Bug #3: Toolbar buttons are visible and have proper icons ===
+  test('toolbar is visible with all controls', async ({ page }) => {
     const toolbar = page.locator('[role="toolbar"]');
     await expect(toolbar).toBeVisible();
 
+    // Dropdown controls
     await expect(page.locator('#scaling-select')).toBeVisible();
     await expect(page.locator('#colormap-select')).toBeVisible();
     await expect(page.locator('#interp-select')).toBeVisible();
+
+    // Bug fix: zoom buttons should be visible with SVG icons
+    await expect(page.locator('button[aria-label="Zoom in"]')).toBeVisible();
+    await expect(page.locator('button[aria-label="Zoom out"]')).toBeVisible();
+    await expect(page.locator('button[aria-label="Reset view"]')).toBeVisible();
+
+    // Verify SVG icons are rendered (not broken images)
+    const zoomInSvg = page.locator('button[aria-label="Zoom in"] svg');
+    await expect(zoomInSvg).toBeVisible();
+
+    const zoomOutSvg = page.locator('button[aria-label="Zoom out"] svg');
+    await expect(zoomOutSvg).toBeVisible();
+
+    const resetSvg = page.locator('button[aria-label="Reset view"] svg');
+    await expect(resetSvg).toBeVisible();
+  });
+
+  test('toolbar buttons are clickable', async ({ page }) => {
+    // Zoom buttons should be clickable without error
+    await page.locator('button[aria-label="Zoom in"]').click();
+    await page.locator('button[aria-label="Zoom out"]').click();
+    await page.locator('button[aria-label="Reset view"]').click();
+  });
+
+  // === Bug #2: Search/coordinate input works ===
+  test('search input is visible and functional', async ({ page }) => {
+    const searchInput = page.locator('input[aria-label="Search coordinates"]');
+    await expect(searchInput).toBeVisible();
+
+    const searchButton = page.locator('button[aria-label="Go"]');
+    await expect(searchButton).toBeVisible();
+
+    // Type coordinates and search
+    await searchInput.fill('62.0, -37.0');
+    await searchButton.click();
+
+    // Status bar should show the search result
+    const statusBar = page.locator('[role="status"]');
+    await expect(statusBar).toContainText('Go to');
+  });
+
+  test('search input handles Enter key', async ({ page }) => {
+    const searchInput = page.locator('input[aria-label="Search coordinates"]');
+    await searchInput.fill('180.0, 45.0');
+    await searchInput.press('Enter');
+
+    const statusBar = page.locator('[role="status"]');
+    await expect(statusBar).toContainText('Go to');
+  });
+
+  test('search input validates bad coordinates', async ({ page }) => {
+    const searchInput = page.locator('input[aria-label="Search coordinates"]');
+    await searchInput.fill('999.0, -37.0');
+    await page.locator('button[aria-label="Go"]').click();
+
+    // Should show error for invalid RA
+    const searchError = page.locator('.search-error');
+    await expect(searchError).toBeVisible();
+    await expect(searchError).toContainText('RA must be 0-360');
   });
 
   test('scaling dropdown has all options', async ({ page }) => {
@@ -103,9 +166,18 @@ test.describe('Tile Viewer', () => {
     await expect(statusBar).toContainText('Color map: viridis');
   });
 
-  test('image viewer container exists', async ({ page }) => {
+  // === Bug #1: Image viewer renders non-empty content ===
+  test('image viewer container exists and has content', async ({ page }) => {
     const viewer = page.locator('.image-viewer');
     await expect(viewer).toBeVisible();
+
+    // OpenSeadragon should create canvas elements inside the viewer
+    // Wait for OSD to initialize and try to load tiles
+    await page.waitForTimeout(2000);
+
+    // Check that the viewer div is not empty (OSD creates internal elements)
+    const childCount = await page.locator('.image-viewer > *').count();
+    expect(childCount).toBeGreaterThan(0);
   });
 
   test('viewer fills available space', async ({ page }) => {
@@ -113,5 +185,12 @@ test.describe('Tile Viewer', () => {
     const box = await viewerArea.boundingBox();
     expect(box).toBeTruthy();
     expect(box!.height).toBeGreaterThan(200);
+  });
+
+  test('OpenSeadragon canvas is rendered', async ({ page }) => {
+    // OSD should render a canvas element inside the viewer
+    await page.waitForTimeout(2000);
+    const canvas = page.locator('.image-viewer canvas, .image-viewer .openseadragon-container');
+    await expect(canvas.first()).toBeAttached();
   });
 });
