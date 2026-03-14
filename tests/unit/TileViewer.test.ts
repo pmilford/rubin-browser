@@ -363,4 +363,52 @@ describe('TileViewer', () => {
       expect(status.textContent).toContain('Composite: cleared');
     });
   });
+
+  describe('survey selector integration', () => {
+    it('renders survey selector', () => {
+      render(TileViewer);
+      expect(screen.getByRole('region', { name: 'Survey overlays' })).toBeTruthy();
+    });
+
+    it('expands survey panel on click', async () => {
+      render(TileViewer);
+      await fireEvent.click(screen.getByLabelText('Toggle survey panel'));
+      expect(screen.getByLabelText('Toggle survey panel').getAttribute('aria-expanded')).toBe('true');
+    });
+
+    it('adds survey overlay and updates status', async () => {
+      render(TileViewer);
+      await fireEvent.click(screen.getByLabelText('Toggle survey panel'));
+      await fireEvent.click(screen.getByLabelText('Toggle Gaia DR3'));
+      const status = screen.getByRole('status');
+      expect(status.textContent).toContain('Added overlay: Gaia DR3');
+    });
+
+    it('removes survey overlay and updates status', async () => {
+      render(TileViewer);
+      await fireEvent.click(screen.getByLabelText('Toggle survey panel'));
+      await fireEvent.click(screen.getByLabelText('Toggle Gaia DR3'));
+      await fireEvent.click(screen.getByLabelText('Toggle Gaia DR3'));
+      const status = screen.getByRole('status');
+      expect(status.textContent).toContain('Removed overlay: Gaia DR3');
+    });
+
+    it('changes overlay opacity and updates status', async () => {
+      render(TileViewer);
+      await fireEvent.click(screen.getByLabelText('Toggle survey panel'));
+      await fireEvent.click(screen.getByLabelText('Toggle Gaia DR3'));
+      const slider = screen.getByLabelText('Gaia DR3 opacity');
+      await fireEvent.input(slider, { target: { value: '50' } });
+      const status = screen.getByRole('status');
+      expect(status.textContent).toContain('Gaia DR3 opacity: 50%');
+    });
+
+    it('shows overlay count after adding surveys', async () => {
+      render(TileViewer);
+      await fireEvent.click(screen.getByLabelText('Toggle survey panel'));
+      await fireEvent.click(screen.getByLabelText('Toggle Gaia DR3'));
+      await fireEvent.click(screen.getByLabelText('Toggle DSS2 Color'));
+      expect(screen.getByText('(2)')).toBeTruthy();
+    });
+  });
 });

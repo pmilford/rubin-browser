@@ -6,9 +6,10 @@
   import HelpModal from '../components/HelpModal.svelte';
   import TimeSlider from '../components/TimeSlider.svelte';
   import FilterSelector from '../components/FilterSelector.svelte';
+  import SurveySelector from '../components/SurveySelector.svelte';
   import type { ScalingFunction, ColorMapName, InterpolationMethod, ViewerState, Epoch } from '../types/image.js';
   import { mjdToIso } from '../types/image.js';
-  import { DEFAULT_MOCK_EPOCHS } from '../constants.js';
+  import { DEFAULT_MOCK_EPOCHS, type SurveyInfo } from '../constants.js';
   import type { FilterBand } from '../constants.js';
 
   let scaling: ScalingFunction = $state('linear');
@@ -25,6 +26,13 @@
   let activeFilter: FilterBand | null = $state(null);
   let compositeMode = $state(false);
   let compositeChannels: { r: FilterBand | null; g: FilterBand | null; b: FilterBand | null } = $state({ r: null, g: null, b: null });
+
+  // Survey overlay state
+  interface OverlayEntry {
+    survey: SurveyInfo;
+    opacity: number;
+  }
+  let surveyOverlays: OverlayEntry[] = $state([]);
 
   // Time series state
   const mockEpochs: Epoch[] = DEFAULT_MOCK_EPOCHS.map(e => ({
@@ -67,6 +75,25 @@
     if (channels.g) parts.push(`G:${channels.g}`);
     if (channels.b) parts.push(`B:${channels.b}`);
     statusMessage = parts.length > 0 ? `Composite: ${parts.join(' ')}` : 'Composite: cleared';
+  }
+
+  function handleOverlayAdd(survey: SurveyInfo) {
+    surveyOverlays = [...surveyOverlays, { survey, opacity: 80 }];
+    statusMessage = `Added overlay: ${survey.name}`;
+  }
+
+  function handleOverlayRemove(surveyId: string) {
+    const entry = surveyOverlays.find(o => o.survey.id === surveyId);
+    surveyOverlays = surveyOverlays.filter(o => o.survey.id !== surveyId);
+    statusMessage = `Removed overlay: ${entry?.survey.name ?? surveyId}`;
+  }
+
+  function handleOpacityChange(surveyId: string, opacity: number) {
+    surveyOverlays = surveyOverlays.map(o =>
+      o.survey.id === surveyId ? { ...o, opacity } : o
+    );
+    const entry = surveyOverlays.find(o => o.survey.id === surveyId);
+    statusMessage = `${entry?.survey.name ?? surveyId} opacity: ${opacity}%`;
   }
 
   function handleKeydown(e: KeyboardEvent) {
@@ -117,6 +144,13 @@
     {compositeChannels}
     onFilterChange={handleFilterChange}
     onCompositeChange={handleCompositeChange}
+  />
+
+  <SurveySelector
+    overlays={surveyOverlays}
+    onOverlayAdd={handleOverlayAdd}
+    onOverlayRemove={handleOverlayRemove}
+    onOpacityChange={handleOpacityChange}
   />
 
   <div class="viewer-area">
