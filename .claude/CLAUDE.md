@@ -102,48 +102,57 @@ When adding new features or making significant changes:
 - Don't merge code below 95% coverage
 - Don't add features without updating documentation
 
-## Visual Testing (MANDATORY)
+## Live UI Testing (MANDATORY — CRITICAL LESSON)
 
-Unit tests with mocks CANNOT catch rendering failures. We learned this the hard way.
+**Unit tests with mocks CANNOT catch visual/rendering failures.** We learned this multiple times.
 
-**Required test layers:**
-1. **Unit tests** (Vitest) — logic, pure functions, type guards, component structure
-2. **UI smoke tests** (Playwright against live dev server) — MUST verify:
-   - No error overlays visible during normal operation
-   - Canvas/image elements have non-zero rendered content
-   - Controls actually change the display (not just that buttons exist)
-   - Navigation (search, object browser) works without errors
-   - No console errors during typical user flows
+### What Got Through Unit Tests But Broke in Production
+- Image loading failed (wrong tile URLs) — mock returned fake data, never hit real network
+- Controls did nothing (scaling/colormap) — mock accepted props but never verified canvas changed
+- Pan/zoom broken — mock verified handlers existed, never verified tiles loaded
+- Error overlays shown — mock never triggered real error conditions
 
-**Key lesson:** Tests that only check `element exists` are nearly useless for visual apps. Tests must verify *outcomes* (image rendered, no error overlay, content changed).
+### Why Mocks Fail Here
+- Mocks verify *implementation* (function called, prop set)
+- Visual apps need verification of *outcomes* (canvas has pixels, image changed, no errors)
+- Network failures, WASM loading, CORS, canvas rendering — all invisible to mocks
 
-## Testing Philosophy (CRITICAL LESSON)
+### Required Test Architecture
+1. **Unit tests** (Vitest, `npm test`): Pure functions, type guards, component structure. Fast, run on every save.
+2. **Full live UI tests** (Playwright, `npm run test:ui`): Real browser, real server, real network. Catches everything mocks miss.
 
-**Unit tests with mocks CANNOT catch visual/rendering failures.** We learned this the hard way multiple times.
+### What Playwright Tests MUST Verify (Outcomes, Not Existence)
+- Canvas has non-zero dimensions AND rendered pixel content
+- No error overlays (`[role="alert"]`) during normal operation
+- Changing a control (scaling, colormap) actually changes canvas pixels
+- Navigating to new coordinates loads different tiles
+- Zoom in/out changes the FOV value display
+- Pan/drag keeps image visible (no black screen during drag)
+- Survey overlays render on top of base image
+- Fullscreen mode works without layout breakage
+- No critical console errors during typical user flows
 
-The ONLY way to verify a visual application works is to:
-1. Start the actual dev server
-2. Open a real browser (Playwright)
-3. Verify actual rendered content (canvas pixels, visible elements, computed styles)
-4. Interact with the UI and verify OUTCOMES change
+### Playwright Test Pattern
+```typescript
+// ❌ WRONG — only checks element exists
+await expect(page.locator('canvas')).toBeAttached();
 
-**Every bug that made it to production passed unit tests.** The unit tests verified:
-- DOM elements exist ✓
-- Event handlers are registered ✓
-- Functions return correct values ✓
+// ✅ RIGHT — checks actual rendered dimensions
+const box = await canvas.boundingBox();
+expect(box!.width).toBeGreaterThan(200);
 
-But they did NOT verify:
-- Images actually render ✗
-- Tiles load from the network ✗
-- Canvas has non-zero pixel content ✗
-- Controls change the display ✗
-- No error overlays appear ✗
+// ❌ WRONG — only clicks a button
+await page.locator('#scaling-select').selectOption('log');
 
-### Mandatory Testing Protocol
+// ✅ RIGHT — verifies outcome after click
+await page.locator('#scaling-select').selectOption('log');
+await page.waitForTimeout(500);
+const errorOverlay = page.locator('[role="alert"]');
+expect(await errorOverlay.isVisible()).toBe(false);
+```
 
-Before ANY commit that changes viewer/UI code:
-1. `npm run dev` — start the server
-2. `npm run test:ui` — run Playwright visual tests (auto-starts server)
-3. Verify: no error overlays, canvas renders, controls work
-
-If Playwright tests fail, THE CODE IS BROKEN regardless of what unit tests say.
+### Mandatory Protocol
+1. `npm run test:ui` before EVERY commit that touches viewer/UI code
+2. If Playwright tests fail, THE CODE IS BROKEN — fix it, regardless of unit test results
+3. Add new Playwright tests for every new user-facing feature
+4. Run `npm run test:ui` against the live dev server (Playwright auto-starts it)

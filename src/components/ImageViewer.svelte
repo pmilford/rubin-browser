@@ -459,6 +459,11 @@
         img.src = url;
       }
     }
+
+    // Also load overlay tiles for current view
+    if (overlays.size > 0) {
+      loadOverlayTiles();
+    }
   }
 
   // --- RAF Debounce ---
@@ -879,6 +884,24 @@
   const fovDegrees = $derived(fov.toFixed(2));
   const centerRaDisplay = $derived(ra.toFixed(4));
   const centerDecDisplay = $derived(dec.toFixed(4));
+
+  // --- FOV Minimap (Issue #2) ---
+
+  const MINIMAP_W = 120;
+  const MINIMAP_H = 60;
+
+  const minimapRect = $derived(() => {
+    // Equirectangular projection: RA 0-360 → x, Dec -90..90 → y
+    const fovRa = fov / Math.cos((dec * Math.PI) / 180);
+    const fovDec = fov;
+
+    const x = ((ra - fovRa / 2) / 360) * MINIMAP_W;
+    const y = ((90 - dec - fovDec / 2) / 180) * MINIMAP_H;
+    const w = (fovRa / 360) * MINIMAP_W;
+    const h = (fovDec / 180) * MINIMAP_H;
+
+    return { x, y, w, h };
+  });
 </script>
 
 <div class="image-viewer" bind:this={containerEl}>
