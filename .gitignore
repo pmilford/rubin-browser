@@ -1,0 +1,10 @@
+node_modules/
+dist/
+coverage/
+.env
+.env.local
+*.log
+tests/data/*.fits
+tests/data/*.vot
+!tests/fixtures/.gitkeep
+.playwright/
