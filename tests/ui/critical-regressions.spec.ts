@@ -238,4 +238,121 @@ test.describe('Critical Bug Regressions', () => {
       expect(isVisible).toBe(false);
     });
   });
+
+  test.describe('Rendering Fixes: FOV display matches actual projection', () => {
+    test('FOV indicator shows correct value for zoom 3 (22.50°)', async ({ page }) => {
+      const fovIndicator = page.locator('[aria-label="Field of view indicator"]');
+      const text = await fovIndicator.textContent();
+      // At zoom 3, FOV should be 22.50°
+      expect(text).toContain('22.50°');
+    });
+
+    test('FOV indicator does not show pathological values (90° or 180°) at zoom 3', async ({ page }) => {
+      const fovIndicator = page.locator('[aria-label="Field of view indicator"]');
+      const text = await fovIndicator.textContent();
+      // Should NOT contain 90° or 180° when at zoom 3
+      expect(text).not.toContain('90.00°');
+      expect(text).not.toContain('180.00°');
+    });
+
+    test('canvas has dimensions matching viewport', async ({ page }) => {
+      const canvas = page.locator('.hips-canvas').first();
+      const box = await canvas.boundingBox();
+      expect(box).toBeTruthy();
+      // Canvas should be at least 400px in both dimensions
+      expect(box!.width).toBeGreaterThan(400);
+      expect(box!.height).toBeGreaterThan(300);
+    });
+
+    test('zoom in decreases FOV value', async ({ page }) => {
+      const fovIndicator = page.locator('[aria-label="Field of view indicator"]');
+      const fovBefore = await fovIndicator.textContent();
+      const matchBefore = fovBefore?.match(/FOV\s+([\d.]+)°/);
+      const fovValBefore = matchBefore ? parseFloat(matchBefore[1]) : 0;
+
+      // Click zoom in button
+      await page.locator('button[aria-label="Zoom in"]').click();
+      await page.waitForTimeout(500);
+
+      const fovAfter = await fovIndicator.textContent();
+      const matchAfter = fovAfter?.match(/FOV\s+([\d.]+)°/);
+      const fovValAfter = matchAfter ? parseFloat(matchAfter[1]) : 999;
+
+      // FOV should decrease when zooming in
+      expect(fovValAfter).toBeLessThan(fovValBefore);
+    });
+
+    test('zoom out increases FOV value', async ({ page }) => {
+      const fovIndicator = page.locator('[aria-label="Field of view indicator"]');
+      const fovBefore = await fovIndicator.textContent();
+      const matchBefore = fovBefore?.match(/FOV\s+([\d.]+)°/);
+      const fovValBefore = matchBefore ? parseFloat(matchBefore[1]) : 999;
+
+      // Click zoom out button
+      await page.locator('button[aria-label="Zoom out"]').click();
+      await page.waitForTimeout(500);
+
+      const fovAfter = await fovIndicator.textContent();
+      const matchAfter = fovAfter?.match(/FOV\s+([\d.]+)°/);
+      const fovValAfter = matchAfter ? parseFloat(matchAfter[1]) : 0;
+
+      // FOV should increase when zooming out
+      expect(fovValAfter).toBeGreaterThan(fovValBefore);
+    });
+  });
+
+  test.describe('Rendering Fixes: Pan coordinate updates', () => {
+    test('search navigation updates RA/Dec correctly', async ({ page }) => {
+      const fovIndicator = page.locator('[aria-label="Field of view indicator"]');
+
+      // Navigate to RA=180, Dec=0
+      const searchInput = page.locator('input[aria-label="Search coordinates"]');
+      await searchInput.fill('180.0, 0.0');
+      await page.locator('button[aria-label="Go"]').click();
+      await page.waitForTimeout(2000);
+
+      const text = await fovIndicator.textContent();
+      const raMatch = text?.match(/RA\s+([\d.]+)°/);
+      const decMatch = text?.match(/Dec\s+([-\d.]+)°/);
+
+      expect(raMatch).toBeTruthy();
+      expect(decMatch).toBeTruthy();
+
+      const ra = parseFloat(raMatch![1]);
+      const dec = parseFloat(decMatch![1]);
+
+      // Should be near the target coordinates
+      expect(Math.abs(ra - 180)).toBeLessThan(5);
+      expect(Math.abs(dec - 0)).toBeLessThan(5);
+    });
+  });
+
+  test.describe('Rendering Fixes: Overlay error handling', () => {
+    test('adding PanSTARRS overlay does not cause errors', async ({ page }) => {
+      // Open side panel
+      await page.locator('button[aria-label="Toggle controls panel"]').click();
+      await page.waitForTimeout(300);
+
+      // Look for survey panel
+      const surveyToggle = page.locator('[aria-label="Toggle survey panel"]');
+      const exists = await surveyToggle.count();
+      if (exists > 0) {
+        await surveyToggle.click();
+        await page.waitForTimeout(300);
+
+        // Look for PanSTARRS in the list
+        const panstarrsBtn = page.locator('text=Pan-STARRS').first();
+        const hasPS = await panstarrsBtn.count();
+        if (hasPS > 0) {
+          await panstarrsBtn.click();
+          await page.waitForTimeout(1000);
+
+          // No error overlay should appear
+          const errorOverlay = page.locator('[role="alert"]');
+          const isVisible = await errorOverlay.isVisible().catch(() => false);
+          expect(isVisible).toBe(false);
+        }
+      }
+    });
+  });
 });

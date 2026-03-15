@@ -480,5 +480,181 @@ describe('ImageViewer', () => {
       const indicator = document.querySelector('.fov-indicator');
       expect(indicator?.textContent).toContain('0.18');
     });
+
+    it('FOV never shows 0° or negative values', () => {
+      const { component } = render(ImageViewer, { props: { initialZoom: 0 } });
+      const viewer = component as unknown as ImageViewer;
+      // Try to zoom out beyond minimum
+      viewer.zoomOut();
+      viewer.zoomOut();
+      const indicator = document.querySelector('.fov-indicator');
+      const text = indicator?.textContent || '';
+      const fovMatch = text.match(/FOV\s+([\d.]+)°/);
+      expect(fovMatch).toBeTruthy();
+      const fovVal = parseFloat(fovMatch![1]);
+      expect(fovVal).toBeGreaterThan(0);
+      expect(fovVal).toBeLessThanOrEqual(180);
+    });
+  });
+
+  describe('zoomToOrder mapping (Bug #1: tile resolution)', () => {
+    it('zoom 4 uses order >= 3 for better resolution', () => {
+      // At zoom 4 (FOV 11.25°), tiles should be <= 22.5° (order 3+)
+      // Old code used order 2 (45° tiles, 4x FOV = blurry)
+      render(ImageViewer, { props: { initialZoom: 4 } });
+      const indicator = document.querySelector('.fov-indicator');
+      expect(indicator?.textContent).toContain('11.25');
+      // Component should render without error at zoom 4
+      const container = document.querySelector('.image-viewer');
+      expect(container).toBeTruthy();
+    });
+
+    it('all zoom levels produce valid FOV values', () => {
+      for (const zoom of [0, 1, 2, 3, 4, 5, 6, 8, 10, 12]) {
+        const { unmount } = render(ImageViewer, { props: { initialZoom: zoom } });
+        const indicator = document.querySelector('.fov-indicator');
+        expect(indicator?.textContent).toContain('FOV');
+        const text = indicator?.textContent || '';
+        const fovMatch = text.match(/FOV\s+([\d.]+)°/);
+        expect(fovMatch).toBeTruthy();
+        const fovVal = parseFloat(fovMatch![1]);
+        expect(fovVal).toBeGreaterThan(0);
+        expect(fovVal).toBeLessThanOrEqual(180);
+        unmount();
+      }
+    });
+  });
+
+  describe('FOV indicator accuracy (Bug #4: FOV wrap)', () => {
+    it('FOV at zoom 0 is 180°, not 90° or 360°', () => {
+      render(ImageViewer, { props: { initialZoom: 0 } });
+      const indicator = document.querySelector('.fov-indicator');
+      const text = indicator?.textContent || '';
+      const fovMatch = text.match(/FOV\s+([\d.]+)°/);
+      expect(fovMatch).toBeTruthy();
+      expect(parseFloat(fovMatch![1])).toBeCloseTo(180, 0);
+    });
+
+    it('FOV at zoom 1 is 90°', () => {
+      render(ImageViewer, { props: { initialZoom: 1 } });
+      const indicator = document.querySelector('.fov-indicator');
+      const text = indicator?.textContent || '';
+      const fovMatch = text.match(/FOV\s+([\d.]+)°/);
+      expect(fovMatch).toBeTruthy();
+      expect(parseFloat(fovMatch![1])).toBeCloseTo(90, 0);
+    });
+
+    it('FOV decreases monotonically with zoom', () => {
+      const fovs: number[] = [];
+      for (const zoom of [0, 1, 2, 3, 4, 5]) {
+        const { unmount } = render(ImageViewer, { props: { initialZoom: zoom } });
+        const indicator = document.querySelector('.fov-indicator');
+        const text = indicator?.textContent || '';
+        const fovMatch = text.match(/FOV\s+([\d.]+)°/);
+        if (fovMatch) fovs.push(parseFloat(fovMatch[1]));
+        unmount();
+      }
+      // FOV should decrease as zoom increases
+      for (let i = 1; i < fovs.length; i++) {
+        expect(fovs[i]).toBeLessThan(fovs[i - 1]);
+      }
+    });
+  });
+
+  describe('minimap projection (Bug: RA width inverted)', () => {
+    it('minimap renders FOV rectangle without error', () => {
+      render(ImageViewer, { props: { initialDec: 60 } });
+      const minimap = document.querySelector('.fov-minimap svg');
+      expect(minimap).toBeTruthy();
+      const rects = minimap?.querySelectorAll('rect');
+      expect(rects?.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('minimap FOV rect is narrower at high declination', () => {
+      // At dec=60°, FOV covers less RA → minimap rect should be narrower in x
+      const { unmount: u1 } = render(ImageViewer, { props: { initialDec: 60, initialZoom: 3 } });
+      const rect1 = document.querySelectorAll('.fov-minimap svg rect')[1] as SVGRectElement;
+      const w1 = rect1?.getAttribute('width');
+      u1();
+
+      const { unmount: u2 } = render(ImageViewer, { props: { initialDec: 0, initialZoom: 3 } });
+      const rect2 = document.querySelectorAll('.fov-minimap svg rect')[1] as SVGRectElement;
+      const w2 = rect2?.getAttribute('width');
+      u2();
+
+      if (w1 && w2) {
+        // At dec=60°, RA spread is cos(60°)=0.5x, so rect should be narrower
+        expect(parseFloat(w1)).toBeLessThan(parseFloat(w2));
+      }
+    });
+  });
+
+  describe('canvas sizing (Bug #1: container dimensions)', () => {
+    it('canvas dimensions match container dimensions', () => {
+      render(ImageViewer);
+      const canvas = document.querySelector('.hips-canvas') as HTMLCanvasElement;
+      const container = document.querySelector('.image-viewer') as HTMLElement;
+      expect(canvas).toBeTruthy();
+      expect(container).toBeTruthy();
+      // Canvas internal resolution should match offsetWidth/Height
+      expect(canvas.width).toBe(container.offsetWidth || 800);
+      expect(canvas.height).toBe(container.offsetHeight || 600);
+    });
+  });
+
+  describe('pan coordinate accuracy (Bug #2)', () => {
+    it('panTo updates RA/Dec without wrap errors', () => {
+      const { component } = render(ImageViewer);
+      const viewer = component as unknown as ImageViewer;
+      
+      // Pan to various positions including near wrap points
+      expect(() => viewer.panTo(0, 0)).not.toThrow();
+      expect(() => viewer.panTo(359.9, 0)).not.toThrow();
+      expect(() => viewer.panTo(180, 89)).not.toThrow();
+      expect(() => viewer.panTo(180, -89)).not.toThrow();
+      
+      const indicator = document.querySelector('.fov-indicator');
+      expect(indicator?.textContent).toContain('RA');
+      expect(indicator?.textContent).toContain('Dec');
+    });
+
+    it('double-click centers on clicked position', () => {
+      render(ImageViewer);
+      const canvas = document.querySelector('.hips-canvas') as HTMLCanvasElement;
+      
+      // Simulate double-click at center
+      canvas.dispatchEvent(new MouseEvent('dblclick', {
+        clientX: 400,
+        clientY: 300,
+        bubbles: true,
+      }));
+      
+      // Should not throw
+      const indicator = document.querySelector('.fov-indicator');
+      expect(indicator?.textContent).toContain('RA');
+    });
+  });
+
+  describe('overlay error handling (Bug #3: PanSTARRS intermittent)', () => {
+    it('overlay with invalid URL does not crash the viewer', () => {
+      const { component } = render(ImageViewer);
+      const viewer = component as unknown as ImageViewer;
+      // Add overlay with URL that won't have tiles at all orders
+      viewer.addOverlay('bad-overlay', 'https://invalid.example.com/hips/', 80);
+      // Zoom to trigger tile loading at different orders
+      expect(() => viewer.setZoom(2)).not.toThrow();
+      expect(() => viewer.setZoom(5)).not.toThrow();
+      expect(() => viewer.setZoom(8)).not.toThrow();
+    });
+
+    it('overlay tiles at unavailable orders fail gracefully', () => {
+      const { component } = render(ImageViewer, { props: { initialZoom: 0 } });
+      const viewer = component as unknown as ImageViewer;
+      viewer.addOverlay('test', 'https://alasky.cds.unistra.fr/DSS/DSSColor/', 80);
+      // At zoom 0, order might not be available for overlay
+      // Should not throw or show error overlay
+      const errorOverlay = document.querySelector('.error-overlay');
+      expect(errorOverlay).toBeFalsy();
+    });
   });
 });

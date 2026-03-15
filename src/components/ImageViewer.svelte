@@ -93,7 +93,9 @@
   }
 
   function zoomToOrder(zoom: number): number {
-    const order = Math.floor(zoom / 1.5);
+    // Offset by +1 so tiles are ~2× FOV instead of up to 4-16×.
+    // This provides better resolution at all zoom levels.
+    const order = Math.floor((zoom + 1) / 1.5);
     return Math.max(0, Math.min(13, order));
   }
 
@@ -770,6 +772,10 @@
           tileCache.set(cacheKey, img);
           scheduleRender();
         };
+        // Gracefully handle missing overlay tiles (HiPS order not available)
+        img.onerror = () => {
+          // Silently skip — overlay may not have tiles at this order
+        };
         img.src = url;
       }
     }
@@ -874,6 +880,8 @@
       canvasHeight = h;
       canvasEl.width = w;
       canvasEl.height = h;
+      // Safety: ensure FOV is sane after resize
+      fov = zoomToFov(zoomLevel);
       // Reset offscreen canvas so it gets recreated at new size
       if (offscreenCanvas) {
         offscreenCanvas.width = w;
@@ -896,7 +904,9 @@
 
   const minimapRect = $derived(() => {
     // Equirectangular projection: RA 0-360 → x, Dec -90..90 → y
-    const fovRa = fov / Math.cos((dec * Math.PI) / 180);
+    // At higher declinations, a fixed FOV covers LESS RA (not more)
+    const cosDec = Math.cos((dec * Math.PI) / 180) || 0.01;
+    const fovRa = fov * cosDec;
     const fovDec = fov;
 
     const x = ((ra - fovRa / 2) / 360) * MINIMAP_W;
