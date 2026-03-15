@@ -73,6 +73,8 @@ test.describe('Viewer Interactions', () => {
   });
 
   test('scaling dropdown changes display without error', async ({ page }) => {
+    await page.locator('button[aria-label="Toggle controls panel"]').click();
+    await page.waitForTimeout(300);
     await page.locator('#scaling-select').selectOption('log');
     await page.waitForTimeout(500);
 
@@ -83,6 +85,8 @@ test.describe('Viewer Interactions', () => {
   });
 
   test('colormap dropdown changes display without error', async ({ page }) => {
+    await page.locator('button[aria-label="Toggle controls panel"]').click();
+    await page.waitForTimeout(300);
     await page.locator('#colormap-select').selectOption('viridis');
     await page.waitForTimeout(500);
 
@@ -132,6 +136,8 @@ test.describe('Viewer Interactions', () => {
     await page.locator('button[aria-label="Zoom in"]').click();
     await page.waitForTimeout(300);
     await page.locator('button[aria-label="Zoom out"]').click();
+    await page.waitForTimeout(300);
+    await page.locator('button[aria-label="Toggle controls panel"]').click();
     await page.waitForTimeout(300);
     await page.locator('#scaling-select').selectOption('sqrt');
     await page.waitForTimeout(300);

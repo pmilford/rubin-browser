@@ -41,6 +41,10 @@ test.describe('Visual Smoke Tests (requires live server)', () => {
   });
 
   test('toolbar controls are functional', async ({ page }) => {
+    // Open side panel to access dropdowns
+    await page.locator('button[aria-label="Toggle controls panel"]').click();
+    await page.waitForTimeout(300);
+
     // Scaling dropdown changes should not cause errors
     await page.locator('#scaling-select').selectOption('log');
     await page.waitForTimeout(500);
@@ -105,6 +109,8 @@ test.describe('Visual Smoke Tests (requires live server)', () => {
     // Perform typical user actions
     await page.locator('button[aria-label="Zoom in"]').click();
     await page.waitForTimeout(500);
+    await page.locator('button[aria-label="Toggle controls panel"]').click();
+    await page.waitForTimeout(300);
     await page.locator('#scaling-select').selectOption('sqrt');
     await page.waitForTimeout(500);
 

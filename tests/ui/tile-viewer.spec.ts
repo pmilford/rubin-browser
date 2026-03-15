@@ -16,10 +16,16 @@ test.describe('Tile Viewer', () => {
     const toolbar = page.locator('[role="toolbar"]');
     await expect(toolbar).toBeVisible();
 
-    // Dropdown controls
+    // Compact toolbar buttons
+    await expect(page.locator('button[aria-label="Zoom in"]')).toBeVisible();
+    await expect(page.locator('button[aria-label="Zoom out"]')).toBeVisible();
+    await expect(page.locator('button[aria-label="Reset view"]')).toBeVisible();
+
+    // Open side panel to access dropdown controls
+    await page.locator('button[aria-label="Toggle controls panel"]').click();
+    await page.waitForTimeout(300);
     await expect(page.locator('#scaling-select')).toBeVisible();
     await expect(page.locator('#colormap-select')).toBeVisible();
-    await expect(page.locator('#interp-select')).toBeVisible();
 
     // Bug fix: zoom buttons should be visible with SVG icons
     await expect(page.locator('button[aria-label="Zoom in"]')).toBeVisible();
@@ -82,6 +88,9 @@ test.describe('Tile Viewer', () => {
   });
 
   test('scaling dropdown has all options', async ({ page }) => {
+    // Open side panel first
+    await page.locator('button[aria-label="Toggle controls panel"]').click();
+    await page.waitForTimeout(300);
     const select = page.locator('#scaling-select');
     const options = select.locator('option');
     await expect(options).toHaveCount(7);
@@ -95,14 +104,18 @@ test.describe('Tile Viewer', () => {
   });
 
   test('color map dropdown has all options', async ({ page }) => {
+    await page.locator('button[aria-label="Toggle controls panel"]').click();
+    await page.waitForTimeout(300);
     const select = page.locator('#colormap-select');
     const options = select.locator('option');
-    await expect(options).toHaveCount(6);
+    await expect(options).toHaveCount(9);
     await expect(options.nth(0)).toHaveText('grayscale');
     await expect(options.nth(1)).toHaveText('viridis');
   });
 
   test('interpolation dropdown has all options', async ({ page }) => {
+    await page.locator('button[aria-label="Toggle controls panel"]').click();
+    await page.waitForTimeout(300);
     const select = page.locator('#interp-select');
     const options = select.locator('option');
     await expect(options).toHaveCount(4);
@@ -155,12 +168,16 @@ test.describe('Tile Viewer', () => {
   });
 
   test('changing scaling updates status message', async ({ page }) => {
+    await page.locator('button[aria-label="Toggle controls panel"]').click();
+    await page.waitForTimeout(300);
     await page.locator('#scaling-select').selectOption('log');
     const statusBar = page.locator('[role="status"]');
     await expect(statusBar).toContainText('Scaling: log');
   });
 
   test('changing color map updates status message', async ({ page }) => {
+    await page.locator('button[aria-label="Toggle controls panel"]').click();
+    await page.waitForTimeout(300);
     await page.locator('#colormap-select').selectOption('viridis');
     const statusBar = page.locator('[role="status"]');
     await expect(statusBar).toContainText('Color map: viridis');
