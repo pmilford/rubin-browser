@@ -532,22 +532,6 @@
     panOffsetX = dragStartOffsetX + dx;
     panOffsetY = dragStartOffsetY + dy;
 
-    // Recenter on-the-fly if offset exceeds threshold (continuous panning)
-    const thresholdX = canvasWidth * 0.4;
-    const thresholdY = canvasHeight * 0.4;
-    if (Math.abs(panOffsetX) > thresholdX || Math.abs(panOffsetY) > thresholdY) {
-      const [newRa, newDec] = canvasToSky(canvasWidth / 2, canvasHeight / 2);
-      ra = newRa;
-      dec = newDec;
-      dragStartOffsetX = 0;
-      dragStartOffsetY = 0;
-      dragStartX = e.clientX;
-      dragStartY = e.clientY;
-      panOffsetX = 0;
-      panOffsetY = 0;
-      loadTiles();
-    }
-
     scheduleRender();
     emitState();
   }
