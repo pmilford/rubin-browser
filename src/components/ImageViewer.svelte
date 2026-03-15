@@ -1,6 +1,6 @@
 <script lang="ts">
   import { getAuthHeader } from '../api/auth.js';
-  import { radecToTileIndex } from '../api/hips.js';
+  import { radecToTileIndex, getTileCenter } from '../api/hips.js';
   import { applyScaling } from '../utils/scaling.js';
   import { applyColorMap } from '../utils/colormap.js';
   import type { ViewerState, ScalingFunction, ColorMapName, InterpolationMethod } from '../types/image.js';
@@ -311,7 +311,7 @@
     if (pixelIndex < 0 || pixelIndex >= totalPixels) return;
 
     const tileAngularSize = 180 / nside;
-    const tileCenter = estimateTileCenter(pixelIndex, order, ra, dec);
+    const tileCenter = getTileCenter(pixelIndex, order);
     if (!tileCenter) return;
 
     const [tileRa, tileDec] = tileCenter;

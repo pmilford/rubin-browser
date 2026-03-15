@@ -167,3 +167,50 @@ function spreadBits(v: number): number {
   x = (x | (x << 1)) & 0x55555555;
   return x;
 }
+
+/** Compact bits: inverse of spreadBits — extract every other bit */
+function compactBits(v: number): number {
+  let x = v & 0x55555555;
+  x = (x | (x >> 1)) & 0x33333333;
+  x = (x | (x >> 2)) & 0x0f0f0f0f;
+  x = (x | (x >> 4)) & 0x00ff00ff;
+  x = (x | (x >> 8)) & 0x0000ffff;
+  return x;
+}
+
+/** Convert HEALPix NESTED pixel index to (x, y) within face */
+function nestToXY(pix: number, nside: number): [number, number] {
+  const facePixels = nside * nside;
+  const localPix = pix % facePixels;
+  const x = compactBits(localPix);
+  const y = compactBits(localPix >> 1);
+  return [x, y];
+}
+
+/** Convert HEALPix NESTED pixel index to RA/Dec (degrees) */
+export function healpixNestToRadec(
+  pixelIndex: number,
+  order: number
+): { ra: number; dec: number } {
+  const nside = Math.pow(2, order);
+  const faceIndex = Math.floor(pixelIndex / (nside * nside));
+  const [x, y] = nestToXY(pixelIndex, nside);
+
+  // Convert face-local (x, y) to spherical coordinates
+  const z = 1 - (2 * y) / nside; // simplified for equatorial region
+  const phi = ((2 * x) / nside) * Math.PI / 2 + (faceIndex % 4) * Math.PI / 2;
+
+  const theta = Math.acos(Math.max(-1, Math.min(1, z)));
+  const ra = ((phi * 180) / Math.PI + 360) % 360;
+  const dec = 90 - (theta * 180) / Math.PI;
+
+  return { ra, dec };
+}
+
+/** Get the center RA/Dec of a HiPS tile given its pixel index and order */
+export function getTileCenter(
+  pixelIndex: number,
+  order: number
+): { ra: number; dec: number } {
+  return healpixNestToRadec(pixelIndex, order);
+}
