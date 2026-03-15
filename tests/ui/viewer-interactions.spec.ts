@@ -97,7 +97,7 @@ test.describe('Viewer Interactions', () => {
 
   test('invert toggle exists and works', async ({ page }) => {
     // Look for invert button/toggle
-    const invertButton = page.locator('button[aria-label="Invert"], [aria-label*="invert"], [aria-label*="Invert"]').first();
+    const invertButton = page.locator('button[aria-label="Invert image"]').first();
     const exists = await invertButton.count();
     if (exists > 0) {
       await invertButton.click();
@@ -110,7 +110,7 @@ test.describe('Viewer Interactions', () => {
   });
 
   test('fullscreen toggle does not break layout', async ({ page }) => {
-    const fsButton = page.locator('button[aria-label="Fullscreen"], [aria-label*="fullscreen"], [aria-label*="Fullscreen"]').first();
+    const fsButton = page.locator('button[aria-label="Toggle fullscreen"]').first();
     const exists = await fsButton.count();
     if (exists > 0) {
       await fsButton.click();
