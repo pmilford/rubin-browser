@@ -71,11 +71,11 @@ export const SURVEY_OVERLAYS: readonly SurveyInfo[] = [
     waveband: 'Near-IR (1.25 µm)',
   },
   {
-    id: 'sdss-color',
-    name: 'SDSS Color',
-    hipsUrl: 'https://alasky.cds.unistra.fr/SDSS/Color/',
-    description: 'Sloan Digital Sky Survey color composite',
-    waveband: 'Optical (ugr)',
+    id: 'wise-color',
+    name: 'WISE Color',
+    hipsUrl: 'https://alasky.cds.unistra.fr/WISE/W4',
+    description: 'Wide-field Infrared Survey Explorer W4 band',
+    waveband: 'Mid-IR (22 µm)',
   },
   {
     id: 'panstarrs-dr1',
