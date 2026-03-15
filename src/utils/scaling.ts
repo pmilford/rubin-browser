@@ -36,26 +36,33 @@ export function linearScale(value: number, min: number, max: number): number {
 export function logScale(value: number, min: number, max: number): number {
   if (max <= min) return 0;
   if (value <= min) return 0;
-  const numerator = Math.log(1 + value - min);
-  const denominator = Math.log(1 + max - min);
-  if (denominator === 0) return 0;
-  return Math.max(0, Math.min(1, numerator / denominator));
+  // Use log10 for better astronomical data handling — reveals faint structure
+  // Add small offset to avoid log(0)
+  const range = max - min;
+  const normalized = (value - min + 1) / (range + 1);
+  const result = Math.log10(1 + normalized * 9) / Math.log10(10); // log10(1..10) → 0..1
+  return Math.max(0, Math.min(1, result));
 }
 
 export function sqrtScale(value: number, min: number, max: number): number {
   if (max <= min) return 0;
   if (value <= min) return 0;
-  const numerator = Math.sqrt(value - min);
-  const denominator = Math.sqrt(max - min);
-  if (denominator === 0) return 0;
-  return Math.max(0, Math.min(1, numerator / denominator));
+  // Sqrt with black-level subtraction for astronomical images
+  // This pulls out faint structure near the background level
+  const range = max - min;
+  const normalized = (value - min) / range;
+  const result = Math.sqrt(normalized);
+  return Math.max(0, Math.min(1, result));
 }
 
 export function asinhScale(value: number, min: number, max: number): number {
   if (max <= min) return 0;
-  const denominator = Math.asinh(max - min);
-  if (denominator === 0) return 0;
-  const normalized = Math.asinh(value - min) / denominator;
+  // Asinh scaling with σ = range/10 for astronomical images
+  // This compresses bright sources while expanding faint structure
+  const range = max - min;
+  const sigma = range / 10; // noise estimate
+  if (sigma === 0) return 0;
+  const normalized = Math.asinh((value - min) / sigma) / Math.asinh(range / sigma);
   return Math.max(0, Math.min(1, normalized));
 }
 
@@ -64,40 +71,26 @@ export function histogramEqualize(pixels: Float64Array): Float64Array {
 
   const clean = sanitizeArray(pixels);
 
-  // Filter out zero/black pixels for astronomical images
-  const nonZero: number[] = [];
-  for (let i = 0; i < clean.length; i++) {
-    if (clean[i] > 0) nonZero.push(clean[i]);
-  }
+  // Use 1st-99th percentile range to avoid outliers skewing the histogram
+  const sorted = Array.from(clean).sort((a, b) => a - b);
+  const n = sorted.length;
+  const p1 = sorted[Math.floor(n * 0.01)] ?? 0;
+  const p99 = sorted[Math.floor(n * 0.99)] ?? 1;
 
-  // If all pixels are zero, return uniform
-  if (nonZero.length === 0) {
+  if (p99 <= p1) {
     const result = new Float64Array(pixels.length);
-    result.fill(0);
-    return result;
-  }
-
-  let min = nonZero[0]!;
-  let max = nonZero[0]!;
-  for (let i = 1; i < nonZero.length; i++) {
-    if (nonZero[i]! < min) min = nonZero[i]!;
-    if (nonZero[i]! > max) max = nonZero[i]!;
-  }
-
-  if (min === max) {
-    const result = new Float64Array(pixels.length);
-    for (let i = 0; i < clean.length; i++) {
-      result[i] = clean[i] > 0 ? HISTOGRAM_UNIFORM_VALUE : 0;
-    }
+    result.fill(0.5);
     return result;
   }
 
   const histogram = new Uint32Array(HISTOGRAM_BINS);
-  const range = max - min;
+  const range = p99 - p1;
 
-  for (let i = 0; i < nonZero.length; i++) {
-    const bin = Math.min(HISTOGRAM_BINS - 1, Math.floor(((nonZero[i]! - min) / range) * (HISTOGRAM_BINS - 1)));
-    histogram[bin]++;
+  for (let i = 0; i < clean.length; i++) {
+    if (clean[i]! >= p1 && clean[i]! <= p99) {
+      const bin = Math.min(HISTOGRAM_BINS - 1, Math.floor(((clean[i]! - p1) / range) * (HISTOGRAM_BINS - 1)));
+      histogram[bin]++;
+    }
   }
 
   // Build cumulative histogram
@@ -107,14 +100,22 @@ export function histogramEqualize(pixels: Float64Array): Float64Array {
     cumulative[i] = cumulative[i - 1]! + histogram[i]!;
   }
 
-  const totalPixels = nonZero.length;
+  const total = cumulative[HISTOGRAM_BINS - 1]!;
+  if (total === 0) {
+    const result = new Float64Array(pixels.length);
+    result.fill(0.5);
+    return result;
+  }
+
   const result = new Float64Array(pixels.length);
   for (let i = 0; i < clean.length; i++) {
-    if (clean[i] <= 0) {
-      result[i] = 0; // Black pixels stay black
+    if (clean[i]! <= p1) {
+      result[i] = 0;
+    } else if (clean[i]! >= p99) {
+      result[i] = 1;
     } else {
-      const bin = Math.min(HISTOGRAM_BINS - 1, Math.floor(((clean[i]! - min) / range) * (HISTOGRAM_BINS - 1)));
-      result[i] = cumulative[bin]! / totalPixels;
+      const bin = Math.min(HISTOGRAM_BINS - 1, Math.floor(((clean[i]! - p1) / range) * (HISTOGRAM_BINS - 1)));
+      result[i] = cumulative[bin]! / total;
     }
   }
 

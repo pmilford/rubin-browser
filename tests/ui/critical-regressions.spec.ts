@@ -166,8 +166,7 @@ test.describe('Critical Bug Regressions', () => {
     });
   });
 
-  // Skip: Interactive minimap not yet implemented
-  test.describe.skip('Issue #5: Interactive Minimap', () => {
+  test.describe('Issue #5: Interactive Minimap', () => {
     test('minimap is visible', async ({ page }) => {
       const minimap = page.locator('[aria-label="Sky position minimap"]');
       await expect(minimap).toBeVisible();

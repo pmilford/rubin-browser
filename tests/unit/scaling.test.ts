@@ -214,11 +214,12 @@ describe('histogramEqualize', () => {
     expect(result[10]).toBeCloseTo(1, 1);
   });
 
-  it('returns all zeros when all pixels are zero', () => {
+  it('returns uniform value when all pixels are the same', () => {
     const pixels = new Float64Array([0, 0, 0, 0]);
     const result = histogramEqualize(pixels);
+    // When all pixels are identical, histogram equalization returns middle value
     for (let i = 0; i < result.length; i++) {
-      expect(result[i]).toBe(0);
+      expect(result[i]).toBe(0.5);
     }
   });
 
