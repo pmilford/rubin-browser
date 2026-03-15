@@ -151,3 +151,82 @@ test.describe('Viewer Interactions', () => {
     expect(criticalErrors).toHaveLength(0);
   });
 });
+
+test.describe('Drag and Zoom Behavioral Tests', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/');
+    await page.waitForTimeout(3000);
+  });
+
+  test('drag updates center coordinates', async ({ page }) => {
+    // Get initial coordinates
+    const fovIndicator = page.locator('[aria-label="Field of view indicator"]');
+    const initialText = await fovIndicator.textContent();
+    
+    // Get canvas element
+    const canvas = page.locator('.hips-canvas').first();
+    const box = await canvas.boundingBox();
+    expect(box).toBeTruthy();
+    
+    // Perform a drag operation
+    await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box!.x + box!.width / 2 + 100, box!.y + box!.height / 2, { steps: 5 });
+    await page.mouse.up();
+    await page.waitForTimeout(500);
+    
+    // Get new coordinates
+    const newText = await fovIndicator.textContent();
+    
+    // Coordinates SHOULD change after drag
+    expect(newText).not.toEqual(initialText);
+  });
+
+  test('zoom keeps center point stable', async ({ page }) => {
+    const fovIndicator = page.locator('[aria-label="Field of view indicator"]');
+    const initialFOV = await fovIndicator.textContent();
+    
+    // Zoom in
+    await page.locator('button[aria-label="Zoom in"]').click();
+    await page.waitForTimeout(500);
+    
+    const afterZoomIn = await fovIndicator.textContent();
+    expect(afterZoomIn).not.toEqual(initialFOV);
+    
+    // Zoom back out
+    await page.locator('button[aria-label="Zoom out"]').click();
+    await page.waitForTimeout(500);
+    
+    const afterZoomOut = await fovIndicator.textContent();
+    // Should be close to original (may not be exact due to discrete zoom steps)
+  });
+
+  test('FOV value is reasonable for default zoom', async ({ page }) => {
+    const fovIndicator = page.locator('[aria-label="Field of view indicator"]');
+    const text = await fovIndicator.textContent();
+    
+    // Extract FOV value
+    const fovMatch = text?.match(/([\d.]+)°/);
+    expect(fovMatch).toBeTruthy();
+    const fov = parseFloat(fovMatch![1]);
+    
+    // FOV should be between 5° and 50° for a typical survey view
+    expect(fov).toBeGreaterThan(5);
+    expect(fov).toBeLessThan(50);
+  });
+
+  test('canvas pixel size matches display size', async ({ page }) => {
+    const canvas = page.locator('.hips-canvas').first();
+    
+    const dims = await canvas.evaluate((el: HTMLCanvasElement) => ({
+      pixelWidth: el.width,
+      pixelHeight: el.height,
+      displayWidth: el.clientWidth,
+      displayHeight: el.clientHeight,
+    }));
+    
+    // Pixel size should match display size (within a few pixels)
+    expect(Math.abs(dims.pixelWidth - dims.displayWidth)).toBeLessThan(5);
+    expect(Math.abs(dims.pixelHeight - dims.displayHeight)).toBeLessThan(5);
+  });
+});

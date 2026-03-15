@@ -1060,8 +1060,6 @@
 
   .hips-canvas {
     display: block;
-    width: 100%;
-    height: 100%;
     cursor: grab;
     image-rendering: pixelated;
     outline: none;
