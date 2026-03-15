@@ -857,13 +857,18 @@
    */
   function resizeToContainer() {
     if (!containerEl || !canvasEl) return;
-    const w = containerEl.offsetWidth || 800;
-    const h = containerEl.offsetHeight || 600;
+    // Use getBoundingClientRect for accurate CSS pixel dimensions
+    const rect = containerEl.getBoundingClientRect();
+    const w = Math.round(rect.width) || 800;
+    const h = Math.round(rect.height) || 600;
     if (w > 0 && h > 0) {
       canvasWidth = w;
       canvasHeight = h;
+      // Set both attribute AND style to ensure canvas pixel size matches display size
       canvasEl.width = w;
       canvasEl.height = h;
+      canvasEl.style.width = w + 'px';
+      canvasEl.style.height = h + 'px';
       // Safety: ensure FOV is sane after resize
       fov = zoomToFov(zoomLevel);
       // Reset offscreen canvas so it gets recreated at new size
