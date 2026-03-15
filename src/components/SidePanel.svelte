@@ -186,24 +186,12 @@
 
       <!-- Survey overlays section -->
       <section class="panel-section">
-        <button
-          class="section-toggle"
-          onclick={() => toggleSection('survey')}
-          aria-expanded={activeSection === 'survey'}
-        >
-          <span class="toggle-arrow" class:open={activeSection === 'survey'}>▶</span>
-          Survey Overlays
-        </button>
-        {#if activeSection === 'survey'}
-          <div class="section-content">
-            <SurveySelector
-              overlays={surveyOverlays}
-              {onOverlayAdd}
-              {onOverlayRemove}
-              {onOpacityChange}
-            />
-          </div>
-        {/if}
+        <SurveySelector
+          overlays={surveyOverlays}
+          {onOverlayAdd}
+          {onOverlayRemove}
+          {onOpacityChange}
+        />
       </section>
 
       <!-- Time series section -->
@@ -293,12 +281,12 @@
   .side-panel {
     position: fixed;
     top: 0;
-    right: 0;
+    left: 0;
     width: 300px;
     max-width: 90vw;
     height: 100vh;
     background: #1a1a2e;
-    border-left: 1px solid #333;
+    border-right: 1px solid #333;
     display: flex;
     flex-direction: column;
     z-index: 100;
@@ -307,7 +295,7 @@
 
   @keyframes slideIn {
     from {
-      transform: translateX(100%);
+      transform: translateX(-100%);
     }
     to {
       transform: translateX(0);

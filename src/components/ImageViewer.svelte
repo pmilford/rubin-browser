@@ -130,8 +130,12 @@
     const logicalY = py - panOffsetY;
 
     const scale = canvasWidth / ((fov * Math.PI) / 180);
-    const u = (logicalX - canvasWidth / 2) / scale;
-    const v = -(logicalY - canvasHeight / 2) / scale;
+    // Convert pixel offsets to angular offsets in RADIANS (scale is in px/rad,
+    // so division yields degrees — must convert to radians for trig functions)
+    const uDeg = (logicalX - canvasWidth / 2) / scale;
+    const vDeg = -(logicalY - canvasHeight / 2) / scale;
+    const u = (uDeg * Math.PI) / 180;
+    const v = (vDeg * Math.PI) / 180;
     const rho = Math.sqrt(u * u + v * v);
     const c = Math.atan(rho);
     const cosDec0 = Math.cos((dec * Math.PI) / 180);
@@ -902,6 +906,75 @@
 
     return { x, y, w, h };
   });
+
+  // --- Minimap Interaction (Issue #5) ---
+
+  function minimapPixelToSky(clientX: number, clientY: number): [number, number] {
+    const minimapEl = containerEl?.querySelector('.fov-minimap');
+    if (!minimapEl) return [ra, dec];
+    const rect = minimapEl.getBoundingClientRect();
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
+    // Clamp to minimap bounds
+    const cx = Math.max(0, Math.min(MINIMAP_W, x));
+    const cy = Math.max(0, Math.min(MINIMAP_H, y));
+    // Convert pixel position to RA/Dec (equirectangular)
+    const newRa = (cx / MINIMAP_W) * 360;
+    const newDec = 90 - (cy / MINIMAP_H) * 180;
+    return [newRa, newDec];
+  }
+
+  function onMinimapClick(e: MouseEvent) {
+    e.stopPropagation();
+    const [newRa, newDec] = minimapPixelToSky(e.clientX, e.clientY);
+    ra = newRa;
+    dec = newDec;
+    panOffsetX = 0;
+    panOffsetY = 0;
+    scheduleRender();
+    loadTiles();
+    emitState();
+  }
+
+  let minimapDragging = $state(false);
+
+  function onMinimapPointerDown(e: PointerEvent) {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    e.preventDefault();
+    minimapDragging = true;
+    (e.target as Element).setPointerCapture(e.pointerId);
+
+    // Navigate to clicked position immediately
+    const [newRa, newDec] = minimapPixelToSky(e.clientX, e.clientY);
+    ra = newRa;
+    dec = newDec;
+    panOffsetX = 0;
+    panOffsetY = 0;
+    scheduleRender();
+    loadTiles();
+    emitState();
+
+    // Listen for move/up on window for drag
+    const onMove = (me: PointerEvent) => {
+      if (!minimapDragging) return;
+      const [mra, mdec] = minimapPixelToSky(me.clientX, me.clientY);
+      ra = mra;
+      dec = mdec;
+      panOffsetX = 0;
+      panOffsetY = 0;
+      scheduleRender();
+    };
+    const onUp = () => {
+      minimapDragging = false;
+      loadTiles();
+      emitState();
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  }
 </script>
 
 <div class="image-viewer" bind:this={containerEl}>
@@ -921,7 +994,14 @@
   ></canvas>
 
   <!-- FOV Minimap (Issue #2) -->
-  <div class="fov-minimap" aria-label="Sky position minimap">
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div
+    class="fov-minimap"
+    aria-label="Sky position minimap"
+    onclick={onMinimapClick}
+    onpointerdown={onMinimapPointerDown}
+  >
     <svg width={MINIMAP_W} height={MINIMAP_H} viewBox={`0 0 ${MINIMAP_W} ${MINIMAP_H}`}>
       <!-- Full sky background -->
       <rect x="0" y="0" width={MINIMAP_W} height={MINIMAP_H} fill="rgba(10,10,30,0.85)" stroke="rgba(100,100,255,0.3)" stroke-width="1" rx="3" />
@@ -940,6 +1020,7 @@
         stroke="rgba(150,150,255,0.8)"
         stroke-width="1"
         rx="1"
+        style="cursor: move;"
       />
     </svg>
   </div>
@@ -996,7 +1077,8 @@
     bottom: 88px;
     right: 12px;
     z-index: 5;
-    pointer-events: none;
+    pointer-events: auto;
+    cursor: crosshair;
     border-radius: 5px;
     overflow: hidden;
   }

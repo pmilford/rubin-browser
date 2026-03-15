@@ -67,7 +67,7 @@ describe('SurveySelector', () => {
       expect(screen.getByText('Optical (G band)')).toBeTruthy();
       expect(screen.getByText('DSS2 Color')).toBeTruthy();
       expect(screen.getByText('2MASS J')).toBeTruthy();
-      expect(screen.getByText('SDSS Color')).toBeTruthy();
+      expect(screen.getByText('WISE Color')).toBeTruthy();
     });
 
     it('has all surveys unchecked by default', async () => {

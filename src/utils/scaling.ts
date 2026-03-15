@@ -211,6 +211,21 @@ export function percentileRange(pixels: Float64Array, low: number, high: number)
 
 function computeMinMax(pixels: Float64Array): { min: number; max: number } {
   if (pixels.length === 0) return { min: 0, max: 0 };
+
+  // For large arrays (typical astronomical images), use 1st-99th percentile range
+  // to avoid outliers from skewing the display. For small arrays, use absolute min/max.
+  if (pixels.length > 100) {
+    const clean = sanitizeArray(pixels);
+    const sorted = Array.from(clean).sort((a, b) => a - b);
+    const n = sorted.length;
+
+    const lowIndex = Math.max(0, Math.floor(0.01 * (n - 1)));
+    const highIndex = Math.max(lowIndex, Math.floor(0.99 * (n - 1)));
+
+    return { min: sorted[lowIndex], max: sorted[highIndex] };
+  }
+
+  // Small arrays: use absolute min/max
   let min = pixels[0];
   let max = pixels[0];
   for (let i = 1; i < pixels.length; i++) {

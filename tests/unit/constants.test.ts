@@ -91,10 +91,10 @@ describe('constants', () => {
       expect(tmass?.hipsUrl).toContain('2MASS');
     });
 
-    it('has SDSS Color', () => {
-      const sdss = SURVEY_OVERLAYS.find(s => s.id === 'sdss-color');
-      expect(sdss).toBeDefined();
-      expect(sdss?.hipsUrl).toContain('SDSS');
+    it('has WISE Color', () => {
+      const wise = SURVEY_OVERLAYS.find(s => s.id === 'wise-color');
+      expect(wise).toBeDefined();
+      expect(wise?.hipsUrl).toContain('WISE');
     });
 
     it('has PanSTARRS DR1', () => {
