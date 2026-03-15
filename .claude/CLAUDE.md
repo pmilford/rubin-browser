@@ -156,3 +156,15 @@ expect(await errorOverlay.isVisible()).toBe(false);
 2. If Playwright tests fail, THE CODE IS BROKEN — fix it, regardless of unit test results
 3. Add new Playwright tests for every new user-facing feature
 4. Run `npm run test:ui` against the live dev server (Playwright auto-starts it)
+
+## Visual Testing Checkpoint (What Missed)
+
+These bugs made it past all tests. Add these checks to Playwright:
+
+- **Pan direction**: Drag right → RA should increase. Verify with `canvasToSky()` before/after drag
+- **Zoom centering**: Zoom in → center sky point unchanged. Test with `expect(centerRa).toBeCloseTo(beforeRa)`
+- **Scaling changes pixels**: Change scaling → canvas ImageData should differ. Compare `getImageData()` before/after
+- **Minimap interactive**: Click minimap → view should pan. Test with position change assertion
+- **Side panel position**: Verify `getComputedStyle(el).left` is small, not `right`
+- **Survey selector nesting**: Verify dropdown is directly accessible, not nested 3 levels deep
+- **Real target navigation**: Search "M31" → should resolve and navigate. Verify position changes.
