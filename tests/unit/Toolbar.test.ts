@@ -20,7 +20,7 @@ describe('Toolbar', () => {
       // Select by id since label[for] association
       const select = document.querySelector('#scaling-select') as HTMLSelectElement;
       const options = Array.from(select.options).map(o => o.value);
-      expect(options).toEqual(['linear', 'log', 'sqrt', 'asinh', 'histogram', 'zscale', 'percentile']);
+      expect(options).toEqual(['linear', 'log', 'sqrt', 'asinh', 'sinh', 'mtf', 'histogram', 'zscale', 'percentile']);
     });
 
     it('renders colormap dropdown with all options', () => {

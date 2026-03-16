@@ -93,14 +93,16 @@ test.describe('Tile Viewer', () => {
     await page.waitForTimeout(300);
     const select = page.locator('#scaling-select');
     const options = select.locator('option');
-    await expect(options).toHaveCount(7);
+    await expect(options).toHaveCount(9);
     await expect(options.nth(0)).toHaveText('linear');
     await expect(options.nth(1)).toHaveText('log');
     await expect(options.nth(2)).toHaveText('sqrt');
     await expect(options.nth(3)).toHaveText('asinh');
-    await expect(options.nth(4)).toHaveText('histogram');
-    await expect(options.nth(5)).toHaveText('zscale');
-    await expect(options.nth(6)).toHaveText('percentile');
+    await expect(options.nth(4)).toHaveText('sinh');
+    await expect(options.nth(5)).toHaveText('mtf');
+    await expect(options.nth(6)).toHaveText('histogram');
+    await expect(options.nth(7)).toHaveText('zscale');
+    await expect(options.nth(8)).toHaveText('percentile');
   });
 
   test('color map dropdown has all options', async ({ page }) => {

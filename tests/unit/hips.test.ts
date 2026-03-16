@@ -6,6 +6,8 @@ import {
   radecToTileIndex,
   orderToNside,
   radecToHealpixNest,
+  healpixNestToRadec,
+  getTileCenter,
 } from '../../src/api/hips.js';
 
 // Mock auth module
@@ -350,5 +352,42 @@ describe('radecToTileIndex', () => {
     const nside = orderToNside(5);
     expect(idx).toBeGreaterThanOrEqual(0);
     expect(idx).toBeLessThan(12 * nside * nside);
+  });
+});
+
+describe('getTileCenter round-trip', () => {
+  it('round-trip: getTileCenter returns a point that maps back to the same pixel', () => {
+    const testCases = [
+      { ra: 0, dec: 0, order: 3 },
+      { ra: 180, dec: 0, order: 3 },
+      { ra: 45, dec: 45, order: 3 },
+      { ra: 270, dec: -30, order: 3 },
+      { ra: 62, dec: -37, order: 3 },
+      { ra: 120, dec: 60, order: 4 },
+      { ra: 0, dec: 89, order: 2 },
+      { ra: 180, dec: -89, order: 2 },
+    ];
+
+    for (const { ra, dec, order } of testCases) {
+      const pixelIndex = radecToTileIndex(ra, dec, order);
+      const center = getTileCenter(pixelIndex, order);
+      const pixelIndex2 = radecToTileIndex(center.ra, center.dec, order);
+      expect(pixelIndex2, `round-trip failed for ra=${ra} dec=${dec} order=${order}: pixel ${pixelIndex} → (${center.ra.toFixed(2)}, ${center.dec.toFixed(2)}) → pixel ${pixelIndex2}`).toBe(pixelIndex);
+    }
+  });
+
+  it('getTileCenter returns valid coordinates for sampled tiles at order 3', () => {
+    // Test a representative sample of tiles from each face region
+    const samples = [0, 32, 64, 128, 192, 256, 320, 384, 448, 512, 576, 640, 700, 767];
+    for (const pix of samples) {
+      const center = getTileCenter(pix, 3);
+      expect(center.ra).toBeGreaterThanOrEqual(0);
+      expect(center.ra).toBeLessThan(360);
+      expect(center.dec).toBeGreaterThanOrEqual(-90);
+      expect(center.dec).toBeLessThanOrEqual(90);
+
+      const pix2 = radecToTileIndex(center.ra, center.dec, 3);
+      expect(pix2, `tile ${pix} center (${center.ra.toFixed(2)}, ${center.dec.toFixed(2)}) maps to ${pix2}`).toBe(pix);
+    }
   });
 });

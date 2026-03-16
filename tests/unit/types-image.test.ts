@@ -10,7 +10,7 @@ import {
 } from '../../src/types/image.js';
 
 describe('isScalingFunction', () => {
-  it.each(['linear', 'log', 'sqrt', 'asinh', 'histogram', 'zscale', 'percentile'] as const)(
+  it.each(['linear', 'log', 'sqrt', 'asinh', 'sinh', 'mtf', 'histogram', 'zscale', 'percentile'] as const)(
     'accepts %s',
     (name) => {
       expect(isScalingFunction(name)).toBe(true);
@@ -134,6 +134,30 @@ describe('isValidScalingParams', () => {
 
   it('rejects string zscaleContrast', () => {
     expect(isValidScalingParams({ method: 'zscale', zscaleContrast: '0.25' })).toBe(false);
+  });
+
+  it('accepts params with softening', () => {
+    expect(isValidScalingParams({ method: 'asinh', softening: 0.1 })).toBe(true);
+  });
+
+  it('rejects string softening', () => {
+    expect(isValidScalingParams({ method: 'asinh', softening: '0.1' })).toBe(false);
+  });
+
+  it('accepts params with midtone', () => {
+    expect(isValidScalingParams({ method: 'mtf', midtone: 0.3 })).toBe(true);
+  });
+
+  it('rejects string midtone', () => {
+    expect(isValidScalingParams({ method: 'mtf', midtone: '0.3' })).toBe(false);
+  });
+
+  it('accepts params with logBase', () => {
+    expect(isValidScalingParams({ method: 'log', logBase: 1000 })).toBe(true);
+  });
+
+  it('rejects string logBase', () => {
+    expect(isValidScalingParams({ method: 'log', logBase: '1000' })).toBe(false);
   });
 });
 

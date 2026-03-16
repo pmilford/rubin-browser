@@ -12,8 +12,20 @@ const ZSCALE_DEFAULT_CONTRAST = 0.25;
 /** Default value for pixels with NaN or Infinity */
 const SANITIZED_VALUE = 0;
 
-/** Value returned when all pixels are identical (histogram equalization) */
-const HISTOGRAM_UNIFORM_VALUE = 0.5;
+/** Default log base for log scaling */
+const DEFAULT_LOG_BASE = 1000;
+
+/** Default softening parameter for asinh */
+const DEFAULT_ASINH_SOFTENING = 0.1;
+
+/** Default Q parameter for sinh */
+const DEFAULT_SINH_Q = 3;
+
+/** Max iterations for zscale iterative rejection */
+const ZSCALE_MAX_ITERATIONS = 5;
+
+/** Sigma threshold for zscale rejection */
+const ZSCALE_REJECT_SIGMA = 2.5;
 
 function sanitize(value: number): number {
   return Number.isFinite(value) ? value : SANITIZED_VALUE;
@@ -27,43 +39,85 @@ function sanitizeArray(pixels: Float64Array): Float64Array {
   return result;
 }
 
-export function linearScale(value: number, min: number, max: number): number {
+/** Normalize value to [0,1] given min/max, clamped */
+function normalize(value: number, min: number, max: number): number {
   if (max <= min) return 0;
-  const normalized = (value - min) / (max - min);
-  return Math.max(0, Math.min(1, normalized));
+  return Math.max(0, Math.min(1, (value - min) / (max - min)));
 }
 
-export function logScale(value: number, min: number, max: number): number {
+// --- Per-pixel scaling functions ---
+// All take (value, min, max) and return [0,1].
+// Internally: normalize to [0,1], then apply stretch.
+
+export function linearScale(value: number, min: number, max: number): number {
+  return normalize(value, min, max);
+}
+
+/**
+ * Log scaling: y = log(1 + x * (base - 1)) / log(base)
+ * where x is normalized [0,1], base defaults to 1000.
+ */
+export function logScale(value: number, min: number, max: number, base: number = DEFAULT_LOG_BASE): number {
   if (max <= min) return 0;
-  if (value <= min) return 0;
-  // Use log10 for better astronomical data handling — reveals faint structure
-  // Add small offset to avoid log(0)
-  const range = max - min;
-  const normalized = (value - min + 1) / (range + 1);
-  const result = Math.log10(1 + normalized * 9) / Math.log10(10); // log10(1..10) → 0..1
+  const x = normalize(value, min, max);
+  if (x <= 0) return 0;
+  const result = Math.log(1 + x * (base - 1)) / Math.log(base);
   return Math.max(0, Math.min(1, result));
 }
 
 export function sqrtScale(value: number, min: number, max: number): number {
   if (max <= min) return 0;
-  if (value <= min) return 0;
-  // Sqrt with black-level subtraction for astronomical images
-  // This pulls out faint structure near the background level
-  const range = max - min;
-  const normalized = (value - min) / range;
-  const result = Math.sqrt(normalized);
+  const x = normalize(value, min, max);
+  if (x <= 0) return 0;
+  return Math.max(0, Math.min(1, Math.sqrt(x)));
+}
+
+/**
+ * Asinh scaling (Astropy formulation): y = asinh(x/a) / asinh(1/a)
+ * where x is normalized [0,1], a is softening parameter (default 0.1).
+ * Smaller a = more aggressive nonlinear stretch.
+ */
+export function asinhScale(value: number, min: number, max: number, softening: number = DEFAULT_ASINH_SOFTENING): number {
+  if (max <= min) return 0;
+  const x = normalize(value, min, max);
+  if (x <= 0) return 0;
+  const divisor = Math.asinh(1 / softening);
+  if (divisor === 0) return x;
+  const result = Math.asinh(x / softening) / divisor;
   return Math.max(0, Math.min(1, result));
 }
 
-export function asinhScale(value: number, min: number, max: number): number {
+/**
+ * Sinh scaling: y = sinh(x * Q) / sinh(Q)
+ * Compresses faint structure, keeps bright regions linear.
+ */
+export function sinhScale(value: number, min: number, max: number, q: number = DEFAULT_SINH_Q): number {
   if (max <= min) return 0;
-  // Asinh scaling with σ = range/10 for astronomical images
-  // This compresses bright sources while expanding faint structure
-  const range = max - min;
-  const sigma = range / 10; // noise estimate
-  if (sigma === 0) return 0;
-  const normalized = Math.asinh((value - min) / sigma) / Math.asinh(range / sigma);
-  return Math.max(0, Math.min(1, normalized));
+  const x = normalize(value, min, max);
+  if (x <= 0) return 0;
+  const divisor = Math.sinh(q);
+  if (divisor === 0) return x;
+  const result = Math.sinh(x * q) / divisor;
+  return Math.max(0, Math.min(1, result));
+}
+
+/**
+ * Midtone Transfer Function (Siril):
+ * MTF(x) = (m - 1) * x / ((2m - 1) * x - m)
+ * where m is midtone balance (0-1). m=0.5 is identity.
+ */
+export function mtfScale(value: number, min: number, max: number, midtone: number = 0.5): number {
+  if (max <= min) return 0;
+  const x = normalize(value, min, max);
+  if (x <= 0) return 0;
+  if (x >= 1) return 1;
+  // Clamp midtone away from exact 0 and 1 to avoid division issues
+  const m = Math.max(0.001, Math.min(0.999, midtone));
+  if (Math.abs(m - 0.5) < 0.001) return x; // identity
+  const denom = (2 * m - 1) * x - m;
+  if (denom === 0) return 0.5;
+  const result = ((m - 1) * x) / denom;
+  return Math.max(0, Math.min(1, result));
 }
 
 export function histogramEqualize(pixels: Float64Array): Float64Array {
@@ -122,6 +176,17 @@ export function histogramEqualize(pixels: Float64Array): Float64Array {
   return result;
 }
 
+/**
+ * ZScale range computation with IRAF-style iterative sigma rejection.
+ *
+ * Algorithm:
+ * 1. Sample pixels, sort by brightness
+ * 2. Fit line I(i) = intercept + slope * (i - midpoint) with iterative rejection
+ * 3. Reject points > ZSCALE_REJECT_SIGMA * sigma from fit, re-fit
+ * 4. If >50% rejected, use full range
+ * 5. z1 = median + (slope/contrast) * (1 - midpoint)
+ *    z2 = median + (slope/contrast) * (npoints - midpoint)
+ */
 export function zscaleRange(pixels: Float64Array, contrast: number = ZSCALE_DEFAULT_CONTRAST): { min: number; max: number } {
   if (pixels.length === 0) return { min: 0, max: 0 };
 
@@ -154,46 +219,110 @@ export function zscaleRange(pixels: Float64Array, contrast: number = ZSCALE_DEFA
   if (n === 0) return { min: 0, max: 0 };
   if (n === 1) return { min: sample[0]!, max: sample[0]! };
 
-  // Fit a line to the central portion of sorted pixels
-  const quarterStart = Math.floor(n * 0.25);
-  const quarterEnd = Math.floor(n * 0.75);
-  const centralLength = quarterEnd - quarterStart;
+  const midpoint = Math.floor(n / 2);
+  const median = sample[midpoint]!;
 
-  if (centralLength < 2) {
+  // Need at least 3 points for a meaningful fit
+  if (n < 3) {
     return { min: sample[0]!, max: sample[n - 1]! };
   }
 
-  // Simple linear regression on central portion: y = pixel value, x = index
-  let sumX = 0;
-  let sumY = 0;
-  let sumXY = 0;
-  let sumXX = 0;
+  // Iterative linear fit with sigma rejection
+  // Fit: I(i) = intercept + slope * (i - midpoint)
+  // where I(i) is the sorted pixel value at rank i
+  let mask = new Uint8Array(n);
+  mask.fill(1); // 1 = included
 
-  for (let i = quarterStart; i < quarterEnd; i++) {
-    const x = i - quarterStart;
-    const y = sample[i]!;
-    sumX += x;
-    sumY += y;
-    sumXY += x * y;
-    sumXX += x * x;
+  let slope = 0;
+  let intercept = median;
+
+  for (let iter = 0; iter < ZSCALE_MAX_ITERATIONS; iter++) {
+    // Fit line to unmasked points
+    let sumW = 0;
+    let sumX = 0;
+    let sumY = 0;
+    let sumXX = 0;
+    let sumXY = 0;
+
+    for (let i = 0; i < n; i++) {
+      if (!mask[i]) continue;
+      const x = i - midpoint;
+      const y = sample[i]!;
+      sumW++;
+      sumX += x;
+      sumY += y;
+      sumXX += x * x;
+      sumXY += x * y;
+    }
+
+    if (sumW < 2) break;
+
+    const meanX = sumX / sumW;
+    const meanY = sumY / sumW;
+    const denom = sumXX - sumW * meanX * meanX;
+
+    if (Math.abs(denom) < 1e-30) {
+      slope = 0;
+      intercept = meanY;
+    } else {
+      slope = (sumXY - sumW * meanX * meanY) / denom;
+      intercept = meanY - slope * meanX;
+    }
+
+    // Compute residuals and sigma
+    let sumResidSq = 0;
+    let countResid = 0;
+    for (let i = 0; i < n; i++) {
+      if (!mask[i]) continue;
+      const x = i - midpoint;
+      const predicted = intercept + slope * x;
+      const resid = sample[i]! - predicted;
+      sumResidSq += resid * resid;
+      countResid++;
+    }
+
+    if (countResid < 2) break;
+    const sigma = Math.sqrt(sumResidSq / (countResid - 1));
+    if (sigma < 1e-30) break; // Perfect fit
+
+    // Reject outliers
+    let rejected = 0;
+    const newMask = new Uint8Array(n);
+    for (let i = 0; i < n; i++) {
+      if (!mask[i]) continue;
+      const x = i - midpoint;
+      const predicted = intercept + slope * x;
+      const resid = Math.abs(sample[i]! - predicted);
+      if (resid > ZSCALE_REJECT_SIGMA * sigma) {
+        rejected++;
+      } else {
+        newMask[i] = 1;
+      }
+    }
+
+    if (rejected === 0) break; // Converged
+    mask = newMask;
   }
 
-  const meanX = sumX / centralLength;
-  const meanY = sumY / centralLength;
-  const slope = (sumXY - centralLength * meanX * meanY) / (sumXX - centralLength * meanX * meanX);
-  const median = sample[Math.floor(n / 2)]!;
+  // Count remaining points
+  let remaining = 0;
+  for (let i = 0; i < n; i++) {
+    if (mask[i]) remaining++;
+  }
 
-  const zmin = median - (median - sample[0]!) * contrast;
-  const zmax = median + (sample[n - 1]! - median) * contrast;
+  // If >50% rejected, use full sample range
+  if (remaining < n * 0.5) {
+    return { min: sample[0]!, max: sample[n - 1]! };
+  }
 
-  // Adjust by slope — steeper slope means narrower range
-  const slopeAdjust = Math.abs(slope) > 0 ? 1 / (1 + Math.abs(slope) * contrast) : 1;
-  const adjustedMin = median - (median - zmin) * slopeAdjust;
-  const adjustedMax = median + (zmax - median) * slopeAdjust;
+  // Compute z1, z2 from the IRAF formula
+  const z1 = median + (slope / contrast) * (1 - midpoint);
+  const z2 = median + (slope / contrast) * (n - midpoint);
 
+  // Clamp to sample range
   return {
-    min: Math.max(sample[0]!, adjustedMin),
-    max: Math.min(sample[n - 1]!, adjustedMax),
+    min: Math.max(sample[0]!, Math.min(z1, z2)),
+    max: Math.min(sample[n - 1]!, Math.max(z1, z2)),
   };
 }
 
@@ -213,8 +342,6 @@ export function percentileRange(pixels: Float64Array, low: number, high: number)
 function computeMinMax(pixels: Float64Array): { min: number; max: number } {
   if (pixels.length === 0) return { min: 0, max: 0 };
 
-  // For large arrays (typical astronomical images), use 1st-99th percentile range
-  // to avoid outliers from skewing the display. For small arrays, use absolute min/max.
   if (pixels.length > 100) {
     const clean = sanitizeArray(pixels);
     const sorted = Array.from(clean).sort((a, b) => a - b);
@@ -226,7 +353,6 @@ function computeMinMax(pixels: Float64Array): { min: number; max: number } {
     return { min: sorted[lowIndex], max: sorted[highIndex] };
   }
 
-  // Small arrays: use absolute min/max
   let min = pixels[0];
   let max = pixels[0];
   for (let i = 1; i < pixels.length; i++) {
@@ -236,14 +362,17 @@ function computeMinMax(pixels: Float64Array): { min: number; max: number } {
   return { min, max };
 }
 
-type ScaleFn = (value: number, min: number, max: number) => number;
+/** Compute median of a Float64Array */
+function computeMedian(pixels: Float64Array): number {
+  if (pixels.length === 0) return 0;
+  const sorted = Array.from(pixels).sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0
+    ? (sorted[mid - 1]! + sorted[mid]!) / 2
+    : sorted[mid]!;
+}
 
-const SCALE_FUNCTIONS: Record<string, ScaleFn> = {
-  linear: linearScale,
-  log: logScale,
-  sqrt: sqrtScale,
-  asinh: asinhScale,
-};
+type ScaleFn = (value: number, min: number, max: number) => number;
 
 export function applyScaling(pixels: Float64Array, params: ScalingParams): ScalingResult {
   if (pixels.length === 0) {
@@ -290,7 +419,48 @@ export function applyScaling(pixels: Float64Array, params: ScalingParams): Scali
     actualMax = params.max ?? max;
   }
 
-  const scaleFn = SCALE_FUNCTIONS[params.method] ?? linearScale;
+  // Build the appropriate scale function with parameters
+  let scaleFn: ScaleFn;
+  switch (params.method) {
+    case 'log':
+      scaleFn = (v, mn, mx) => logScale(v, mn, mx, params.logBase);
+      break;
+    case 'asinh':
+      scaleFn = (v, mn, mx) => asinhScale(v, mn, mx, params.softening ?? DEFAULT_ASINH_SOFTENING);
+      break;
+    case 'sinh':
+      scaleFn = (v, mn, mx) => sinhScale(v, mn, mx, params.softening ?? DEFAULT_SINH_Q);
+      break;
+    case 'mtf': {
+      // Auto-estimate midtone from median of normalized pixel values if not provided
+      let midtone = params.midtone;
+      if (midtone === undefined) {
+        if (actualMax > actualMin) {
+          // Normalize pixels and compute median
+          const normalized = new Float64Array(clean.length);
+          for (let i = 0; i < clean.length; i++) {
+            normalized[i] = Math.max(0, Math.min(1, (clean[i] - actualMin) / (actualMax - actualMin)));
+          }
+          midtone = computeMedian(normalized);
+          // Clamp away from extremes
+          midtone = Math.max(0.01, Math.min(0.99, midtone));
+        } else {
+          midtone = 0.5;
+        }
+      }
+      const m = midtone;
+      scaleFn = (v, mn, mx) => mtfScale(v, mn, mx, m);
+      break;
+    }
+    case 'sqrt':
+      scaleFn = sqrtScale;
+      break;
+    case 'linear':
+    default:
+      scaleFn = linearScale;
+      break;
+  }
+
   const data = new Float64Array(clean.length);
   const underflow: number[] = [];
   const overflow: number[] = [];

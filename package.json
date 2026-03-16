@@ -46,6 +46,7 @@
   "dependencies": {
     "aladin-lite": "^3.6.0",
     "d3": "^7.9.0",
+    "healpix": "^1.0.0",
     "openseadragon": "^6.0.2",
     "svelte": "^5.0.0",
     "svelte-routing": "^2.0.0"

@@ -1,6 +1,6 @@
 /** Image viewer types for HiPS tile viewing, scaling, colormaps, and interpolation */
 
-export type ScalingFunction = 'linear' | 'log' | 'sqrt' | 'asinh' | 'histogram' | 'zscale' | 'percentile';
+export type ScalingFunction = 'linear' | 'log' | 'sqrt' | 'asinh' | 'sinh' | 'mtf' | 'histogram' | 'zscale' | 'percentile';
 
 export type ColorMapName = 'grayscale' | 'viridis' | 'plasma' | 'inferno' | 'hot' | 'cool' | 'red' | 'green' | 'blue';
 
@@ -15,6 +15,12 @@ export interface ScalingParams {
   percentileHigh?: number;
   /** Number of samples for ZScale */
   zscaleContrast?: number;
+  /** Softening parameter for asinh/sinh (0-1, default 0.1 for asinh, 3 for sinh Q) */
+  softening?: number;
+  /** Midtone balance for MTF (0-1, auto-estimated from median if omitted) */
+  midtone?: number;
+  /** Log base (default 1000) */
+  logBase?: number;
 }
 
 export interface ScalingResult {
@@ -82,7 +88,7 @@ export interface ViewerState {
   interpolation: InterpolationMethod;
 }
 
-const SCALING_FUNCTIONS: readonly ScalingFunction[] = ['linear', 'log', 'sqrt', 'asinh', 'histogram', 'zscale', 'percentile'];
+const SCALING_FUNCTIONS: readonly ScalingFunction[] = ['linear', 'log', 'sqrt', 'asinh', 'sinh', 'mtf', 'histogram', 'zscale', 'percentile'];
 const COLOR_MAP_NAMES: readonly ColorMapName[] = ['grayscale', 'viridis', 'plasma', 'inferno', 'hot', 'cool', 'red', 'green', 'blue'];
 const INTERPOLATION_METHODS: readonly InterpolationMethod[] = ['nearest', 'bilinear', 'bicubic', 'lanczos'];
 
@@ -111,6 +117,9 @@ export function isValidScalingParams(v: unknown): v is ScalingParams {
   if (o.percentileLow !== undefined && typeof o.percentileLow !== 'number') return false;
   if (o.percentileHigh !== undefined && typeof o.percentileHigh !== 'number') return false;
   if (o.zscaleContrast !== undefined && typeof o.zscaleContrast !== 'number') return false;
+  if (o.softening !== undefined && typeof o.softening !== 'number') return false;
+  if (o.midtone !== undefined && typeof o.midtone !== 'number') return false;
+  if (o.logBase !== undefined && typeof o.logBase !== 'number') return false;
   return true;
 }
 

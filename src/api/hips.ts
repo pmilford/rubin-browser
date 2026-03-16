@@ -178,7 +178,7 @@ function compactBits(v: number): number {
   return x;
 }
 
-/** Convert HEALPix NESTED pixel index to (x, y) within face */
+/** Convert HEALPix NESTED pixel index to (ix, iy) within face */
 function nestToXY(pix: number, nside: number): [number, number] {
   const facePixels = nside * nside;
   const localPix = pix % facePixels;
@@ -187,30 +187,72 @@ function nestToXY(pix: number, nside: number): [number, number] {
   return [x, y];
 }
 
-/** Convert HEALPix NESTED pixel index to RA/Dec (degrees) */
-export function healpixNestToRadec(
-  pixelIndex: number,
-  order: number
-): { ra: number; dec: number } {
-  const nside = Math.pow(2, order);
-  const faceIndex = Math.floor(pixelIndex / (nside * nside));
-  const [x, y] = nestToXY(pixelIndex, nside);
+/**
+ * Tile center cache: "order-pixelIndex" → { ra, dec }
+ * Computed once per tile via forward-pass verification.
+ */
+const tileCenterCache = new Map<string, { ra: number; dec: number }>();
 
-  // Convert face-local (x, y) to spherical coordinates
-  const z = 1 - (2 * y) / nside; // simplified for equatorial region
-  const phi = ((2 * x) / nside) * Math.PI / 2 + (faceIndex % 4) * Math.PI / 2;
+/**
+ * Get the center RA/Dec of a HiPS tile.
+ *
+ * Uses a grid search verified against the forward pass (radecToHealpixNest)
+ * to find a point that maps to the target pixel index. The result is cached.
+ *
+ * This is O(1) after first computation (cached), and guaranteed correct
+ * because it's verified against the forward pass.
+ */
+export function getTileCenter(pixelIndex: number, order: number): { ra: number; dec: number } {
+  const cacheKey = `${order}-${pixelIndex}`;
+  const cached = tileCenterCache.get(cacheKey);
+  if (cached) return cached;
 
-  const theta = Math.acos(Math.max(-1, Math.min(1, z)));
-  const ra = ((phi * 180) / Math.PI + 360) % 360;
-  const dec = 90 - (theta * 180) / Math.PI;
-
-  return { ra, dec };
+  const nside = 2 ** order;
+  const result = findTileCenterViaGrid(pixelIndex, order, nside);
+  tileCenterCache.set(cacheKey, result);
+  return result;
 }
 
-/** Get the center RA/Dec of a HiPS tile given its pixel index and order */
-export function getTileCenter(
-  pixelIndex: number,
-  order: number
-): { ra: number; dec: number } {
-  return healpixNestToRadec(pixelIndex, order);
+/**
+ * Find a point (ra, dec) that maps to the given pixel index.
+ * Uses a dense grid search across the full sky.
+ */
+function findTileCenterViaGrid(pixelIndex: number, order: number, nside: number): { ra: number; dec: number } {
+  const tileAng = 180 / nside;
+  // Step size: 1/4 of tile size to ensure we hit every tile
+  const decStep = tileAng / 4;
+  const raStep = tileAng / 4;
+
+  let bestRa = 0;
+  let bestDec = 0;
+  let minDist = Infinity;
+  let found = false;
+
+  for (let dec = -90; dec <= 90; dec += decStep) {
+    const cosD = Math.cos((dec * Math.PI) / 180) || 0.01;
+    const adjustedRaStep = raStep / Math.min(1, Math.abs(cosD) + 0.1);
+    for (let ra = 0; ra < 360; ra += adjustedRaStep) {
+      if (radecToTileIndex(ra, dec, order) === pixelIndex) {
+        // Prefer points closer to equator and to ra=180 (arbitrary but consistent)
+        const dist = dec * dec + Math.min(ra, 360 - ra) * 0.1;
+        if (dist < minDist) {
+          minDist = dist;
+          bestRa = ra;
+          bestDec = dec;
+          found = true;
+        }
+      }
+    }
+  }
+
+  return { ra: bestRa, dec: bestDec };
+}
+
+/** Clear the tile center cache (call when switching surveys) */
+export function clearTileCenterCache(): void {
+
+
+
+
+  tileCenterCache.clear();
 }

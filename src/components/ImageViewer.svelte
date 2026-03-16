@@ -93,10 +93,12 @@
   }
 
   function zoomToOrder(zoom: number): number {
-    // Offset by +1 so tiles are ~2× FOV instead of up to 4-16×.
-    // This provides better resolution at all zoom levels.
-    const order = Math.floor((zoom + 1) / 1.5);
-    return Math.max(0, Math.min(13, order));
+    // Standard HiPS: each order doubles the resolution.
+    // At zoom=0 (FOV=180°), order 0 is appropriate (12 base tiles cover the sky).
+    // Each zoom step halves FOV, so order ≈ zoom for good tile resolution.
+    // We want tiles slightly smaller than the FOV for good coverage.
+    const order = Math.max(0, Math.round(zoom));
+    return Math.min(13, order);
   }
 
   /**
@@ -132,12 +134,10 @@
     const logicalY = py - panOffsetY;
 
     const scale = canvasWidth / ((fov * Math.PI) / 180);
-    // Convert pixel offsets to angular offsets in RADIANS (scale is in px/rad,
-    // so division yields degrees — must convert to radians for trig functions)
-    const uDeg = (logicalX - canvasWidth / 2) / scale;
-    const vDeg = -(logicalY - canvasHeight / 2) / scale;
-    const u = (uDeg * Math.PI) / 180;
-    const v = (vDeg * Math.PI) / 180;
+    // Convert pixel offsets to angular offsets in radians.
+    // scale is px/radian, so pixelOffset / scale = radians.
+    const u = (logicalX - canvasWidth / 2) / scale;
+    const v = -(logicalY - canvasHeight / 2) / scale;
     const rho = Math.sqrt(u * u + v * v);
     const c = Math.atan(rho);
     const cosDec0 = Math.cos((dec * Math.PI) / 180);
@@ -174,14 +174,13 @@
   function getVisibleTiles(centerRa: number, centerDec: number, viewFov: number, order: number): TileKey[] {
     const tiles: TileKey[] = [];
     const tileAngularSize = 180 / Math.pow(2, order);
-    const coverageRadius = viewFov / 2 + tileAngularSize;
+    // Add 2-tile margin on each side for seamless coverage during pan
+    const coverageRadius = viewFov / 2 + tileAngularSize * 2;
 
     const decRange = coverageRadius;
     const cosDec = Math.cos((centerDec * Math.PI) / 180) || 0.01;
     const raRange = coverageRadius / cosDec;
 
-    const decMin = Math.max(-90, centerDec - decRange);
-    const decMax = Math.min(90, centerDec + decRange);
     const decSteps = Math.max(1, Math.ceil(decRange / tileAngularSize));
     const raSteps = Math.max(1, Math.ceil(raRange / tileAngularSize));
 
@@ -198,6 +197,7 @@
         const pix = radecToTileIndex(normalizedRa, tileDec, order);
         if (!seen.has(pix)) {
           seen.add(pix);
+          // Use the grid point as a seed for tile center search
           tiles.push({ order, pixelIndex: pix });
         }
       }
@@ -279,7 +279,7 @@
 
       const img = tileCache.get(cacheKey);
       if (img && img.complete && img.naturalWidth > 0) {
-        drawTile(context, img, tile.order, tile.pixelIndex);
+        drawTile(context, img, tile);
       }
     }
 
@@ -293,7 +293,7 @@
         const img = tileCache.get(cacheKey);
         if (img && img.complete && img.naturalWidth > 0) {
           context.globalAlpha = overlay.opacity / 100;
-          drawTile(context, img, tile.order, tile.pixelIndex);
+          drawTile(context, img, tile);
           context.globalAlpha = 1.0;
         }
       }
@@ -303,18 +303,17 @@
   function drawTile(
     context: CanvasRenderingContext2D,
     img: HTMLImageElement,
-    order: number,
-    pixelIndex: number
+    tile: TileKey
   ) {
-    const nside = Math.pow(2, order);
+    const nside = Math.pow(2, tile.order);
     const totalPixels = 12 * nside * nside;
-    if (pixelIndex < 0 || pixelIndex >= totalPixels) return;
+    if (tile.pixelIndex < 0 || tile.pixelIndex >= totalPixels) return;
 
     const tileAngularSize = 180 / nside;
-    const tileCenter = getTileCenter(pixelIndex, order);
+    const tileCenter = getTileCenter(tile.pixelIndex, tile.order);
     if (!tileCenter) return;
 
-    const [tileRa, tileDec] = tileCenter;
+    const [tileRa, tileDec] = [tileCenter.ra, tileCenter.dec];
 
     // Check if tile center is in front of viewer
     const cosDec0 = Math.cos((dec * Math.PI) / 180);
@@ -360,53 +359,6 @@
       screenHalfSize * 2
     );
     context.restore();
-  }
-
-  /**
-   * Estimate tile center RA/Dec from pixel index by searching around the current view center.
-   */
-  function estimateTileCenter(
-    pixelIndex: number,
-    order: number,
-    viewRa: number,
-    viewDec: number
-  ): [number, number] | null {
-    const tileAngularSize = 180 / Math.pow(2, order);
-    const steps = 8;
-    const range = tileAngularSize * 3;
-
-    let bestRa = viewRa;
-    let bestDec = viewDec;
-    let minDist = Infinity;
-
-    for (let di = -steps; di <= steps; di++) {
-      for (let ri = -steps; ri <= steps; ri++) {
-        const testDec = viewDec + (di / steps) * range;
-        if (testDec < -90 || testDec > 90) continue;
-
-        const cosD = Math.cos((testDec * Math.PI) / 180) || 0.01;
-        const testRa = viewRa + (ri / steps) * range / cosD;
-        const normalizedRa = ((testRa % 360) + 360) % 360;
-
-        const pix = radecToTileIndex(normalizedRa, Math.max(-89.99, Math.min(89.99, testDec)), order);
-
-        if (pix === pixelIndex) {
-          const raDiff = Math.min(
-            Math.abs(normalizedRa - viewRa),
-            360 - Math.abs(normalizedRa - viewRa)
-          );
-          const dist = Math.sqrt(raDiff * raDiff + (testDec - viewDec) * (testDec - viewDec));
-          if (dist < minDist) {
-            minDist = dist;
-            bestRa = normalizedRa;
-            bestDec = testDec;
-          }
-        }
-      }
-    }
-
-    if (minDist < Infinity) return [bestRa, bestDec];
-    return null;
   }
 
   // --- Tile Loading ---
@@ -742,6 +694,8 @@
   function loadOverlayTiles() {
     const order = zoomToOrder(zoomLevel);
     const fmt = resolveFormat();
+    const auth = rspToken ? getAuthHeader() : {};
+    const useAuth = rspToken && Object.keys(auth).length > 0;
 
     for (const [, overlay] of overlays) {
       const visibleTiles = getVisibleTiles(ra, dec, fov, order);
@@ -752,15 +706,35 @@
         const url = buildUrl(tile.order, tile.pixelIndex, fmt, overlay.baseUrl);
         const img = new Image();
         img.crossOrigin = 'anonymous';
+        pendingLoads.add(img);
+
         img.onload = () => {
+          pendingLoads.delete(img);
           tileCache.set(cacheKey, img);
           scheduleRender();
         };
-        // Gracefully handle missing overlay tiles (HiPS order not available)
         img.onerror = () => {
+          pendingLoads.delete(img);
           // Silently skip — overlay may not have tiles at this order
         };
-        img.src = url;
+
+        // Use authenticated fetch for Rubin overlays
+        if (useAuth && overlay.baseUrl.includes('data.lsst.cloud')) {
+          fetch(url, { headers: auth })
+            .then(resp => {
+              if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+              return resp.blob();
+            })
+            .then(blob => {
+              const objUrl = URL.createObjectURL(blob);
+              img.src = objUrl;
+            })
+            .catch(() => {
+              pendingLoads.delete(img);
+            });
+        } else {
+          img.src = url;
+        }
       }
     }
   }

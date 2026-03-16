@@ -75,7 +75,7 @@
     onClose?: () => void;
   } = $props();
 
-  const scalingOptions: ScalingFunction[] = ['linear', 'log', 'sqrt', 'asinh', 'histogram', 'zscale', 'percentile'];
+  const scalingOptions: ScalingFunction[] = ['linear', 'log', 'sqrt', 'asinh', 'sinh', 'mtf', 'histogram', 'zscale', 'percentile'];
   const colorMapOptions: ColorMapName[] = ['grayscale', 'viridis', 'plasma', 'inferno', 'hot', 'cool', 'red', 'green', 'blue'];
   const interpolationOptions: InterpolationMethod[] = ['nearest', 'bilinear', 'bicubic', 'lanczos'];
 

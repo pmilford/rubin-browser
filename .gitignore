@@ -8,3 +8,7 @@ tests/data/*.fits
 tests/data/*.vot
 !tests/fixtures/.gitkeep
 .playwright/
+
+test-results/
+tests/ui/screenshots/
+

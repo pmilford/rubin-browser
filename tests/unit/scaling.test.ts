@@ -4,6 +4,8 @@ import {
   logScale,
   sqrtScale,
   asinhScale,
+  sinhScale,
+  mtfScale,
   histogramEqualize,
   zscaleRange,
   percentileRange,
@@ -66,7 +68,7 @@ describe('logScale', () => {
     expect(result).toBeLessThan(1);
   });
 
-  it('log scale compresses high values', () => {
+  it('log scale compresses high values (mid maps above 0.5)', () => {
     const logMid = logScale(50, 0, 100);
     const linMid = linearScale(50, 0, 100);
     expect(logMid).toBeGreaterThan(linMid);
@@ -83,6 +85,19 @@ describe('logScale', () => {
 
   it('clamps output to [0, 1]', () => {
     expect(logScale(200, 0, 100)).toBeLessThanOrEqual(1);
+  });
+
+  it('uses configurable base', () => {
+    const base10 = logScale(50, 0, 100, 10);
+    const base1000 = logScale(50, 0, 100, 1000);
+    // Higher base = more compression of high values
+    expect(base1000).toBeGreaterThan(base10);
+  });
+
+  it('follows formula: log(1 + x*(base-1)) / log(base)', () => {
+    // x = (50 - 0) / 100 = 0.5, base = 1000
+    const expected = Math.log(1 + 0.5 * 999) / Math.log(1000);
+    expect(logScale(50, 0, 100, 1000)).toBeCloseTo(expected);
   });
 });
 
@@ -142,6 +157,111 @@ describe('asinhScale', () => {
 
   it('clamps above max to 1', () => {
     expect(asinhScale(200, 0, 100)).toBe(1);
+  });
+
+  it('follows Astropy formulation: asinh(x/a) / asinh(1/a)', () => {
+    const a = 0.1; // default softening
+    const x = 0.5; // normalized (50 in range 0-100)
+    const expected = Math.asinh(x / a) / Math.asinh(1 / a);
+    expect(asinhScale(50, 0, 100, a)).toBeCloseTo(expected);
+  });
+
+  it('smaller softening gives more aggressive stretch', () => {
+    const aggressive = asinhScale(20, 0, 100, 0.05);
+    const moderate = asinhScale(20, 0, 100, 0.5);
+    // More aggressive = faint values pushed higher
+    expect(aggressive).toBeGreaterThan(moderate);
+  });
+});
+
+describe('sinhScale', () => {
+  it('returns 0 for min value', () => {
+    expect(sinhScale(0, 0, 100)).toBeCloseTo(0);
+  });
+
+  it('returns 1 for max value', () => {
+    expect(sinhScale(100, 0, 100)).toBeCloseTo(1);
+  });
+
+  it('returns value between 0 and 1 for mid-range', () => {
+    const result = sinhScale(50, 0, 100);
+    expect(result).toBeGreaterThan(0);
+    expect(result).toBeLessThan(1);
+  });
+
+  it('returns 0 when max == min', () => {
+    expect(sinhScale(5, 5, 5)).toBe(0);
+  });
+
+  it('follows formula: sinh(x*Q) / sinh(Q)', () => {
+    const q = 3;
+    const x = 0.5;
+    const expected = Math.sinh(x * q) / Math.sinh(q);
+    expect(sinhScale(50, 0, 100, q)).toBeCloseTo(expected);
+  });
+
+  it('sinh compresses faint values (mid maps below 0.5)', () => {
+    const sinhMid = sinhScale(50, 0, 100);
+    expect(sinhMid).toBeLessThan(0.5);
+  });
+
+  it('higher Q gives more compression', () => {
+    const lowQ = sinhScale(30, 0, 100, 1);
+    const highQ = sinhScale(30, 0, 100, 5);
+    expect(highQ).toBeLessThan(lowQ);
+  });
+
+  it('clamps below min to 0', () => {
+    expect(sinhScale(-10, 0, 100)).toBe(0);
+  });
+
+  it('clamps above max to 1', () => {
+    expect(sinhScale(200, 0, 100)).toBe(1);
+  });
+});
+
+describe('mtfScale', () => {
+  it('returns 0 for min value', () => {
+    expect(mtfScale(0, 0, 100)).toBeCloseTo(0);
+  });
+
+  it('returns 1 for max value', () => {
+    expect(mtfScale(100, 0, 100)).toBeCloseTo(1);
+  });
+
+  it('m=0.5 is approximately identity', () => {
+    expect(mtfScale(25, 0, 100, 0.5)).toBeCloseTo(0.25, 1);
+    expect(mtfScale(50, 0, 100, 0.5)).toBeCloseTo(0.50, 1);
+    expect(mtfScale(75, 0, 100, 0.5)).toBeCloseTo(0.75, 1);
+  });
+
+  it('MTF(m) = 0.5 (midtone maps to 0.5)', () => {
+    // When x = m, MTF should return 0.5
+    // x = (value - min) / (max - min)
+    // For m=0.3, x=0.3 means value = 0.3 * 100 = 30
+    expect(mtfScale(30, 0, 100, 0.3)).toBeCloseTo(0.5, 1);
+  });
+
+  it('lower midtone brightens image', () => {
+    const bright = mtfScale(30, 0, 100, 0.2);
+    const normal = mtfScale(30, 0, 100, 0.5);
+    expect(bright).toBeGreaterThan(normal);
+  });
+
+  it('higher midtone darkens image', () => {
+    const dark = mtfScale(30, 0, 100, 0.8);
+    const normal = mtfScale(30, 0, 100, 0.5);
+    expect(dark).toBeLessThan(normal);
+  });
+
+  it('returns 0 when max == min', () => {
+    expect(mtfScale(5, 5, 5)).toBe(0);
+  });
+
+  it('handles extreme midtone values', () => {
+    const result = mtfScale(50, 0, 100, 0.01);
+    expect(result).toBeGreaterThanOrEqual(0);
+    expect(result).toBeLessThanOrEqual(1);
   });
 });
 
@@ -203,13 +323,10 @@ describe('histogramEqualize', () => {
   });
 
   it('excludes zero pixels from histogram computation', () => {
-    // Many zeros (background) + few signal pixels
     const pixels = new Float64Array([0, 0, 0, 0, 0, 0, 0, 0, 50, 100, 200]);
     const result = histogramEqualize(pixels);
-    // Zero pixels should map to 0
     expect(result[0]).toBe(0);
     expect(result[7]).toBe(0);
-    // Signal pixels should be spread across [0, 1]
     expect(result[8]).toBeGreaterThan(0);
     expect(result[10]).toBeCloseTo(1, 1);
   });
@@ -217,22 +334,18 @@ describe('histogramEqualize', () => {
   it('returns uniform value when all pixels are the same', () => {
     const pixels = new Float64Array([0, 0, 0, 0]);
     const result = histogramEqualize(pixels);
-    // When all pixels are identical, histogram equalization returns middle value
     for (let i = 0; i < result.length; i++) {
       expect(result[i]).toBe(0.5);
     }
   });
 
   it('does not let zero pixels skew the histogram', () => {
-    // 90% zeros, 10% real signal — equalization should work on signal only
     const pixels = new Float64Array(100);
     for (let i = 0; i < 90; i++) pixels[i] = 0;
-    for (let i = 90; i < 100; i++) pixels[i] = (i - 89) * 10; // 10, 20, ..., 100
+    for (let i = 90; i < 100; i++) pixels[i] = (i - 89) * 10;
     const result = histogramEqualize(pixels);
-    // Zeros stay at 0
     expect(result[0]).toBe(0);
     expect(result[89]).toBe(0);
-    // Non-zeros get proper equalization
     expect(result[90]).toBeGreaterThan(0);
     expect(result[99]).toBeCloseTo(1, 1);
   });
@@ -311,10 +424,8 @@ describe('zscaleRange', () => {
   });
 
   it('excludes zero pixels from range computation', () => {
-    // Many zeros + real signal
     const pixels = new Float64Array([0, 0, 0, 0, 0, 50, 60, 70, 80, 90, 100]);
     const { min, max } = zscaleRange(pixels);
-    // Range should be based on non-zero values only
     expect(min).toBeGreaterThanOrEqual(50);
     expect(max).toBeLessThanOrEqual(100);
   });
@@ -333,6 +444,31 @@ describe('zscaleRange', () => {
     expect(Number.isFinite(min)).toBe(true);
     expect(Number.isFinite(max)).toBe(true);
     expect(min).toBeGreaterThanOrEqual(100);
+  });
+
+  it('iterative rejection converges for linear data', () => {
+    // Pure linear data: no outliers, fit should converge immediately
+    const pixels = new Float64Array(100);
+    for (let i = 0; i < 100; i++) pixels[i] = i + 1; // 1..100
+    const { min, max } = zscaleRange(pixels);
+    expect(min).toBeGreaterThanOrEqual(1);
+    expect(max).toBeLessThanOrEqual(100);
+    expect(max).toBeGreaterThan(min);
+  });
+
+  it('rejects outliers with iterative sigma rejection', () => {
+    // Linear gradient with a few extreme outliers
+    const pixels = new Float64Array(200);
+    for (let i = 0; i < 200; i++) pixels[i] = i + 1;
+    // Add extreme outliers
+    pixels[195] = 10000;
+    pixels[196] = 20000;
+    pixels[197] = 50000;
+    pixels[198] = 100000;
+    pixels[199] = 500000;
+    const { min, max } = zscaleRange(pixels);
+    // Range should NOT extend to 500000 — outliers should be rejected
+    expect(max).toBeLessThan(500000);
   });
 });
 
@@ -367,7 +503,7 @@ describe('percentileRange', () => {
   it('handles NaN by treating as 0', () => {
     const pixels = new Float64Array([NaN, 10, 20, 30]);
     const { min, max } = percentileRange(pixels, 0, 100);
-    expect(min).toBe(0); // NaN sanitized to 0
+    expect(min).toBe(0);
     expect(max).toBe(30);
   });
 
@@ -403,7 +539,7 @@ describe('applyScaling', () => {
     const result = applyScaling(pixels, { method: 'log' });
     expect(result.data[0]).toBeCloseTo(0);
     expect(result.data[2]).toBeCloseTo(1);
-    // Log compresses high values
+    // Log compresses high values (mid maps above 0.5)
     expect(result.data[1]).toBeGreaterThan(0.5);
   });
 
@@ -424,11 +560,38 @@ describe('applyScaling', () => {
     expect(result.data[1]).toBeLessThan(1);
   });
 
+  it('dispatches to sinh scaling', () => {
+    const pixels = new Float64Array([0, 50, 100]);
+    const result = applyScaling(pixels, { method: 'sinh' });
+    expect(result.data[0]).toBeCloseTo(0);
+    expect(result.data[2]).toBeCloseTo(1);
+    // Sinh compresses faint values (mid maps below 0.5)
+    expect(result.data[1]).toBeLessThan(0.5);
+  });
+
+  it('dispatches to mtf scaling', () => {
+    const pixels = new Float64Array([0, 50, 100]);
+    const result = applyScaling(pixels, { method: 'mtf', midtone: 0.3 });
+    expect(result.data[0]).toBeCloseTo(0);
+    expect(result.data[2]).toBeCloseTo(1);
+    expect(result.data[1]).toBeGreaterThan(0);
+    expect(result.data[1]).toBeLessThan(1);
+  });
+
+  it('mtf auto-estimates midtone from median when not provided', () => {
+    const pixels = new Float64Array([0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]);
+    const result = applyScaling(pixels, { method: 'mtf' });
+    expect(result.data.length).toBe(11);
+    for (let i = 0; i < result.data.length; i++) {
+      expect(result.data[i]).toBeGreaterThanOrEqual(0);
+      expect(result.data[i]).toBeLessThanOrEqual(1);
+    }
+  });
+
   it('dispatches to histogram equalization', () => {
     const pixels = new Float64Array([1, 2, 3, 4, 5]);
     const result = applyScaling(pixels, { method: 'histogram' });
     expect(result.data.length).toBe(5);
-    // Histogram: no underflow/overflow tracking
     expect(result.underflow).toEqual([]);
     expect(result.overflow).toEqual([]);
     expect(result.actualMin).toBe(1);
@@ -474,8 +637,8 @@ describe('applyScaling', () => {
     const result = applyScaling(pixels, { method: 'linear', min: 20, max: 80 });
     expect(result.actualMin).toBe(20);
     expect(result.actualMax).toBe(80);
-    expect(result.underflow).toEqual([0]); // 0 < 20
-    expect(result.overflow).toEqual([2]); // 100 > 80
+    expect(result.underflow).toEqual([0]);
+    expect(result.overflow).toEqual([2]);
   });
 
   it('tracks underflow and overflow indices', () => {
@@ -536,7 +699,7 @@ describe('applyScaling', () => {
   });
 
   it('all scaling methods produce output in [0, 1]', () => {
-    const methods = ['linear', 'log', 'sqrt', 'asinh'] as const;
+    const methods = ['linear', 'log', 'sqrt', 'asinh', 'sinh', 'mtf'] as const;
     const pixels = new Float64Array([0, 1, 5, 10, 50, 100, 500, 1000]);
     for (const method of methods) {
       const result = applyScaling(pixels, { method });
@@ -545,5 +708,20 @@ describe('applyScaling', () => {
         expect(result.data[i]).toBeLessThanOrEqual(1);
       }
     }
+  });
+
+  it('respects softening parameter for asinh', () => {
+    const pixels = new Float64Array([0, 30, 60, 100]);
+    const aggressive = applyScaling(pixels, { method: 'asinh', softening: 0.05 });
+    const moderate = applyScaling(pixels, { method: 'asinh', softening: 0.5 });
+    // More aggressive softening pushes faint values higher
+    expect(aggressive.data[1]).toBeGreaterThan(moderate.data[1]);
+  });
+
+  it('respects logBase parameter', () => {
+    const pixels = new Float64Array([0, 50, 100]);
+    const result = applyScaling(pixels, { method: 'log', logBase: 10 });
+    // log(1 + 0.5*9) / log(10) = log(5.5)/log(10) ≈ 0.74
+    expect(result.data[1]).toBeCloseTo(Math.log(1 + 0.5 * 9) / Math.log(10), 1);
   });
 });
