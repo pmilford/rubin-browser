@@ -85,11 +85,6 @@ describe('SidePanel', () => {
       expect(screen.getByText('Survey Overlays')).toBeTruthy();
     });
 
-    it('renders pixel readout section', () => {
-      render(SidePanel, { props: { open: true } });
-      expect(screen.getByText('Pixel Readout')).toBeTruthy();
-    });
-
     it('does not render time series section without epochs', () => {
       render(SidePanel, { props: { open: true, epochs: [] } });
       expect(screen.queryByText('Time Series')).toBeNull();

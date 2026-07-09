@@ -394,10 +394,5 @@ describe('TileViewer', () => {
       expect(screen.getByText('Blink')).toBeTruthy();
     });
 
-    it('shows pixel readout section in side panel', async () => {
-      render(TileViewer);
-      await fireEvent.click(screen.getByLabelText('Toggle controls panel'));
-      expect(screen.getByText('Pixel Readout')).toBeTruthy();
-    });
   });
 });

@@ -7,7 +7,6 @@
   import BlinkController from './BlinkController.svelte';
   import TimeSlider from './TimeSlider.svelte';
   import Histogram from './Histogram.svelte';
-  import PixelReadout from './PixelReadout.svelte';
 
   let {
     open = false,
@@ -247,22 +246,6 @@
         </section>
       {/if}
 
-      <!-- Pixel readout -->
-      <section class="panel-section">
-        <button
-          class="section-toggle"
-          onclick={() => toggleSection('pixel')}
-          aria-expanded={activeSection === 'pixel'}
-        >
-          <span class="toggle-arrow" class:open={activeSection === 'pixel'}>▶</span>
-          Pixel Readout
-        </button>
-        {#if activeSection === 'pixel'}
-          <div class="section-content">
-            <PixelReadout ra={0} dec={0} pixelValue={0} pixelX={0} pixelY={0} visible={true} />
-          </div>
-        {/if}
-      </section>
     </div>
   </aside>
 {/if}

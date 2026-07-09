@@ -149,6 +149,37 @@ test.describe('Interaction outcomes', () => {
     expect(await page.locator('[role="alert"]').isVisible().catch(() => false)).toBe(false);
   });
 
+  test('live pixel readout appears under the cursor and tracks it (not hardcoded)', async ({
+    page,
+  }) => {
+    const canvas = page.locator('.hips-canvas').first();
+    const box = (await canvas.boundingBox())!;
+    const readout = page.locator('[aria-label="Pixel readout"]');
+
+    // Not shown until the cursor is over the canvas.
+    expect(await readout.isVisible().catch(() => false)).toBe(false);
+
+    // Hover one point → readout appears with real (non-zero) coordinates.
+    await page.mouse.move(box.x + box.width * 0.4, box.y + box.height * 0.45);
+    await page.waitForTimeout(200);
+    await expect(readout).toBeVisible();
+    const textA = (await readout.textContent()) ?? '';
+    expect(textA).toContain('RA');
+    // The old bug hardcoded RA/Dec to 0 → 00h00m; a live readout must not be all-zero.
+    expect(textA).not.toContain('00h00m00.00s');
+
+    // Move to a different point → the readout must CHANGE (proves it's live).
+    await page.mouse.move(box.x + box.width * 0.6, box.y + box.height * 0.6);
+    await page.waitForTimeout(200);
+    const textB = (await readout.textContent()) ?? '';
+    expect(textB).not.toEqual(textA);
+
+    // Leaving the canvas hides it.
+    await page.mouse.move(box.x + box.width / 2, box.y - 40);
+    await page.waitForTimeout(200);
+    expect(await readout.isVisible().catch(() => false)).toBe(false);
+  });
+
   test('changing colormap actually repaints the canvas', async ({ page }) => {
     await page.locator('button[aria-label="Toggle controls panel"]').click();
     await page.waitForTimeout(300);

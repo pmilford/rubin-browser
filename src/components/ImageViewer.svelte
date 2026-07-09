@@ -20,6 +20,7 @@
   } from '@hscmap/healpix';
   import { applyScaling } from '../utils/scaling.js';
   import { applyColorMap } from '../utils/colormap.js';
+  import PixelReadout from './PixelReadout.svelte';
   import type { ViewerState, ScalingFunction, ColorMapName, InterpolationMethod } from '../types/image.js';
 
   let {
@@ -541,7 +542,55 @@
     (e.target as Element).setPointerCapture(e.pointerId);
   }
 
+  // --- Live cursor readout (RA/Dec + sampled luminance under the pointer) ---
+
+  interface CursorReadout {
+    ra: number;
+    dec: number;
+    px: number;
+    py: number;
+    value: number | null; // 0-1 relative luminance of the displayed pixel
+  }
+  let cursorReadout = $state<CursorReadout | null>(null);
+  let lastValueSample = 0;
+
+  /**
+   * Update the cursor readout from a pointer position. RA/Dec is recomputed
+   * every move (cheap); the pixel value is sampled from the canvas at a throttled
+   * ~15 Hz to avoid frequent getImageData readbacks. Value is relative luminance
+   * of the DISPLAYED pixel (JPEG-derived), not calibrated flux.
+   */
+  function updateCursorReadout(e: PointerEvent) {
+    if (!canvasEl) return;
+    const rect = canvasEl.getBoundingClientRect();
+    const px = Math.round(e.clientX - rect.left);
+    const py = Math.round(e.clientY - rect.top);
+    if (px < 0 || py < 0 || px >= canvasWidth || py >= canvasHeight) {
+      cursorReadout = null;
+      return;
+    }
+    const [cRa, cDec] = canvasToSky(currentView(), px, py);
+    let value = cursorReadout?.value ?? null;
+    const now = performance.now();
+    if (ctx && now - lastValueSample > 66) {
+      lastValueSample = now;
+      try {
+        const d = ctx.getImageData(px, py, 1, 1).data;
+        value = (0.299 * d[0]! + 0.587 * d[1]! + 0.114 * d[2]!) / 255;
+      } catch {
+        value = null;
+      }
+    }
+    cursorReadout = { ra: cRa, dec: cDec, px, py, value };
+  }
+
+  function onPointerLeave() {
+    cursorReadout = null;
+  }
+
   function onPointerMove(e: PointerEvent) {
+    updateCursorReadout(e);
+
     if (!isDragging) return;
     const dx = e.clientX - dragStartX;
     const dy = e.clientY - dragStartY;
@@ -1071,10 +1120,22 @@
     onpointermove={onPointerMove}
     onpointerup={onPointerUp}
     onpointercancel={onPointerUp}
+    onpointerleave={onPointerLeave}
     onwheel={onWheel}
     ondblclick={onDblClick}
     onkeydown={onKeyDown}
   ></canvas>
+
+  {#if cursorReadout}
+    <PixelReadout
+      ra={cursorReadout.ra}
+      dec={cursorReadout.dec}
+      pixelValue={cursorReadout.value}
+      pixelX={cursorReadout.px}
+      pixelY={cursorReadout.py}
+      visible={true}
+    />
+  {/if}
 
   <!-- FOV Minimap (Issue #2) -->
   <!-- svelte-ignore a11y_click_events_have_key_events -->
