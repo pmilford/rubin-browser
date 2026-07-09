@@ -28,10 +28,20 @@
     type AlertSet,
     type AlertIndex,
   } from '../data/alerts.js';
+  import {
+    resolveActiveBaseUrl,
+    isRubinUrl,
+    activeBaseLabel,
+    type BaseMode,
+  } from '../utils/baseLayer.js';
+  import { constellationFor } from '../utils/constellation.js';
+  import { cardinalDirection, formatSeparation } from '../utils/skyGeom.js';
+  import { nearestObject } from '../data/objects.js';
   import type { ViewerState, ScalingFunction, ColorMapName, InterpolationMethod } from '../types/image.js';
 
   let {
     hipsBaseUrl = '',
+    baseMode = 'auto' as BaseMode,
     rspToken = '',
     tileFormat = '',
     initialRa = 62.0,
@@ -50,8 +60,12 @@
     showAlerts = false,
     alertTypeMask = 0x1f,
     onViewerStateChange,
+    onBaseResolved,
   }: {
+    /** Explicit base URL override (mainly for tests). When empty, `baseMode` + token drive resolution. */
     hipsBaseUrl?: string;
+    /** Base-layer selection: 'auto' | 'dss' | 'rubin'. Auto degrades to DSS on Rubin failure. */
+    baseMode?: BaseMode;
     rspToken?: string;
     tileFormat?: string;
     initialRa?: number;
@@ -78,10 +92,10 @@
     /** Bitmask of visible AlertTypes. */
     alertTypeMask?: number;
     onViewerStateChange?: (state: ViewerState) => void;
+    /** Fired with the human label of the actually-resolved base survey (reflects auto-fallback). */
+    onBaseResolved?: (label: string) => void;
   } = $props();
 
-  const PUBLIC_HIPS = 'https://alasky.cds.unistra.fr/DSS/DSSColor';
-  const RUBIN_HIPS = 'https://data.lsst.cloud/api/hips/images/color_gri';
   const DEFAULT_FORMAT = 'jpg';
   const DEFAULT_MAX_ORDER = 3;
   const TILE_SIZE = 512;
@@ -94,8 +108,13 @@
   let surveyMaxOrder = $state(DEFAULT_MAX_ORDER);
   let surveyFormat = $state('');
 
+  // Auto-fallback: when Base=Auto and Rubin tiles fail, the viewer degrades to
+  // public DSS WITHOUT user action. `autoFellBack` latches that; it is reset when
+  // the user changes the base selection or the token (see the reset $effect).
+  let autoFellBack = $state(false);
+
   const resolvedBaseUrl = $derived(
-    hipsBaseUrl || (rspToken ? RUBIN_HIPS : PUBLIC_HIPS)
+    hipsBaseUrl || resolveActiveBaseUrl(baseMode, !!rspToken, autoFellBack)
   );
 
   let canvasEl: HTMLCanvasElement;
@@ -564,28 +583,56 @@
 
   // --- Tile Loading ---
 
+  // Minimum failures before auto-fallback / error. Capped by the batch's attempt
+  // count so it still fires at high zoom where only a few tiles are visible.
+  const FALLBACK_MIN_FAILURES = 3;
+
   function loadTiles() {
     if (!canvasEl) return;
     const order = zoomToOrder(zoomLevel);
     const fmt = resolveFormat();
     const visibleTiles = getVisibleTiles(ra, dec, fov, order);
-    const auth = rspToken ? getAuthHeader() : {};
+
+    // Capture the base context for THIS batch. resolvedBaseUrl is a $derived that
+    // can flip mid-batch (once autoFellBack latches), so every async callback in
+    // this batch must read these locals, not the live derived — otherwise the
+    // failure that triggers the fallback would misreport its own host.
+    const batchBaseUrl = resolvedBaseUrl;
+    const batchIsRubin = isRubinUrl(batchBaseUrl);
+    // Only send the Bearer token to the Rubin host — never to public CDS/DSS
+    // (a credentialed cross-origin request there triggers a CORS preflight CDS
+    // rejects, which would make the DSS fallback itself fail).
+    const useAuth = !!rspToken && batchIsRubin;
+    const auth = useAuth ? getAuthHeader() : {};
+    const canAutoFallback = baseMode === 'auto' && !autoFellBack && batchIsRubin;
 
     let loadAttempts = 0;
     let loadFailures = 0;
+    let loadSuccesses = 0;
 
     // Shared failure accounting for BOTH the <img> path and the authenticated
-    // fetch path — previously the fetch path incremented the counter but never
-    // surfaced an error, so Rubin tile failures (404 / no data rights / CORS)
-    // were completely silent ("showing as 0, no sign it failed").
+    // fetch path — previously the fetch path incremented a counter but never
+    // surfaced anything, so Rubin failures were completely silent.
     const recordFailure = () => {
       loadFailures++;
-      if (loadFailures > 5 && loadFailures > loadAttempts * 0.5) {
-        const isRubin = resolvedBaseUrl.includes('data.lsst.cloud');
+      if (loadSuccesses > 0) return; // some tiles rendered → not a wholesale failure
+      if (loadFailures < Math.min(FALLBACK_MIN_FAILURES, loadAttempts)) return;
+
+      if (canAutoFallback) {
+        // Degrade to public DSS automatically. Latching autoFellBack flips
+        // resolvedBaseUrl → the base-change $effect clears the cache and reloads
+        // DSS tiles. A persistent info banner (not the red error) explains it.
+        autoFellBack = true;
+      } else if (batchIsRubin) {
+        // Explicit Rubin choice (or DSS already failed after fallback): the user
+        // picked Rubin deliberately, so tell them to switch rather than silently
+        // swapping their chosen layer.
         showError(
-          isRubin
-            ? 'Rubin tiles unavailable here — your token may lack data rights for this survey/region, or the service is down. Switch the Base layer to “DSS2 Color” to use public imagery.'
-            : 'Multiple tiles failed to load. Check your connection or try different coordinates.'
+          'Rubin tiles unavailable here — your token may lack data rights for this survey/region, or the service is down. Switch the Base layer to “DSS2 Color” to use public imagery.'
+        );
+      } else {
+        showError(
+          'Multiple tiles failed to load. Check your connection or try different coordinates.'
         );
       }
     };
@@ -595,7 +642,7 @@
       if (tileCache.has(cacheKey)) continue;
 
       loadAttempts++;
-      const url = buildUrl(tile.order, tile.pixelIndex, fmt, resolvedBaseUrl);
+      const url = buildUrl(tile.order, tile.pixelIndex, fmt, batchBaseUrl);
 
       const img = new Image();
       img.crossOrigin = 'anonymous';
@@ -603,6 +650,7 @@
 
       img.onload = () => {
         pendingLoads.delete(img);
+        loadSuccesses++;
         tileCache.set(cacheKey, img);
         clearError();
         scheduleRender();
@@ -613,7 +661,7 @@
         recordFailure();
       };
 
-      if (rspToken && Object.keys(auth).length > 0) {
+      if (useAuth) {
         fetch(url, { headers: auth })
           .then(resp => {
             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -697,15 +745,24 @@
     px: number;
     py: number;
     value: number | null; // 0-1 relative luminance of the displayed pixel
+    constellation: string | null;
+    nearestName: string | null;
+    nearestDetail: string | null; // e.g. "12.3′ NE"
   }
   let cursorReadout = $state<CursorReadout | null>(null);
   let lastValueSample = 0;
+  let lastContextSample = 0;
+  // Constellation + nearest-object refresh at a coarser rate than the pointer
+  // move (they scan the catalog / boundary table); cached between refreshes.
+  let cachedConstellation: string | null = null;
+  let cachedNearestName: string | null = null;
+  let cachedNearestDetail: string | null = null;
 
   /**
    * Update the cursor readout from a pointer position. RA/Dec is recomputed
-   * every move (cheap); the pixel value is sampled from the canvas at a throttled
-   * ~15 Hz to avoid frequent getImageData readbacks. Value is relative luminance
-   * of the DISPLAYED pixel (JPEG-derived), not calibrated flux.
+   * every move (cheap); the pixel value (getImageData) and the sky-context
+   * (constellation + nearest catalog object) are refreshed at a throttled ~15 Hz.
+   * Value is relative luminance of the DISPLAYED pixel (JPEG-derived), not flux.
    */
   function updateCursorReadout(e: PointerEvent) {
     if (!canvasEl) return;
@@ -728,7 +785,28 @@
         value = null;
       }
     }
-    cursorReadout = { ra: cRa, dec: cDec, px, py, value };
+    if (now - lastContextSample > 100 && Number.isFinite(cRa) && Number.isFinite(cDec)) {
+      lastContextSample = now;
+      cachedConstellation = constellationFor(cRa, cDec).name;
+      const near = nearestObject(cRa, cDec);
+      if (near) {
+        cachedNearestName = near.object.name;
+        cachedNearestDetail = `${formatSeparation(near.separationDeg)} ${cardinalDirection(near.positionAngleDeg)}`;
+      } else {
+        cachedNearestName = null;
+        cachedNearestDetail = null;
+      }
+    }
+    cursorReadout = {
+      ra: cRa,
+      dec: cDec,
+      px,
+      py,
+      value,
+      constellation: cachedConstellation,
+      nearestName: cachedNearestName,
+      nearestDetail: cachedNearestDetail,
+    };
   }
 
   function onPointerLeave() {
@@ -1113,6 +1191,50 @@
     scheduleRender();
   });
 
+  // Reset the auto-fallback latch whenever the user changes the base selection or
+  // the token — a fresh choice deserves a fresh Rubin attempt.
+  let lastBaseMode = baseMode;
+  let lastToken = rspToken;
+  $effect(() => {
+    const m = baseMode;
+    const t = rspToken;
+    if (m !== lastBaseMode || t !== lastToken) {
+      lastBaseMode = m;
+      lastToken = t;
+      autoFellBack = false;
+    }
+  });
+
+  // On an actual base-survey change (manual switch OR auto-fallback), drop the
+  // base tile cache — keys are `order-pixelIndex` with no survey namespace, so a
+  // cached Rubin tile would otherwise be reused for the same DSS pixel — then
+  // reload. The properties $effect below also reloads on success, but it does NOT
+  // on a CORS-failed /properties (public DSS), so we reload here to be safe.
+  let lastLoadedBaseUrl = '';
+  $effect(() => {
+    const url = resolvedBaseUrl;
+    if (!url) return;
+    if (lastLoadedBaseUrl === '') {
+      lastLoadedBaseUrl = url; // first run — the mount effect performs the initial load
+      return;
+    }
+    if (url === lastLoadedBaseUrl) return;
+    lastLoadedBaseUrl = url;
+    for (const key of tileCache.keys()) {
+      if (!key.startsWith('overlay-')) tileCache.delete(key);
+    }
+    clearError();
+    scheduleRender();
+    loadTiles();
+  });
+
+  // Report the actually-resolved base label to the parent so the active-layers
+  // indicator reflects a silent auto-fallback (Auto → DSS2), not the nominal pick.
+  $effect(() => {
+    const url = resolvedBaseUrl;
+    onBaseResolved?.(activeBaseLabel(url));
+  });
+
   /**
    * On init / base-url change, fetch `{baseUrl}/properties` and adopt the
    * survey's hips_order (as MAX order) and hips_tile_format (first token).
@@ -1316,8 +1438,17 @@
       pixelValue={cursorReadout.value}
       pixelX={cursorReadout.px}
       pixelY={cursorReadout.py}
+      constellation={cursorReadout.constellation}
+      nearestName={cursorReadout.nearestName}
+      nearestDetail={cursorReadout.nearestDetail}
       visible={true}
     />
+  {/if}
+
+  {#if autoFellBack}
+    <div class="info-banner" role="status">
+      Rubin imagery unavailable — showing public DSS2 preview. Pick a Base layer to override.
+    </div>
   {/if}
 
   <!-- FOV Minimap (Issue #2) -->
@@ -1446,6 +1577,23 @@
   .fov-value {
     color: #ccf;
     text-align: right;
+  }
+
+  .info-banner {
+    position: absolute;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(20, 30, 50, 0.92);
+    border: 1px solid #57c;
+    border-radius: 6px;
+    padding: 6px 14px;
+    color: #bcf;
+    font-size: 12px;
+    z-index: 8;
+    pointer-events: none;
+    max-width: 80%;
+    text-align: center;
   }
 
   .error-overlay {

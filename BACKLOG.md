@@ -119,3 +119,31 @@ available, and a FITS path (Rubin SODA `read:image` cutouts / FITS HiPS) that
 keeps linear float pixels so real stretch, un-saturated cores, and calibrated
 value readouts work. Let the user choose fidelity vs. speed. Overlaps with the
 FITS-gated items (flux-accurate stretch, Lupton gri color, real value readout).
+
+## 8. Cross-platform (PC / Mac / iOS / Android)
+
+Short answer: it ALREADY runs on all four — it's a pure client-side web app
+(Svelte + Vite, single self-contained `dist/index.html`), so any modern browser
+on desktop or mobile loads it today. It is NOT a big project to "support" them;
+the work is polish, not a port:
+- **Touch/gesture input** — pointer events already cover tap/drag; add
+  pinch-to-zoom and momentum, and larger touch targets for the controls.
+- **Responsive layout** — the side panel / toolbar / object browser need mobile
+  breakpoints (they assume a wide viewport).
+- **PWA install** — add a manifest + service worker so it installs to the home
+  screen and works offline (pairs with the bundled offline dataset, backlog #1).
+- **Optional native shells** — Capacitor or Tauri wrap the same web build into
+  App Store / Play Store / signed desktop apps IF store distribution is wanted;
+  otherwise unnecessary. No rewrite either way.
+
+## 9. Feature-set review vs. other astronomy viewers
+
+Research the mature viewers — Aladin Lite/Desktop, JS9, DS9, WorldWide Telescope,
+ESASky, Firefly (the actual Rubin RSP portal viewer), Legacy Survey viewer — and
+compare our feature set + proposed backlog against theirs to find gaps and
+best-practices worth adopting. Candidate areas to evaluate: coordinate grids &
+compass, WCS-aligned catalog overlays with hover/select, multi-panel & blink,
+SAMP/table interop, region files (DS9 regions), colour-composite band mixing,
+contour plots, PM/proper-motion & time animation, keyboard-driven navigation,
+and sharing/permalink of a view. Output: a prioritized list of additions with
+rationale, folded back into this backlog.

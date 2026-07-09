@@ -5,6 +5,9 @@
     pixelValue = null as number | null,
     pixelX = null as number | null,
     pixelY = null as number | null,
+    constellation = null as string | null,
+    nearestName = null as string | null,
+    nearestDetail = null as string | null,
     visible = false,
   }: {
     ra?: number;
@@ -12,6 +15,12 @@
     pixelValue?: number | null;
     pixelX?: number | null;
     pixelY?: number | null;
+    /** Full IAU constellation name of the cursor position. */
+    constellation?: string | null;
+    /** Nearest catalog object's display name. */
+    nearestName?: string | null;
+    /** Separation + direction to the nearest object, e.g. "12.3′ NE". */
+    nearestDetail?: string | null;
     visible?: boolean;
   } = $props();
 
@@ -65,6 +74,21 @@
       <span class="label">Value</span>
       <span class="value pixel-value">{valueFormatted}</span>
     </div>
+    {#if constellation}
+      <div class="readout-row">
+        <span class="label">Const</span>
+        <span class="value constellation">{constellation}</span>
+      </div>
+    {/if}
+    {#if nearestName}
+      <div class="readout-row">
+        <span class="label">Near</span>
+        <span class="value nearest" title={nearestName}>{nearestName}</span>
+        {#if nearestDetail}
+          <span class="value nearest-detail">{nearestDetail}</span>
+        {/if}
+      </div>
+    {/if}
   </div>
 {/if}
 
@@ -121,5 +145,22 @@
 
   .pixel-value {
     color: #fc8;
+  }
+
+  .constellation {
+    color: #cfc;
+  }
+
+  .nearest {
+    color: #dcf;
+    max-width: 130px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .nearest-detail {
+    color: #99b;
+    font-size: 10px;
   }
 </style>

@@ -88,10 +88,13 @@
     alertTypeMask = alertTypeMask ^ (1 << t);
   }
 
-  let baseLayerId = $state('auto');
+  let baseLayerId = $state<'auto' | 'dss' | 'rubin'>('auto');
   const baseLayer = $derived(BASE_LAYERS.find((b) => b.id === baseLayerId) ?? BASE_LAYERS[0]);
+  // The label of the base survey ImageViewer ACTUALLY resolved (reflects a silent
+  // Auto→DSS2 fallback), reported via onBaseResolved. Not the nominal selection.
+  let resolvedBaseLabel = $state('DSS2 Color');
   const activeBaseName = $derived(
-    baseLayerId === 'auto' ? (authenticated ? 'Rubin color_gri' : 'DSS2 Color') : baseLayer.name
+    baseLayerId === 'auto' ? resolvedBaseLabel : baseLayer.name
   );
 
   // Time series state
@@ -351,7 +354,7 @@
     <ImageViewer
       bind:this={imageViewerRef}
       {rspToken}
-      hipsBaseUrl={baseLayer.url}
+      baseMode={baseLayerId}
       {scaling}
       {colorMap}
       {interpolation}
@@ -368,6 +371,7 @@
       initialDec={-37.0}
       initialZoom={3}
       onViewerStateChange={handleViewerStateChange}
+      onBaseResolved={(label) => { resolvedBaseLabel = label; }}
     />
 
     {#if uiVisible}
