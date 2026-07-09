@@ -6,13 +6,14 @@
     canvasToSky,
     zoomToFov,
     fovToOrder,
+    tileImageCornerVectors,
     type ViewParams,
   } from '../utils/projection.js';
   import {
     order2nside,
     nside2npix,
     ang2vec,
-    corners_nest,
+    pixcoord2vec_nest,
     vec2ang,
     query_disc_inclusive_nest,
     type V3,
@@ -300,11 +301,13 @@
    * as a textured quad. Canvas 2D can't draw an arbitrary textured quad, so we
    * split the quad into two triangles and affine-map the image onto each.
    *
-   * corners_nest returns corners in order [North, West, South, East]. We map
-   * them to the image's corners N→(0,0), E→(w,0), S→(w,h), W→(0,h) — a
-   * clockwise winding matching the image's TL,TR,BR,BL. (The image↔fabric
-   * orientation is the standard HiPS convention; exact rotation is pending
-   * visual confirmation via Playwright.)
+   * The image's raster corners (TL, TR, BR, BL) are mapped to sky via
+   * `pixcoord2vec_nest` — the authoritative HEALPix tile-pixel→sky geometry —
+   * rather than a hand-guessed `corners_nest` reordering. The old reorder
+   * mis-oriented each tile's texture (it appeared reflected about the diagonal);
+   * deriving the corners from the same primitive that indexes the tile pixels
+   * removes the guesswork. See RASTER_CORNERS below and tests/unit/projection
+   * (tileImageCornerVectors) which pins this mapping.
    */
   function drawTile(
     context: CanvasRenderingContext2D,
@@ -315,9 +318,12 @@
     const totalPixels = nside2npix(nside);
     if (tile.pixelIndex < 0 || tile.pixelIndex >= totalPixels) return;
 
-    const cornerVecs = corners_nest(nside, tile.pixelIndex); // [N, W, S, E]
-    // Reorder to [N, E, S, W] so screen winding matches image TL,TR,BR,BL.
-    const ordered: V3[] = [cornerVecs[0]!, cornerVecs[3]!, cornerVecs[2]!, cornerVecs[1]!];
+    // Image raster corners in [TL, TR, BR, BL] order → sky unit-vectors.
+    // `window.__tileCorners` is a test seam used by tests/ui/tile-orientation.spec.ts
+    // to compare the shipped mapping against a reflected one; unset in normal use.
+    const cornerOverride = (globalThis as unknown as { __tileCorners?: readonly [number, number][] })
+      .__tileCorners;
+    const ordered: V3[] = tileImageCornerVectors(nside, tile.pixelIndex, cornerOverride);
 
     const screen: [number, number][] = [];
     let anyOnScreen = false;

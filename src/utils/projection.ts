@@ -10,8 +10,44 @@
  * passes its current view; there is intentionally no second copy of the math.
  */
 
+import { pixcoord2vec_nest, type V3 } from '@hscmap/healpix';
+
 const DEG2RAD = Math.PI / 180;
 const RAD2DEG = 180 / Math.PI;
+
+/**
+ * HiPS in-tile raster-corner positions as (x, y) fractions, in image
+ * [TL, TR, BR, BL] order, mapped through `pixcoord2vec_nest` (the authoritative
+ * HEALPix tile-pixel geometry). x/y are the library's in-pixel fractions where
+ * (0,0)=S, (1,0)=E, (1,1)=N, (0,1)=W corners.
+ *
+ * This "SWNE" mapping (TL→S, TR→W, BR→N, BL→E) was determined empirically and
+ * confirmed both by an objective smoothness metric and visually (M31 renders as
+ * one continuous galaxy with no per-tile zigzag). The previous hand-guessed
+ * `corners_nest` reorder reflected each tile about its diagonal. Regression-
+ * guarded by tests/ui/tile-orientation.spec.ts, which fails if a reflected
+ * mapping (higher cross-tile discontinuity) is reintroduced.
+ */
+export const TILE_RASTER_CORNERS: readonly [number, number][] = [
+  [0, 0], // TL → S
+  [0, 1], // TR → W
+  [1, 1], // BR → N
+  [1, 0], // BL → E
+];
+
+/**
+ * Sky unit-vectors for a tile's four image raster corners (TL, TR, BR, BL),
+ * computed with the authoritative `pixcoord2vec_nest` HEALPix geometry — the
+ * same primitive that indexes the tile's pixels. Used to texture-map the tile
+ * onto the canvas without guessing the corner orientation.
+ */
+export function tileImageCornerVectors(
+  nside: number,
+  pix: number,
+  corners: readonly [number, number][] = TILE_RASTER_CORNERS
+): V3[] {
+  return corners.map(([x, y]) => pixcoord2vec_nest(nside, pix, x, y));
+}
 
 export interface ViewParams {
   /** view-center RA (deg) */

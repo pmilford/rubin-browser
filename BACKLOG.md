@@ -34,3 +34,35 @@ Direction:
 
 Depends on item 1 (needs a known-truth generator to validate the measurement
 pipeline before running it on real Rubin data).
+
+## 3. Cross-section / profile tool
+
+In the pixel-value browser, add a **linear cross-section at an arbitrary angle**
+that plots **intensity vs. position** along the cut, with **one trace per image
+layer** (multiple filters, multiple catalogs, or both). Needs a good UI: draggable
+endpoints/angle, proper axis scales, and switchable **linear/log** intensity
+scaling. (Requires real per-pixel values — full fidelity needs FITS; a relative-
+luminance version works on JPEG now.)
+
+## 4. Rubin time-series image browsing
+
+Answer "how do I look at a time series of Rubin images?" — a real path to
+multi-epoch Rubin imagery (visits/coadds over time) rather than the current MOCK
+epochs in `src/constants.ts`. Ties into the blink/epoch UI that already exists as
+a mock, and into items 1–2 (multi-epoch difference analysis).
+
+## 5. Zoom / fetch performance
+
+Zooming feels too slow — likely over-fetching. Investigate: is the correct (lower)
+HiPS order being requested at low zoom, tile count per view, request cancellation
+for superseded views, an allsky/low-res preview layer, and caching/prefetch.
+`fovToOrder` already lowers order with FOV, so profile what actually dominates
+(tile count, decode, network) before optimizing.
+
+## 6. Rubin alert / DIA event overlay
+
+Rubin runs difference-image analysis producing millions of events/day (the alert
+stream). Optionally overlay their **positions + IDs** on the sky (asteroids,
+satellites, novae, variable stars, …), toggleable alongside the other catalog
+overlays. Longer term: **locally reproduce the simpler detections** (image
+differencing on multi-epoch cubes — depends on items 1, 2, 4).
