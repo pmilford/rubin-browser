@@ -2,16 +2,23 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render } from '@testing-library/svelte';
 import ImageViewer from '../../src/components/ImageViewer.svelte';
 
-// Mock the HEALPix tile index function
-vi.mock('../../src/api/hips.js', () => ({
-  radecToTileIndex: vi.fn((ra: number, dec: number, order: number) => {
-    // Deterministic mock: return a pixel index based on inputs
-    const nside = Math.pow(2, order);
-    const raBin = Math.floor(((ra % 360) / 360) * 12 * nside);
-    const decBin = Math.floor(((dec + 90) / 180) * nside);
-    return raBin + decBin * 12 * nside;
-  }),
-}));
+// Use the real (correct) HEALPix helpers, overriding only radecToTileIndex
+// with a deterministic mock the render tests rely on.
+vi.mock('../../src/api/hips.js', async () => {
+  const actual = await vi.importActual<typeof import('../../src/api/hips.js')>(
+    '../../src/api/hips.js'
+  );
+  return {
+    ...actual,
+    radecToTileIndex: vi.fn((ra: number, dec: number, order: number) => {
+      // Deterministic mock: return a pixel index based on inputs
+      const nside = Math.pow(2, order);
+      const raBin = Math.floor(((ra % 360) / 360) * 12 * nside);
+      const decBin = Math.floor(((dec + 90) / 180) * nside);
+      return raBin + decBin * 12 * nside;
+    }),
+  };
+});
 
 // Mock auth module
 vi.mock('../../src/api/auth.js', () => ({

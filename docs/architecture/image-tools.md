@@ -8,7 +8,7 @@ Best-in-class tools for large astronomical image inspection.
 
 ### Histogram (`src/components/Histogram.svelte`)
 
-- Pixel value distribution histogram (D3.js rendering)
+- Pixel value distribution histogram (rendered directly to canvas/SVG — no D3)
 - Adjustable stretch methods: linear, log, sqrt, asinh, zscale, percentile
 - Draggable min/max handles for manual range adjustment
 - Updates in real-time as user adjusts stretch

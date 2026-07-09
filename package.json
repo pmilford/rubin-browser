@@ -1,6 +1,7 @@
 {
   "name": "rubin-browser",
   "version": "0.1.0",
+  "type": "module",
   "description": "Browser for Vera Rubin Observatory public data — images, catalogs, time series, and galaxy analysis",
   "main": "src/index.ts",
   "scripts": {
@@ -28,11 +29,10 @@
   "license": "MIT",
   "devDependencies": {
     "@playwright/test": "^1.49.0",
-    "@sveltejs/vite-plugin-svelte": "^7.0.0",
+    "@sveltejs/vite-plugin-svelte": "^6.2.1",
     "@testing-library/jest-dom": "^6.6.0",
     "@testing-library/svelte": "^5.2.0",
     "@types/node": "^22.0.0",
-    "@types/openseadragon": "^5.0.2",
     "@vitest/coverage-v8": "^3.0.0",
     "eslint": "^9.0.0",
     "jsdom": "^28.1.0",
@@ -44,10 +44,7 @@
     "vitest": "^3.0.0"
   },
   "dependencies": {
-    "aladin-lite": "^3.6.0",
-    "d3": "^7.9.0",
-    "openseadragon": "^6.0.2",
-    "svelte": "^5.0.0",
-    "svelte-routing": "^2.0.0"
+    "@hscmap/healpix": "^1.4.12",
+    "svelte": "^5.0.0"
   }
 }

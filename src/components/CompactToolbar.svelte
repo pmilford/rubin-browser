@@ -10,9 +10,11 @@
     onToggleFullscreen,
     onToggleHelp,
     onToggleInvert,
+    onToggleToken,
     panelOpen = false,
     isFullscreen = false,
     invert = false,
+    authenticated = false,
   }: {
     onZoomIn?: () => void;
     onZoomOut?: () => void;
@@ -22,9 +24,11 @@
     onToggleFullscreen?: () => void;
     onToggleHelp?: () => void;
     onToggleInvert?: () => void;
+    onToggleToken?: () => void;
     panelOpen?: boolean;
     isFullscreen?: boolean;
     invert?: boolean;
+    authenticated?: boolean;
   } = $props();
 
   let searchQuery = $state('');
@@ -184,6 +188,18 @@
     {/if}
   </button>
 
+  <!-- RSP auth token -->
+  <button
+    class="icon-button token-button"
+    class:active={authenticated}
+    onclick={() => onToggleToken?.()}
+    title={authenticated ? 'RSP token (authenticated)' : 'RSP token (not authenticated)'}
+    aria-label="RSP authentication token"
+    aria-pressed={authenticated}
+  >
+    <span class="token-icon">🔑</span>
+  </button>
+
   <!-- Help -->
   <button class="icon-button" onclick={() => onToggleHelp?.()} title="Help (H)" aria-label="Help">
     <span class="help-icon">?</span>
@@ -285,5 +301,16 @@
     font-weight: bold;
     font-size: 14px;
     line-height: 1;
+  }
+
+  .token-icon {
+    font-size: 14px;
+    line-height: 1;
+  }
+
+  .token-button.active {
+    background: #16351f;
+    color: #6ee08c;
+    border-color: #3a8c52;
   }
 </style>

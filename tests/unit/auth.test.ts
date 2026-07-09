@@ -42,6 +42,16 @@ describe('Auth Module', () => {
       expect(getToken()).toBeNull();
     });
 
+    it('round-trips via setToken → getToken and exposes a Bearer auth header', () => {
+      setToken('round-trip-token');
+      // getToken returns exactly what was set
+      expect(getToken()).toBe('round-trip-token');
+      // and it is persisted to sessionStorage under the canonical key
+      expect(mockStorage.get('rubin_rsp_token')).toBe('round-trip-token');
+      // getAuthHeader derives the Bearer header from the same token
+      expect(getAuthHeader()).toEqual({ Authorization: 'Bearer round-trip-token' });
+    });
+
     it('reads token from sessionStorage when not in memory', () => {
       // Directly put a token in storage without going through setToken
       mockStorage.set('rubin_rsp_token', 'stored-token');

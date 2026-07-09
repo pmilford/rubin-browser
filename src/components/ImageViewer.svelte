@@ -1,6 +1,15 @@
 <script lang="ts">
   import { getAuthHeader } from '../api/auth.js';
-  import { radecToTileIndex, getTileCenter } from '../api/hips.js';
+  import { parseHipsProperties, radecToThetaPhi, thetaPhiToRadec } from '../api/hips.js';
+  import {
+    order2nside,
+    nside2npix,
+    ang2vec,
+    corners_nest,
+    vec2ang,
+    query_disc_inclusive_nest,
+    type V3,
+  } from '@hscmap/healpix';
   import { applyScaling } from '../utils/scaling.js';
   import { applyColorMap } from '../utils/colormap.js';
   import type { ViewerState, ScalingFunction, ColorMapName, InterpolationMethod } from '../types/image.js';
@@ -34,9 +43,16 @@
   const PUBLIC_HIPS = 'https://alasky.cds.unistra.fr/DSS/DSSColor';
   const RUBIN_HIPS = 'https://data.lsst.cloud/api/hips/images/color_gri';
   const DEFAULT_FORMAT = 'jpg';
+  const DEFAULT_MAX_ORDER = 3;
   const TILE_SIZE = 512;
   const MAX_ZOOM = 18;
   const MIN_ZOOM = 0;
+  const DEG2RAD = Math.PI / 180;
+
+  // Survey properties resolved from `{baseUrl}/properties` on init / base-url change.
+  // Fall back gracefully (jpg / order 3) when the fetch fails (e.g. CORS on public DSS).
+  let surveyMaxOrder = $state(DEFAULT_MAX_ORDER);
+  let surveyFormat = $state('');
 
   const resolvedBaseUrl = $derived(
     hipsBaseUrl || (rspToken ? RUBIN_HIPS : PUBLIC_HIPS)
@@ -92,13 +108,24 @@
     return 180 / Math.pow(2, zoom);
   }
 
+  /**
+   * Choose a HiPS order such that a tile's angular size is a reasonable
+   * fraction of the current FOV.
+   *
+   * A HEALPix tile at order N spans ~ (90 / Nside) degrees on a side, with
+   * Nside = 2^N. We aim for roughly TILES_ACROSS tiles across the FOV, i.e.
+   * tileAngle ≈ fov / TILES_ACROSS. Solving 90/2^N ≈ fov/TILES_ACROSS gives
+   * N ≈ log2(90 * TILES_ACROSS / fov). Clamp to [0, surveyMaxOrder].
+   */
+  function fovToOrder(viewFov: number): number {
+    const TILES_ACROSS = 4;
+    const raw = Math.log2((90 * TILES_ACROSS) / Math.max(viewFov, 1e-6));
+    const order = Math.round(raw);
+    return Math.max(0, Math.min(surveyMaxOrder, order));
+  }
+
   function zoomToOrder(zoom: number): number {
-    // Standard HiPS: each order doubles the resolution.
-    // At zoom=0 (FOV=180°), order 0 is appropriate (12 base tiles cover the sky).
-    // Each zoom step halves FOV, so order ≈ zoom for good tile resolution.
-    // We want tiles slightly smaller than the FOV for good coverage.
-    const order = Math.max(0, Math.round(zoom));
-    return Math.min(13, order);
+    return fovToOrder(zoomToFov(zoom));
   }
 
   /**
@@ -159,8 +186,24 @@
     return `${cleanBase}/Norder${order}/Dir${dir}/Npix${pixelIndex}.${fmt}`;
   }
 
+  // Browser-renderable HiPS tile formats, in preference order. `fits` is
+  // excluded because it cannot be drawn to a canvas as an <img>.
+  const RENDERABLE_FORMATS = ['png', 'jpeg', 'jpg', 'webp'];
+
+  /**
+   * Map a HiPS `hips_tile_format` token to the on-disk file extension.
+   * The HiPS standard token is `jpeg`, but tiles are stored with the `.jpg`
+   * extension (requesting `.jpeg` 404s on CDS/alasky).
+   */
+  function formatToExtension(fmt: string): string {
+    const f = fmt.toLowerCase();
+    if (f === 'jpeg') return 'jpg';
+    return f;
+  }
+
   function resolveFormat(): string {
-    if (tileFormat) return tileFormat;
+    if (tileFormat) return formatToExtension(tileFormat);
+    if (surveyFormat) return formatToExtension(surveyFormat);
     return DEFAULT_FORMAT;
   }
 
@@ -171,37 +214,41 @@
     pixelIndex: number;
   }
 
+  /**
+   * Find every HEALPix tile (at `order`) that touches the current view, using
+   * an inclusive disc query centered on the view direction. This replaces the
+   * old manual RA/Dec grid stepping (which broke near the poles and RA wrap).
+   */
   function getVisibleTiles(centerRa: number, centerDec: number, viewFov: number, order: number): TileKey[] {
-    const tiles: TileKey[] = [];
-    const tileAngularSize = 180 / Math.pow(2, order);
-    // Add 2-tile margin on each side for seamless coverage during pan
-    const coverageRadius = viewFov / 2 + tileAngularSize * 2;
-
-    const decRange = coverageRadius;
-    const cosDec = Math.cos((centerDec * Math.PI) / 180) || 0.01;
-    const raRange = coverageRadius / cosDec;
-
-    const decSteps = Math.max(1, Math.ceil(decRange / tileAngularSize));
-    const raSteps = Math.max(1, Math.ceil(raRange / tileAngularSize));
+    const nside = order2nside(order);
+    const tileAngularSize = 90 / nside; // degrees, approximate tile side
+    // Half-diagonal of the FOV plus one tile of margin, in radians.
+    const radiusDeg = (viewFov / 2) * Math.SQRT2 + tileAngularSize;
+    const radiusRad = radiusDeg * DEG2RAD;
 
     const seen = new Set<number>();
+    const tiles: TileKey[] = [];
 
-    for (let di = -decSteps; di <= decSteps; di++) {
-      const tileDec = centerDec + di * tileAngularSize;
-      if (tileDec < -90 || tileDec > 90) continue;
-
-      for (let ri = -raSteps; ri <= raSteps; ri++) {
-        const tileRa = centerRa + ri * tileAngularSize;
-        const normalizedRa = ((tileRa % 360) + 360) % 360;
-
-        const pix = radecToTileIndex(normalizedRa, tileDec, order);
-        if (!seen.has(pix)) {
-          seen.add(pix);
-          // Use the grid point as a seed for tile center search
-          tiles.push({ order, pixelIndex: pix });
-        }
+    // @hscmap/healpix's query_disc requires radius < PI/2. For very wide fields
+    // (low zoom) the disc would cover most of the sky anyway, and the tile count
+    // at these low orders is small — so just enumerate every tile at this order.
+    const DISC_MAX_RADIUS = Math.PI / 2 - 1e-6;
+    if (radiusRad >= DISC_MAX_RADIUS) {
+      const npix = nside2npix(nside);
+      for (let pix = 0; pix < npix; pix++) {
+        tiles.push({ order, pixelIndex: pix });
       }
+      return tiles;
     }
+
+    const { theta, phi } = radecToThetaPhi(centerRa, centerDec);
+    const center: V3 = ang2vec(theta, phi);
+    query_disc_inclusive_nest(nside, center, radiusRad, (pix) => {
+      if (!seen.has(pix)) {
+        seen.add(pix);
+        tiles.push({ order, pixelIndex: pix });
+      }
+    });
 
     return tiles;
   }
@@ -300,65 +347,133 @@
     }
   }
 
+  /**
+   * Draw a HiPS tile as a projected spherical quadrilateral.
+   *
+   * A HEALPix tile is a curved diamond on the sphere, not an axis-aligned
+   * square. We take its 4 corner unit-vectors (corners_nest), project each
+   * through the gnomonic skyToCanvas() projection, then paint the tile image
+   * as a textured quad. Canvas 2D can't draw an arbitrary textured quad, so we
+   * split the quad into two triangles and affine-map the image onto each.
+   *
+   * corners_nest returns corners in order [North, West, South, East]. We map
+   * them to the image's corners N→(0,0), E→(w,0), S→(w,h), W→(0,h) — a
+   * clockwise winding matching the image's TL,TR,BR,BL. (The image↔fabric
+   * orientation is the standard HiPS convention; exact rotation is pending
+   * visual confirmation via Playwright.)
+   */
   function drawTile(
     context: CanvasRenderingContext2D,
     img: HTMLImageElement,
     tile: TileKey
   ) {
-    const nside = Math.pow(2, tile.order);
-    const totalPixels = 12 * nside * nside;
+    const nside = order2nside(tile.order);
+    const totalPixels = nside2npix(nside);
     if (tile.pixelIndex < 0 || tile.pixelIndex >= totalPixels) return;
 
-    const tileAngularSize = 180 / nside;
-    const tileCenter = getTileCenter(tile.pixelIndex, tile.order);
-    if (!tileCenter) return;
+    const cornerVecs = corners_nest(nside, tile.pixelIndex); // [N, W, S, E]
+    // Reorder to [N, E, S, W] so screen winding matches image TL,TR,BR,BL.
+    const ordered: V3[] = [cornerVecs[0]!, cornerVecs[3]!, cornerVecs[2]!, cornerVecs[1]!];
 
-    const [tileRa, tileDec] = [tileCenter.ra, tileCenter.dec];
+    const screen: [number, number][] = [];
+    let anyOnScreen = false;
+    const margin = TILE_SIZE;
+    for (const v of ordered) {
+      const { theta, phi } = vec2ang(v);
+      const { ra: cornerRa, dec: cornerDec } = thetaPhiToRadec(theta, phi);
+      const [sx, sy] = skyToCanvas(cornerRa, cornerDec);
+      if (isNaN(sx) || isNaN(sy)) return; // corner behind viewer → skip whole tile
+      screen.push([sx, sy]);
+      if (sx >= -margin && sx <= canvasWidth + margin && sy >= -margin && sy <= canvasHeight + margin) {
+        anyOnScreen = true;
+      }
+    }
+    if (!anyOnScreen) return;
 
-    // Check if tile center is in front of viewer
-    const cosDec0 = Math.cos((dec * Math.PI) / 180);
-    const sinDec0 = Math.sin((dec * Math.PI) / 180);
-    const cosDecT = Math.cos((tileDec * Math.PI) / 180);
-    const sinDecT = Math.sin((tileDec * Math.PI) / 180);
-    const dRa = ((tileRa - ra) * Math.PI) / 180;
-    const cosC = sinDec0 * sinDecT + cosDec0 * cosDecT * Math.cos(dRa);
-    if (cosC <= 0.05) return; // Behind viewer
+    const w = img.naturalWidth || TILE_SIZE;
+    const h = img.naturalHeight || TILE_SIZE;
 
-    // Project tile center to screen
-    const [cx, cy] = skyToCanvas(tileRa, tileDec);
-    if (isNaN(cx) || isNaN(cy)) return;
+    // Image-space corners matching screen[] order: N=(0,0) E=(w,0) S=(w,h) W=(0,h)
+    const imgUV: [number, number][] = [[0, 0], [w, 0], [w, h], [0, h]];
 
-    // Check if tile is on-screen (with generous margin for pan offset)
-    const margin = TILE_SIZE * 2;
-    if (cx < -margin || cx > canvasWidth + margin || cy < -margin || cy > canvasHeight + margin) return;
+    // Split quad [0,1,2,3] into triangles (0,1,2) and (0,2,3).
+    const [p0, p1, p2, p3] = screen;
+    const [t0, t1, t2, t3] = imgUV;
+    drawTexturedTriangle(context, img, p0!, p1!, p2!, t0!, t1!, t2!);
+    drawTexturedTriangle(context, img, p0!, p2!, p3!, t0!, t2!, t3!);
+  }
 
-    // Compute screen size of the tile
-    const k = 1 / cosC;
-    const scale = canvasWidth / ((fov * Math.PI) / 180);
-    const screenHalfSize = (k * (tileAngularSize / 2) * Math.PI) / 180 * scale;
+  /**
+   * Affine-map an image triangle (source, in image pixels) onto a screen
+   * triangle (dest). Sets a clip path for the dest triangle, computes the
+   * affine transform that carries the source triangle onto it, and draws the
+   * image under that transform. Standard 2D textured-triangle technique.
+   */
+  function drawTexturedTriangle(
+    context: CanvasRenderingContext2D,
+    img: HTMLImageElement,
+    d0: [number, number],
+    d1: [number, number],
+    d2: [number, number],
+    s0: [number, number],
+    s1: [number, number],
+    s2: [number, number]
+  ) {
+    // Inflate the dest triangle slightly outward from its centroid to hide
+    // sub-pixel seams between adjacent triangles/tiles.
+    const [x0, y0, x1, y1, x2, y2] = inflateTriangle(d0, d1, d2, 0.5);
 
-    // Compute rotation from projected tile edges
-    const halfSize = tileAngularSize / 2;
-    const cosDecE = Math.cos((tileDec * Math.PI) / 180) || 0.01;
-    const [ex, ey] = skyToCanvas(tileRa + halfSize / cosDecE, tileDec);
-    if (isNaN(ex) || isNaN(ey)) return;
-
-    const dx = ex - cx;
-    const dy = ey - cy;
-    const rotation = Math.atan2(dy, dx);
-
-    // Draw with rotation
     context.save();
-    context.translate(cx, cy);
-    context.rotate(rotation);
-    context.drawImage(
-      img,
-      -screenHalfSize,
-      -screenHalfSize,
-      screenHalfSize * 2,
-      screenHalfSize * 2
-    );
+    context.beginPath();
+    context.moveTo(x0, y0);
+    context.lineTo(x1, y1);
+    context.lineTo(x2, y2);
+    context.closePath();
+    context.clip();
+
+    // Solve affine [a c e; b d f] mapping source (u,v) → dest (x,y).
+    const u0 = s0[0], v0 = s0[1];
+    const u1 = s1[0] - u0, v1 = s1[1] - v0;
+    const u2 = s2[0] - u0, v2 = s2[1] - v0;
+    const dx1 = x1 - x0, dy1 = y1 - y0;
+    const dx2 = x2 - x0, dy2 = y2 - y0;
+
+    const det = u1 * v2 - u2 * v1;
+    if (det === 0) {
+      context.restore();
+      return;
+    }
+    const a = (v2 * dx1 - v1 * dx2) / det;
+    const b = (v2 * dy1 - v1 * dy2) / det;
+    const c = (u1 * dx2 - u2 * dx1) / det;
+    const d = (u1 * dy2 - u2 * dy1) / det;
+    const e = x0 - a * u0 - c * v0;
+    const f = y0 - b * u0 - d * v0;
+
+    context.transform(a, b, c, d, e, f);
+    context.drawImage(img, 0, 0);
     context.restore();
+  }
+
+  /** Push each vertex outward from the triangle centroid by `pad` pixels. */
+  function inflateTriangle(
+    p0: [number, number],
+    p1: [number, number],
+    p2: [number, number],
+    pad: number
+  ): [number, number, number, number, number, number] {
+    const gx = (p0[0] + p1[0] + p2[0]) / 3;
+    const gy = (p0[1] + p1[1] + p2[1]) / 3;
+    const push = (p: [number, number]): [number, number] => {
+      const dx = p[0] - gx;
+      const dy = p[1] - gy;
+      const len = Math.hypot(dx, dy) || 1;
+      return [p[0] + (dx / len) * pad, p[1] + (dy / len) * pad];
+    };
+    const [a0, a1] = push(p0);
+    const [b0, b1] = push(p1);
+    const [c0, c1] = push(p2);
+    return [a0, a1, b0, b1, c0, c1];
   }
 
   // --- Tile Loading ---
@@ -824,6 +939,50 @@
     void interpolation;
     void invert;
     scheduleRender();
+  });
+
+  /**
+   * On init / base-url change, fetch `{baseUrl}/properties` and adopt the
+   * survey's hips_order (as MAX order) and hips_tile_format (first token).
+   * Falls back to jpg / order 3 on any failure (e.g. CORS on the public DSS).
+   */
+  $effect(() => {
+    const baseUrl = resolvedBaseUrl;
+    if (!baseUrl) return;
+
+    let cancelled = false;
+    const cleanBase = baseUrl.replace(/\/properties$/, '').replace(/\/$/, '');
+    const auth = rspToken ? getAuthHeader() : {};
+
+    fetch(`${cleanBase}/properties`, { headers: auth })
+      .then((resp) => {
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        return resp.text();
+      })
+      .then((text) => {
+        if (cancelled) return;
+        const props = parseHipsProperties(text);
+        surveyMaxOrder = props.hipsOrder;
+        // hips_tile_format may list several formats ("png jpeg fits"); pick the
+        // first browser-renderable one (skip fits), falling back to the first.
+        const tokens = (props.tileFormat || '').split(/\s+/).filter(Boolean);
+        surveyFormat =
+          tokens.find((t) => RENDERABLE_FORMATS.includes(t.toLowerCase())) ??
+          tokens[0] ??
+          '';
+        scheduleRender();
+        loadTiles();
+      })
+      .catch(() => {
+        if (cancelled) return;
+        // Graceful fallback: keep defaults (jpg / order 3).
+        surveyMaxOrder = DEFAULT_MAX_ORDER;
+        surveyFormat = '';
+      });
+
+    return () => {
+      cancelled = true;
+    };
   });
 
   /**

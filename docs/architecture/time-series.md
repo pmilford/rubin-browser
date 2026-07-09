@@ -2,7 +2,12 @@
 
 ## Overview
 
-The time series system allows users to navigate through multi-epoch observations of the same field.
+The time series system lets users scrub through multi-epoch observations of a
+field and blink between them.
+
+> **Status:** The epoch data is **mock**. There is no real DP1 time-series
+> integration yet — epochs are synthesized at startup (see below). The slider,
+> play/pause, and blink controls are wired to this mock data.
 
 ## Components
 
@@ -17,14 +22,20 @@ The time series system allows users to navigate through multi-epoch observations
 ### Data Flow
 
 ```
-TimeSlider → onEpochChange(mjd) → TileViewer → ImageViewer.loadEpoch(mjd)
+TimeSlider → onEpochChange(index, epoch) → TileViewer (updates state/status)
 ```
+
+The mock epochs do not currently drive different imagery in `ImageViewer`;
+selecting an epoch updates app state and the status line only.
 
 ## Epoch Data
 
-Defined in `src/constants.ts` as `EPOCHS` array:
-- Mock MJD values representing DP1 observation epochs
-- Production: fetched from TAP query on `dp02_dc2_catalogs.Source` for distinct `obs_start` values
+Generated in `src/constants.ts` by `generateMockEpochs()`, with
+`DEFAULT_MOCK_EPOCHS` (30 epochs) consumed by `TileViewer`:
+- Synthetic MJD values (~25-day cadence) cycling through the g/r/i bands
+- **Mock only** — not real DP1 observations
+- Planned production path: a TAP query for distinct observation epochs of the
+  field (replacing the mock generator)
 
 ## MJD Conversion
 

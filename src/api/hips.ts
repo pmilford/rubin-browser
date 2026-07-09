@@ -1,10 +1,101 @@
 /** HiPS (Hierarchical Progressive Surveys) tile service client */
 
+import {
+  order2nside,
+  ang2pix_nest,
+  pix2ang_nest,
+} from '@hscmap/healpix';
 import { getAuthHeader } from './auth.js';
 import type { HipsProperties } from '../types/image.js';
 
 const HIPS_BASE = 'https://data.lsst.cloud/api/hips';
 const DEFAULT_SURVEY = 'images/color_gri';
+
+const DEG2RAD = Math.PI / 180;
+const RAD2DEG = 180 / Math.PI;
+
+// --- Coordinate helpers ---------------------------------------------------
+
+/**
+ * Convert RA/Dec (degrees) to HEALPix spherical angles (radians).
+ * theta = colatitude = (90 - dec) in radians (0 at north pole, pi at south).
+ * phi = longitude = ra in radians, normalised to [0, 2pi).
+ */
+export function radecToThetaPhi(ra: number, dec: number): { theta: number; phi: number } {
+  const raNorm = ((ra % 360) + 360) % 360;
+  const theta = (90 - dec) * DEG2RAD;
+  const phi = raNorm * DEG2RAD;
+  return { theta, phi };
+}
+
+/**
+ * Convert HEALPix spherical angles (radians) back to RA/Dec (degrees).
+ * Inverse of radecToThetaPhi.
+ */
+export function thetaPhiToRadec(theta: number, phi: number): { ra: number; dec: number } {
+  const dec = 90 - theta * RAD2DEG;
+  let ra = phi * RAD2DEG;
+  ra = ((ra % 360) + 360) % 360;
+  return { ra, dec };
+}
+
+// --- HEALPix wrappers (thin, over @hscmap/healpix) ------------------------
+
+/** Get the Nside value for a HiPS order (Nside = 2^order). */
+export function orderToNside(order: number): number {
+  return order2nside(order);
+}
+
+/**
+ * Convert RA/Dec (degrees) to a NESTED HEALPix pixel index at the given Nside.
+ * Thin wrapper over ang2pix_nest — self-consistent with getTileCenter/pix2ang_nest.
+ */
+export function radecToHealpixNest(ra: number, dec: number, nside: number): number {
+  const { theta, phi } = radecToThetaPhi(ra, dec);
+  return ang2pix_nest(nside, theta, phi);
+}
+
+/** Convert a NESTED HEALPix pixel index to RA/Dec (degrees) of the pixel center. */
+export function healpixNestToRadec(pixelIndex: number, nside: number): { ra: number; dec: number } {
+  const { theta, phi } = pix2ang_nest(nside, pixelIndex);
+  return thetaPhiToRadec(theta, phi);
+}
+
+/** Convert RA/Dec (degrees) to HiPS tile index at a given order. */
+export function radecToTileIndex(ra: number, dec: number, order: number): number {
+  const nside = orderToNside(order);
+  return radecToHealpixNest(ra, dec, nside);
+}
+
+/**
+ * Tile center cache: "order-pixelIndex" → { ra, dec }.
+ * pix2ang_nest is already O(1) and correct; the cache just avoids repeat work.
+ */
+const tileCenterCache = new Map<string, { ra: number; dec: number }>();
+
+/**
+ * Get the center RA/Dec (degrees) of a HiPS tile.
+ *
+ * Uses pix2ang_nest (the exact analytic HEALPix pixel center) — O(1) and
+ * guaranteed to round-trip: radecToTileIndex(getTileCenter(p)) === p.
+ */
+export function getTileCenter(pixelIndex: number, order: number): { ra: number; dec: number } {
+  const cacheKey = `${order}-${pixelIndex}`;
+  const cached = tileCenterCache.get(cacheKey);
+  if (cached) return cached;
+
+  const nside = orderToNside(order);
+  const result = healpixNestToRadec(pixelIndex, nside);
+  tileCenterCache.set(cacheKey, result);
+  return result;
+}
+
+/** Clear the tile center cache (call when switching surveys). */
+export function clearTileCenterCache(): void {
+  tileCenterCache.clear();
+}
+
+// --- HiPS service I/O -----------------------------------------------------
 
 /** Fetch HiPS properties from the server */
 export async function fetchHipsProperties(
@@ -20,6 +111,15 @@ export async function fetchHipsProperties(
   }
 
   const text = await resp.text();
+  return parseProperties(text);
+}
+
+/**
+ * Parse Java-properties-style key=value text into HipsProperties.
+ * Exported so callers with an arbitrary HiPS base URL (public surveys, etc.)
+ * can fetch `{baseUrl}/properties` themselves and parse the response.
+ */
+export function parseHipsProperties(text: string): HipsProperties {
   return parseProperties(text);
 }
 
@@ -76,183 +176,4 @@ export async function fetchTile(
   }
 
   return resp.blob();
-}
-
-/** Get the Nside value for a HiPS order */
-export function orderToNside(order: number): number {
-  return 2 ** order;
-}
-
-/** Convert RA/Dec (degrees) to HiPS tile index at a given order */
-export function radecToTileIndex(ra: number, dec: number, order: number): number {
-  const nside = orderToNside(order);
-  return radecToHealpixNest(ra, dec, nside);
-}
-
-/** Calculate tile pixel index from RA/Dec using simplified HEALPix NESTED scheme */
-export function radecToHealpixNest(ra: number, dec: number, nside: number): number {
-  const totalPixels = 12 * nside * nside;
-
-  // Normalize RA to [0, 360)
-  const raNorm = ((ra % 360) + 360) % 360;
-  const phi = (raNorm * Math.PI) / 180;
-  const theta = (Math.PI / 2) - (dec * Math.PI) / 180;
-
-  const z = Math.cos(theta);
-  const za = Math.abs(z);
-  const twoPi = 2 * Math.PI;
-
-  let faceIndex: number;
-  let ix: number;
-  let iy: number;
-
-  if (za <= 2 / 3) {
-    // Equatorial belt
-    const temp = nside * (0.5 + phi / twoPi);
-    const jp = Math.floor(nside * (0.5 + phi / twoPi - z * 0.75));
-    const jm = Math.floor(nside * (0.5 + phi / twoPi + z * 0.75));
-
-    const ifp = Math.floor(jp / nside); // face column
-    const ifm = Math.floor(jm / nside); // face row
-
-    // Determine face from column/row
-    faceIndex = (ifp === ifm)
-      ? (ifp % 4) + 4
-      : (ifp < ifm)
-        ? ifp % 4
-        : (ifm % 4) + 8;
-
-    ix = jm % nside;
-    iy = nside - (jp % nside) - 1;
-  } else {
-    // Polar caps
-    const ntt = Math.min(Math.floor(phi / (Math.PI / 2)), 3);
-    const tp = phi / (Math.PI / 2) - ntt;
-    const tmp = nside * Math.sqrt(3 * (1 - za));
-
-    const jp = Math.max(Math.floor(tp * tmp), 0);
-    const jm = Math.max(Math.floor((1 - tp) * tmp), 0);
-
-    const jpClamped = Math.min(jp, nside - 1);
-    const jmClamped = Math.min(jm, nside - 1);
-
-    if (z > 0) {
-      // North polar cap
-      faceIndex = ntt;
-      ix = nside - jmClamped - 1;
-      iy = nside - jpClamped - 1;
-    } else {
-      // South polar cap
-      faceIndex = ntt + 8;
-      ix = jpClamped;
-      iy = jmClamped;
-    }
-  }
-
-  // Convert (face, ix, iy) to NESTED pixel index
-  return faceIndex * nside * nside + xy2nest(ix, iy);
-}
-
-/** Convert (x, y) within a face to NESTED sub-index using bit interleaving */
-function xy2nest(ix: number, iy: number): number {
-  return spreadBits(ix) | (spreadBits(iy) << 1);
-}
-
-/** Spread bits of a value: insert a 0 bit between each bit */
-function spreadBits(v: number): number {
-  let x = v & 0xffff;
-  x = (x | (x << 8)) & 0x00ff00ff;
-  x = (x | (x << 4)) & 0x0f0f0f0f;
-  x = (x | (x << 2)) & 0x33333333;
-  x = (x | (x << 1)) & 0x55555555;
-  return x;
-}
-
-/** Compact bits: inverse of spreadBits — extract every other bit */
-function compactBits(v: number): number {
-  let x = v & 0x55555555;
-  x = (x | (x >> 1)) & 0x33333333;
-  x = (x | (x >> 2)) & 0x0f0f0f0f;
-  x = (x | (x >> 4)) & 0x00ff00ff;
-  x = (x | (x >> 8)) & 0x0000ffff;
-  return x;
-}
-
-/** Convert HEALPix NESTED pixel index to (ix, iy) within face */
-function nestToXY(pix: number, nside: number): [number, number] {
-  const facePixels = nside * nside;
-  const localPix = pix % facePixels;
-  const x = compactBits(localPix);
-  const y = compactBits(localPix >> 1);
-  return [x, y];
-}
-
-/**
- * Tile center cache: "order-pixelIndex" → { ra, dec }
- * Computed once per tile via forward-pass verification.
- */
-const tileCenterCache = new Map<string, { ra: number; dec: number }>();
-
-/**
- * Get the center RA/Dec of a HiPS tile.
- *
- * Uses a grid search verified against the forward pass (radecToHealpixNest)
- * to find a point that maps to the target pixel index. The result is cached.
- *
- * This is O(1) after first computation (cached), and guaranteed correct
- * because it's verified against the forward pass.
- */
-export function getTileCenter(pixelIndex: number, order: number): { ra: number; dec: number } {
-  const cacheKey = `${order}-${pixelIndex}`;
-  const cached = tileCenterCache.get(cacheKey);
-  if (cached) return cached;
-
-  const nside = 2 ** order;
-  const result = findTileCenterViaGrid(pixelIndex, order, nside);
-  tileCenterCache.set(cacheKey, result);
-  return result;
-}
-
-/**
- * Find a point (ra, dec) that maps to the given pixel index.
- * Uses a dense grid search across the full sky.
- */
-function findTileCenterViaGrid(pixelIndex: number, order: number, nside: number): { ra: number; dec: number } {
-  const tileAng = 180 / nside;
-  // Step size: 1/4 of tile size to ensure we hit every tile
-  const decStep = tileAng / 4;
-  const raStep = tileAng / 4;
-
-  let bestRa = 0;
-  let bestDec = 0;
-  let minDist = Infinity;
-  let found = false;
-
-  for (let dec = -90; dec <= 90; dec += decStep) {
-    const cosD = Math.cos((dec * Math.PI) / 180) || 0.01;
-    const adjustedRaStep = raStep / Math.min(1, Math.abs(cosD) + 0.1);
-    for (let ra = 0; ra < 360; ra += adjustedRaStep) {
-      if (radecToTileIndex(ra, dec, order) === pixelIndex) {
-        // Prefer points closer to equator and to ra=180 (arbitrary but consistent)
-        const dist = dec * dec + Math.min(ra, 360 - ra) * 0.1;
-        if (dist < minDist) {
-          minDist = dist;
-          bestRa = ra;
-          bestDec = dec;
-          found = true;
-        }
-      }
-    }
-  }
-
-  return { ra: bestRa, dec: bestDec };
-}
-
-/** Clear the tile center cache (call when switching surveys) */
-export function clearTileCenterCache(): void {
-
-
-
-
-  tileCenterCache.clear();
 }

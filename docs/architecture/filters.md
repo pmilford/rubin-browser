@@ -4,6 +4,11 @@
 
 Rubin/LSST observes in six photometric bands: u, g, r, i, z, y.
 
+> **Status:** The filter and RGB-composite **UI** exists, but the canvas viewer
+> currently loads a single color HiPS survey and does not yet fetch per-band
+> imagery. Changing filters updates app state/status but does not (yet) reload
+> band-specific tiles. Treat this document as the intended design.
+
 ## Components
 
 ### FilterSelector (`src/components/FilterSelector.svelte`)
@@ -14,16 +19,16 @@ Rubin/LSST observes in six photometric bands: u, g, r, i, z, y.
 
 ## Filter Definitions
 
-Defined in `src/constants.ts` as `FILTERS`:
+Defined in `src/constants.ts` as `LSST_FILTERS`:
 
 | Filter | Wavelength (nm) | Description |
 |--------|----------------|-------------|
 | u | 367 | Ultraviolet |
 | g | 482 | Green |
 | r | 622 | Red |
-| i | 754 | Near-infrared |
-| z | 869 | Infrared |
-| y | 971 | Far-infrared |
+| i | 754 | Near-IR |
+| z | 869 | Z-band |
+| y | 971 | Y-band |
 
 ## RGB Composite
 
@@ -35,6 +40,9 @@ Users select 3 filters for R, G, B channels. Common combinations:
 ## Data Flow
 
 ```
-FilterSelector → onFilterChange(filter) → TileViewer → ImageViewer.loadFilter(filter)
-FilterSelector → onCompositeChange({r,g,b}) → ImageViewer.loadComposite({r,g,b})
+FilterSelector → onFilterChange(filter) → TileViewer (updates state/status)
+FilterSelector → onCompositeChange({r,g,b}) → TileViewer (updates state/status)
 ```
+
+> Wiring these selections to actual per-band tile loading in `ImageViewer` is
+> planned but not yet implemented.

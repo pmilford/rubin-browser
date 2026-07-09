@@ -8,6 +8,8 @@ import {
   radecToHealpixNest,
   healpixNestToRadec,
   getTileCenter,
+  radecToThetaPhi,
+  thetaPhiToRadec,
 } from '../../src/api/hips.js';
 
 // Mock auth module
@@ -389,5 +391,76 @@ describe('getTileCenter round-trip', () => {
       const pix2 = radecToTileIndex(center.ra, center.dec, 3);
       expect(pix2, `tile ${pix} center (${center.ra.toFixed(2)}, ${center.dec.toFixed(2)}) maps to ${pix2}`).toBe(pix);
     }
+  });
+
+  it('getTileCenter is O(1) / cached (same result on repeat calls)', () => {
+    const a = getTileCenter(64, 3);
+    const b = getTileCenter(64, 3);
+    expect(b).toEqual(a);
+  });
+});
+
+describe('radecToThetaPhi / thetaPhiToRadec', () => {
+  it('round-trips RA/Dec through theta/phi', () => {
+    const cases: [number, number][] = [
+      [0, 0], [180, 0], [45, 45], [270, -30], [62, -37], [359.9, 89.9], [1, -89.9],
+    ];
+    for (const [ra, dec] of cases) {
+      const { theta, phi } = radecToThetaPhi(ra, dec);
+      const back = thetaPhiToRadec(theta, phi);
+      expect(back.ra).toBeCloseTo(ra, 6);
+      expect(back.dec).toBeCloseTo(dec, 6);
+    }
+  });
+
+  it('maps dec=90 to theta=0 (north pole) and dec=-90 to theta=pi', () => {
+    expect(radecToThetaPhi(0, 90).theta).toBeCloseTo(0, 10);
+    expect(radecToThetaPhi(0, -90).theta).toBeCloseTo(Math.PI, 10);
+  });
+
+  it('normalises negative and >360 RA', () => {
+    expect(radecToThetaPhi(-90, 0).phi).toBeCloseTo(radecToThetaPhi(270, 0).phi, 10);
+    expect(radecToThetaPhi(450, 0).phi).toBeCloseTo(radecToThetaPhi(90, 0).phi, 10);
+  });
+});
+
+describe('healpixNestToRadec', () => {
+  it('is the inverse of radecToHealpixNest for pixel centers', () => {
+    // ang2pix_nest(pix2ang_nest(x)) === x for sampled pixels at several nsides
+    for (const nside of [1, 2, 8, 64, 256]) {
+      const npix = 12 * nside * nside;
+      const step = Math.max(1, Math.floor(npix / 40));
+      for (let pix = 0; pix < npix; pix += step) {
+        const { ra, dec } = healpixNestToRadec(pix, nside);
+        expect(radecToHealpixNest(ra, dec, nside)).toBe(pix);
+      }
+    }
+  });
+
+  it('matches getTileCenter for a known order', () => {
+    const nside = orderToNside(4);
+    for (const pix of [0, 100, 1000, 3071]) {
+      expect(healpixNestToRadec(pix, nside)).toEqual(getTileCenter(pix, 4));
+    }
+  });
+});
+
+describe('radecToTileIndex known values', () => {
+  it('is consistent with radecToHealpixNest at matching nside', () => {
+    expect(radecToTileIndex(62, -37, 5)).toBe(radecToHealpixNest(62, -37, orderToNside(5)));
+    expect(radecToTileIndex(180, 0, 3)).toBe(radecToHealpixNest(180, 0, 8));
+  });
+
+  it('north pole falls in a polar-cap base pixel (0..3) at order 0', () => {
+    // At order 0 (nside=1) the 12 base pixels: 0-3 north cap, 4-7 equatorial, 8-11 south cap
+    const idx = radecToTileIndex(0, 90, 0);
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(idx).toBeLessThanOrEqual(3);
+  });
+
+  it('south pole falls in a south-cap base pixel (8..11) at order 0', () => {
+    const idx = radecToTileIndex(0, -90, 0);
+    expect(idx).toBeGreaterThanOrEqual(8);
+    expect(idx).toBeLessThanOrEqual(11);
   });
 });

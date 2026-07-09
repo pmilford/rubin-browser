@@ -14,25 +14,29 @@ Multiple sky surveys can be overlaid at the same WCS position, scale, and rotati
 
 ## Available Surveys
 
-Defined in `src/constants.ts` as `SURVEYS`:
+Defined in `src/constants.ts` as `SURVEY_OVERLAYS`. All are public CDS/alasky
+HiPS sources and need no token:
 
 | Survey | HiPS Source | Description |
 |--------|------------|-------------|
-| Gaia DR3 | `cdn.jsdelivr.net/gh/gaia-cds/gaia-hips/` | Star catalog, 1.8B sources |
+| Gaia DR3 | `cdn.jsdelivr.net/gh/gaia-cds/gaia-hips/` | Gaia DR3 optical photometry |
 | DSS2 Color | `alasky.cds.unistra.fr/DSS/DSSColor/` | Digitized Sky Survey, optical |
 | 2MASS J | `alasky.cds.unistra.fr/2MASS/J/` | Near-infrared survey |
-| SDSS Color | `alasky.cds.unistra.fr/SDSS/Color/` | Sloan Digital Sky Survey |
+| WISE Color | `alasky.cds.unistra.fr/WISE/W4` | Mid-IR (22 µm) |
+| PanSTARRS DR1 | `alasky.cds.unistra.fr/Pan-STARRS/DR1/color-i-r-g/` | Optical grizy |
 
 ## Rendering
 
-Overlays use Aladin Lite's layer system:
-- Each survey is a separate HiPS layer
-- Opacity controlled per-layer
-- All layers share the same WCS (center RA/Dec, rotation, FOV)
+Overlays are drawn by the custom canvas `ImageViewer` (no Aladin Lite):
+- Each survey's HiPS tiles are fetched and drawn over the base image
+- Opacity controlled per overlay
+- All overlays share the current view WCS (center RA/Dec, FOV) via the same
+  HEALPix tile indexing + gnomonic projection as the base layer
 
 ## Data Flow
 
 ```
-SurveySelector → onOverlayAdd(survey) → TileViewer → Aladin.addHiPSLayer(survey)
-SurveySelector → onOpacityChange(survey, opacity) → Aladin.setOpacity(layer, opacity)
+SurveySelector → onOverlayAdd(survey)   → TileViewer → ImageViewer.addOverlay(id, url, opacity)
+SurveySelector → onOpacityChange(id, o) → TileViewer → ImageViewer.setOverlayOpacity(id, o)
+SurveySelector → onOverlayRemove(id)    → TileViewer → ImageViewer.removeOverlay(id)
 ```

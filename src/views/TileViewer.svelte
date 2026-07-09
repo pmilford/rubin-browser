@@ -5,12 +5,13 @@
   import ColorBar from '../components/ColorBar.svelte';
   import StatusBar from '../components/StatusBar.svelte';
   import HelpModal from '../components/HelpModal.svelte';
+  import TokenDialog from '../components/TokenDialog.svelte';
   import ObjectBrowser from '../components/ObjectBrowser.svelte';
   import type { ScalingFunction, ColorMapName, InterpolationMethod, ViewerState, Epoch } from '../types/image.js';
   import { mjdToIso } from '../types/image.js';
   import { DEFAULT_MOCK_EPOCHS, type SurveyInfo } from '../constants.js';
   import type { FilterBand } from '../constants.js';
-  import { getToken } from '../api/auth.js';
+  import { getToken, isAuthenticated } from '../api/auth.js';
   import { lookupObject, type AstroObject } from '../data/objects.js';
 
   let scaling: ScalingFunction = $state('linear');
@@ -18,6 +19,7 @@
   let interpolation: InterpolationMethod = $state('bilinear');
   let invert = $state(false);
   let helpOpen = $state(false);
+  let tokenDialogOpen = $state(false);
 
   // UI state
   let panelOpen = $state(false);
@@ -61,6 +63,18 @@
 
   let imageViewerRef: ImageViewer | undefined = $state();
   let rspToken = $state(getToken() || '');
+  let authenticated = $state(isAuthenticated());
+
+  /** Handle token changes from the TokenDialog: update the token passed to
+   *  ImageViewer (which switches between public DSS and Rubin base URLs) and
+   *  refresh the authenticated flag used by the toolbar. */
+  function handleTokenChange(token: string | null) {
+    rspToken = token ?? '';
+    authenticated = isAuthenticated();
+    statusMessage = authenticated
+      ? 'Authenticated with Rubin Science Platform'
+      : 'Logged out — using public preview imagery (DSS)';
+  }
 
   function handleViewerStateChange(state: ViewerState) {
     currentRa = state.centerRa;
@@ -225,6 +239,8 @@
       onToggleFullscreen={toggleFullscreen}
       onToggleHelp={() => { helpOpen = !helpOpen; }}
       onToggleInvert={() => { invert = !invert; statusMessage = `Invert: ${invert ? 'ON' : 'OFF'}`; }}
+      onToggleToken={() => { tokenDialogOpen = !tokenDialogOpen; }}
+      {authenticated}
     />
   {/if}
 
@@ -286,6 +302,12 @@
   {/if}
 
   <HelpModal open={helpOpen} onClose={() => { helpOpen = false; }} />
+
+  <TokenDialog
+    open={tokenDialogOpen}
+    onClose={() => { tokenDialogOpen = false; }}
+    onTokenChange={handleTokenChange}
+  />
 </div>
 
 <style>

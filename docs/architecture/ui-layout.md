@@ -9,12 +9,12 @@ The Rubin Browser uses a compact overlay-style UI that maximizes the image viewi
 ```
 ┌─────────────────────────────────────────────┐
 │  CompactToolbar (always visible)            │
-│  [☰] [Search...] [🔍] │ [+] [−] [↻] ... [⛶] [?] │
+│  [☰] [Search] [🔍] │ [+] [−] [↻] ... [◐] [🔑] [⛶] [?] │
 ├─────────────────────────────────────────────┤
 │                                             │
 │                                             │
 │              ImageViewer (full area)        │
-│              (OpenSeadragon)                │
+│         (custom canvas HiPS renderer)       │
 │                                             │
 │                                             │
 ├─────────────────────────────────────────────┤
@@ -44,7 +44,7 @@ When SidePanel is open:
 ### CompactToolbar
 - **Location:** `src/components/CompactToolbar.svelte`
 - **Purpose:** Minimal always-visible toolbar with essential controls
-- **Controls:** Menu toggle (☰), Search input + Go, Zoom in/out, Reset, Fullscreen, Help
+- **Controls:** Menu toggle (☰), Search input + Go, Zoom in/out, Reset, Invert, RSP token (🔑), Fullscreen, Help
 - **Props:** `panelOpen`, `isFullscreen`, callback functions
 
 ### SidePanel
@@ -84,9 +84,10 @@ All state lives in `TileViewer.svelte` using Svelte 5 `$state()` runes:
 The image viewer (`ImageViewer.svelte`) supports two HiPS modes:
 
 1. **Public (default):** Uses DSS2 Color from CDS — no authentication required
-2. **Authenticated:** When an RSP token is available, uses Rubin Science Platform HiPS with Bearer token in `ajaxHeaders`
+2. **Authenticated:** When an RSP token is available, uses Rubin Science Platform HiPS, sending the token as an `Authorization: Bearer <token>` header on each tile fetch
 
-The `rspToken` prop controls this behavior. When empty/absent, public HiPS is used.
+The `rspToken` prop controls this behavior. When empty/absent, public HiPS is
+used. The token is entered via the 🔑 `TokenDialog` and held in `sessionStorage`.
 
 ## Fullscreen Integration
 

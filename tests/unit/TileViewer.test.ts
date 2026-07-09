@@ -2,15 +2,22 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/svelte';
 import TileViewer from '../../src/views/TileViewer.svelte';
 
-// Mock HiPS API module (used by new canvas-based ImageViewer)
-vi.mock('../../src/api/hips.js', () => ({
-  radecToTileIndex: vi.fn((ra: number, dec: number, order: number) => {
-    const nside = Math.pow(2, order);
-    const raBin = Math.floor(((ra % 360) / 360) * 12 * nside);
-    const decBin = Math.floor(((dec + 90) / 180) * nside);
-    return raBin + decBin * 12 * nside;
-  }),
-}));
+// Use the real (correct) HiPS/HEALPix helpers, overriding only radecToTileIndex
+// with a deterministic mock (used by the canvas-based ImageViewer).
+vi.mock('../../src/api/hips.js', async () => {
+  const actual = await vi.importActual<typeof import('../../src/api/hips.js')>(
+    '../../src/api/hips.js'
+  );
+  return {
+    ...actual,
+    radecToTileIndex: vi.fn((ra: number, dec: number, order: number) => {
+      const nside = Math.pow(2, order);
+      const raBin = Math.floor(((ra % 360) / 360) * 12 * nside);
+      const decBin = Math.floor(((dec + 90) / 180) * nside);
+      return raBin + decBin * 12 * nside;
+    }),
+  };
+});
 
 // Mock auth module
 vi.mock('../../src/api/auth.js', () => ({
