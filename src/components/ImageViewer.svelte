@@ -34,6 +34,10 @@
     colorMap = 'grayscale' as ColorMapName,
     interpolation = 'bilinear' as InterpolationMethod,
     invert = false,
+    blackPoint = 0,
+    whitePoint = 1,
+    contrast = 1,
+    bias = 0.5,
     onViewerStateChange,
   }: {
     hipsBaseUrl?: string;
@@ -46,6 +50,14 @@
     colorMap?: ColorMapName;
     interpolation?: InterpolationMethod;
     invert?: boolean;
+    /** Display black point (0-1) applied to the post-stretch value. */
+    blackPoint?: number;
+    /** Display white point (0-1) applied to the post-stretch value. */
+    whitePoint?: number;
+    /** Contrast: slope of the transfer curve about `bias` (1 = identity). */
+    contrast?: number;
+    /** Bias: midpoint of the transfer curve (0.5 = identity). */
+    bias?: number;
     onViewerStateChange?: (state: ViewerState) => void;
   } = $props();
 
@@ -208,7 +220,14 @@
   function render() {
     if (!ctx) return;
 
-    const needsPostProcessing = scaling !== 'linear' || colorMap !== 'grayscale' || invert;
+    const needsPostProcessing =
+      scaling !== 'linear' ||
+      colorMap !== 'grayscale' ||
+      invert ||
+      blackPoint > 0 ||
+      whitePoint < 1 ||
+      contrast !== 1 ||
+      bias !== 0.5;
 
     if (needsPostProcessing) {
       renderWithPostProcessing();
@@ -875,6 +894,22 @@
     // Apply scaling (normalized output 0-1)
     const scaled = applyScaling(gray, { method: scaling });
 
+    // DS9-style display transfer applied to the post-stretch value: a black/
+    // white-point cut then a contrast/bias remap about the colormap midpoint.
+    // Identity at defaults (0,1,1,0.5), so the base look is unchanged.
+    const lo = blackPoint;
+    const hi = whitePoint;
+    const range = Math.max(1e-6, hi - lo);
+    const applyTransfer = lo > 0 || hi < 1 || contrast !== 1 || bias !== 0.5;
+    if (applyTransfer) {
+      const d = scaled.data;
+      for (let i = 0; i < d.length; i++) {
+        let v = (d[i]! - lo) / range;
+        v = contrast * (v - bias) + 0.5;
+        d[i] = v < 0 ? 0 : v > 1 ? 1 : v;
+      }
+    }
+
     // Apply colormap (RGBA output 0-255, 4 bytes per pixel)
     const colored = applyColorMap(scaled.data, colorMap);
 
@@ -938,6 +973,10 @@
     void colorMap;
     void interpolation;
     void invert;
+    void blackPoint;
+    void whitePoint;
+    void contrast;
+    void bias;
     scheduleRender();
   });
 

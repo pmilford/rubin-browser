@@ -18,6 +18,11 @@
   let colorMap: ColorMapName = $state('grayscale');
   let interpolation: InterpolationMethod = $state('bilinear');
   let invert = $state(false);
+  // Display transfer (DS9-style) — identity at these defaults.
+  let blackPoint = $state(0);
+  let whitePoint = $state(1);
+  let contrast = $state(1);
+  let bias = $state(0.5);
   let helpOpen = $state(false);
   let tokenDialogOpen = $state(false);
 
@@ -91,6 +96,19 @@
     statusMessage = authenticated
       ? 'Authenticated with Rubin Science Platform'
       : 'Logged out — using public preview imagery (DSS)';
+  }
+
+  function handleStretchChange(v: {
+    blackPoint: number;
+    whitePoint: number;
+    contrast: number;
+    bias: number;
+  }) {
+    blackPoint = v.blackPoint;
+    whitePoint = v.whitePoint;
+    contrast = v.contrast;
+    bias = v.bias;
+    statusMessage = `Stretch: bp ${v.blackPoint.toFixed(2)} wp ${v.whitePoint.toFixed(2)} contrast ${v.contrast.toFixed(2)} bias ${v.bias.toFixed(2)}`;
   }
 
   function handleViewerStateChange(state: ViewerState) {
@@ -267,6 +285,10 @@
     {colorMap}
     {interpolation}
     {invert}
+    {blackPoint}
+    {whitePoint}
+    {contrast}
+    {bias}
     epochs={mockEpochs}
     {currentEpochIndex}
     {isPlaying}
@@ -282,6 +304,7 @@
     onColorMapChange={(c) => { colorMap = c; statusMessage = `Color map: ${c}`; }}
     onInterpolationChange={(i) => { interpolation = i; statusMessage = `Interpolation: ${i}`; }}
     onInvertChange={(v) => { invert = v; statusMessage = `Invert: ${v ? 'ON' : 'OFF'}`; }}
+    onStretchChange={handleStretchChange}
     onEpochChange={handleEpochChange}
     onPlayStateChange={(p) => { isPlaying = p; }}
     onFilterChange={handleFilterChange}
@@ -304,6 +327,10 @@
       {colorMap}
       {interpolation}
       {invert}
+      {blackPoint}
+      {whitePoint}
+      {contrast}
+      {bias}
       initialRa={62.0}
       initialDec={-37.0}
       initialZoom={3}

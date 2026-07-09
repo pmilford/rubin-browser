@@ -7,6 +7,7 @@
   import BlinkController from './BlinkController.svelte';
   import TimeSlider from './TimeSlider.svelte';
   import Histogram from './Histogram.svelte';
+  import StretchControls from './StretchControls.svelte';
 
   let {
     open = false,
@@ -14,6 +15,10 @@
     colorMap = 'grayscale' as ColorMapName,
     interpolation = 'bilinear' as InterpolationMethod,
     invert = false,
+    blackPoint = 0,
+    whitePoint = 1,
+    contrast = 1,
+    bias = 0.5,
     epochs = [] as Epoch[],
     currentEpochIndex = 0,
     isPlaying = false,
@@ -29,6 +34,7 @@
     onColorMapChange,
     onInterpolationChange,
     onInvertChange,
+    onStretchChange,
     onEpochChange,
     onPlayStateChange,
     onFilterChange,
@@ -46,6 +52,10 @@
     colorMap?: ColorMapName;
     interpolation?: InterpolationMethod;
     invert?: boolean;
+    blackPoint?: number;
+    whitePoint?: number;
+    contrast?: number;
+    bias?: number;
     epochs?: Epoch[];
     currentEpochIndex?: number;
     isPlaying?: boolean;
@@ -61,6 +71,7 @@
     onColorMapChange?: (c: ColorMapName) => void;
     onInterpolationChange?: (i: InterpolationMethod) => void;
     onInvertChange?: (v: boolean) => void;
+    onStretchChange?: (v: { blackPoint: number; whitePoint: number; contrast: number; bias: number }) => void;
     onEpochChange?: (index: number, epoch: Epoch) => void;
     onPlayStateChange?: (playing: boolean) => void;
     onFilterChange?: (filter: FilterBand | null) => void;
@@ -156,6 +167,29 @@
                 onchange={(e) => onInvertChange?.(e.currentTarget.checked)}
               />
             </div>
+          </div>
+        {/if}
+      </section>
+
+      <!-- Stretch (display transfer) section -->
+      <section class="panel-section">
+        <button
+          class="section-toggle"
+          onclick={() => toggleSection('stretch')}
+          aria-expanded={activeSection === 'stretch'}
+        >
+          <span class="toggle-arrow" class:open={activeSection === 'stretch'}>▶</span>
+          Stretch
+        </button>
+        {#if activeSection === 'stretch'}
+          <div class="section-content">
+            <StretchControls
+              {blackPoint}
+              {whitePoint}
+              {contrast}
+              {bias}
+              onChange={(v) => onStretchChange?.(v)}
+            />
           </div>
         {/if}
       </section>

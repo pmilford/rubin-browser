@@ -180,6 +180,24 @@ test.describe('Interaction outcomes', () => {
     expect(await readout.isVisible().catch(() => false)).toBe(false);
   });
 
+  test('adjusting the stretch (black point) repaints the canvas', async ({ page }) => {
+    await page.locator('button[aria-label="Toggle controls panel"]').click();
+    await page.waitForTimeout(300);
+    await page.getByRole('button', { name: /Stretch/ }).click();
+    await page.waitForTimeout(200);
+
+    const before = await fingerprint(page);
+    // Range inputs can't be filled; set the value and dispatch input directly.
+    await page.locator('#stretch-black').evaluate((el: HTMLInputElement) => {
+      el.value = '0.45';
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await page.waitForTimeout(600);
+    const after = await fingerprint(page);
+    expect(changedCells(before, after)).toBeGreaterThan(4);
+    expect(await page.locator('[role="alert"]').isVisible().catch(() => false)).toBe(false);
+  });
+
   test('active-layers indicator shows the base layer and switches it', async ({ page }) => {
     const layers = page.locator('[aria-label="Active layers"]');
     await expect(layers).toBeVisible();
