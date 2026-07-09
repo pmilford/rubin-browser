@@ -44,6 +44,36 @@ endpoints/angle, proper axis scales, and switchable **linear/log** intensity
 scaling. (Requires real per-pixel values — full fidelity needs FITS; a relative-
 luminance version works on JPEG now.)
 
+**Design review done (2026-07-09) — NOT-ready-to-code blockers to resolve first:**
+1. Do NOT reuse the alert overlay canvas — `renderAlerts()` `clearRect`s it every
+   frame (it would erase the line) and it's `pointer-events:none`. Use a separate
+   overlay (own canvas/SVG, higher z-index, `pointer-events:auto` only in mode).
+2. Real pan suspension: gate `onPointerDown/Move/Up` on the mode and SKIP the
+   pointerup recenter — else finishing a line pans the sky. Own `setPointerCapture`
+   on whatever element gets the drag.
+3. Store endpoints as **RA/Dec** and reproject via `skyToCanvas(currentView())`
+   each render (or clear the line on any view change) — px endpoints decouple from
+   the sky on pan/zoom, making the plot + RA/Dec labels wrong.
+4. Sampling the displayed canvas conflates missing tiles / colormap non-monotonicity
+   / invert / 8-bit saturation with real intensity. Sample the PRE-colormap gray
+   (offscreen path), label it "displayed relative luminance, not flux," and mark
+   all-zero / off-canvas samples as **gaps ("no data"), never silent 0**.
+5. Do NOT wrap getImageData in a silent catch that returns zeros — surface failure
+   (`showError`) and render "no data".
+6. Distance axis = **great-circle arcmin** between endpoints' RA/Dec, not px.
+7. Perf: one getImageData over the line's bounding box + in-buffer interp, not N
+   1×1 readbacks.
+8. "One trace per layer" structurally needs per-layer offscreen buffers (all
+   overlays composite into one canvas today) — either add them or scope MVP to a
+   single trace and be explicit.
+Must-have falsifiable tests: pure-x gradient → horizontal line STRICTLY monotonic
+AND vertical line constant (kills axis-swap / all-zero); zero-length → finite, no
+NaN; off-canvas samples flagged as gaps not 0; luminance matches the readout
+formula `(0.299R+0.587G+0.114B)/255`; Playwright over content-verified region
+asserts the plotted path's y-RANGE > threshold (not merely that a path exists),
+endpoint-drag changes the path `d`, log toggle changes curve shape, and pan is
+verified suspended (center RA/Dec unchanged after a drag in mode).
+
 ## 4. Rubin time-series image browsing
 
 Answer "how do I look at a time series of Rubin images?" — a real path to
