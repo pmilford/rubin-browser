@@ -21,6 +21,13 @@
   import { applyScaling } from '../utils/scaling.js';
   import { applyColorMap } from '../utils/colormap.js';
   import PixelReadout from './PixelReadout.svelte';
+  import {
+    queryViewport,
+    typeVisible,
+    ALERT_TYPE_COLORS,
+    type AlertSet,
+    type AlertIndex,
+  } from '../data/alerts.js';
   import type { ViewerState, ScalingFunction, ColorMapName, InterpolationMethod } from '../types/image.js';
 
   let {
@@ -38,6 +45,10 @@
     whitePoint = 1,
     contrast = 1,
     bias = 0.5,
+    alerts = null as AlertSet | null,
+    alertIndex = null as AlertIndex | null,
+    showAlerts = false,
+    alertTypeMask = 0x1f,
     onViewerStateChange,
   }: {
     hipsBaseUrl?: string;
@@ -58,6 +69,14 @@
     contrast?: number;
     /** Bias: midpoint of the transfer curve (0.5 = identity). */
     bias?: number;
+    /** Alert/DIA events to overlay (columnar TypedArrays). */
+    alerts?: AlertSet | null;
+    /** Prebuilt spatial index for `alerts` (viewport culling). */
+    alertIndex?: AlertIndex | null;
+    /** Whether to draw the alert overlay. */
+    showAlerts?: boolean;
+    /** Bitmask of visible AlertTypes. */
+    alertTypeMask?: number;
     onViewerStateChange?: (state: ViewerState) => void;
   } = $props();
 
@@ -82,6 +101,10 @@
   let canvasEl: HTMLCanvasElement;
   let containerEl: HTMLDivElement;
   let ctx: CanvasRenderingContext2D | null = null;
+
+  // Alert overlay canvas (separate layer over the tile canvas).
+  let alertCanvasEl: HTMLCanvasElement | undefined;
+  let alertCtx: CanvasRenderingContext2D | null = null;
 
   // Offscreen canvas for post-processing
   let offscreenCanvas: HTMLCanvasElement | null = null;
@@ -217,6 +240,96 @@
    * Main render function.
    * Uses canvas translate for pan offset so old tiles remain visible during drag (Issue #3).
    */
+  // Above this many culled candidates, switch from individual markers to a
+  // screen-space density heatmap so a frame is O(cells), not O(events).
+  const ALERT_POINT_LIMIT = 4000;
+  const ALERT_DENSITY_CELL = 6; // px
+
+  /**
+   * Draw the alert overlay onto its own canvas. Culls to the viewport via the
+   * spatial index, then either plots individual markers (sparse) or a density
+   * heatmap (dense). Kept aligned with the tiles by the same pan translate.
+   */
+  function renderAlerts() {
+    if (!alertCtx || !alertCanvasEl) return;
+    alertCtx.clearRect(0, 0, canvasWidth, canvasHeight);
+    if (!showAlerts || !alerts || !alertIndex || alerts.count === 0) return;
+
+    // Generous sky bounds for culling (over-covers slightly; cheap + safe).
+    const halfDec = Math.min(89, fov * 0.8);
+    const decMin = Math.max(-90, dec - halfDec);
+    const decMax = Math.min(90, dec + halfDec);
+    const cosD = Math.max(0.02, Math.cos(dec * DEG2RAD));
+    const halfRa = (fov * 0.8) / cosD;
+    let raMin: number;
+    let raMax: number;
+    if (halfRa >= 180) {
+      raMin = 0;
+      raMax = 360;
+    } else {
+      raMin = ((ra - halfRa) % 360 + 360) % 360;
+      raMax = ((ra + halfRa) % 360 + 360) % 360;
+    }
+
+    const view = currentView();
+    const { ra: aRa, dec: aDec, type: aType } = alerts;
+
+    // First pass: project + accumulate a screen-space density grid, and collect
+    // marker points until the limit. One index query, one projection per point.
+    const gridW = Math.max(1, Math.ceil(canvasWidth / ALERT_DENSITY_CELL));
+    const gridH = Math.max(1, Math.ceil(canvasHeight / ALERT_DENSITY_CELL));
+    const density = new Int32Array(gridW * gridH);
+    let maxDensity = 0;
+    const px: number[] = [];
+    const py: number[] = [];
+    const pType: number[] = [];
+    let overLimit = false;
+
+    queryViewport(alertIndex, alerts, raMin, raMax, decMin, decMax, (i) => {
+      const t = aType[i]!;
+      if (!typeVisible(alertTypeMask, t)) return;
+      const [sx, sy] = skyToCanvas(view, aRa[i]!, aDec[i]!);
+      if (Number.isNaN(sx) || sx < 0 || sy < 0 || sx >= canvasWidth || sy >= canvasHeight) return;
+      const gx = (sx / ALERT_DENSITY_CELL) | 0;
+      const gy = (sy / ALERT_DENSITY_CELL) | 0;
+      const cell = gy * gridW + gx;
+      const c = ++density[cell]!;
+      if (c > maxDensity) maxDensity = c;
+      if (!overLimit) {
+        px.push(sx);
+        py.push(sy);
+        pType.push(t);
+        if (px.length > ALERT_POINT_LIMIT) overLimit = true;
+      }
+    });
+
+    alertCtx.save();
+    alertCtx.translate(panOffsetX, panOffsetY);
+
+    if (overLimit) {
+      // Density heatmap (log-scaled intensity).
+      const logMax = Math.log(maxDensity + 1) || 1;
+      for (let gy = 0; gy < gridH; gy++) {
+        for (let gx = 0; gx < gridW; gx++) {
+          const c = density[gy * gridW + gx]!;
+          if (c === 0) continue;
+          const a = 0.15 + 0.75 * (Math.log(c + 1) / logMax);
+          alertCtx.fillStyle = `rgba(255,180,60,${a.toFixed(3)})`;
+          alertCtx.fillRect(gx * ALERT_DENSITY_CELL, gy * ALERT_DENSITY_CELL, ALERT_DENSITY_CELL, ALERT_DENSITY_CELL);
+        }
+      }
+    } else {
+      // Individual markers colored by type.
+      for (let k = 0; k < px.length; k++) {
+        alertCtx.fillStyle = ALERT_TYPE_COLORS[pType[k]!] ?? '#fff';
+        alertCtx.beginPath();
+        alertCtx.arc(px[k]!, py[k]!, 3, 0, Math.PI * 2);
+        alertCtx.fill();
+      }
+    }
+    alertCtx.restore();
+  }
+
   function render() {
     if (!ctx) return;
 
@@ -234,6 +347,8 @@
     } else {
       renderDirect();
     }
+
+    renderAlerts();
   }
 
   function renderDirect() {
@@ -942,6 +1057,7 @@
     if (!containerEl) return;
 
     ctx = canvasEl.getContext('2d');
+    if (alertCanvasEl) alertCtx = alertCanvasEl.getContext('2d');
     resizeToContainer();
 
     const ro = new ResizeObserver(() => resizeToContainer());
@@ -977,6 +1093,10 @@
     void whitePoint;
     void contrast;
     void bias;
+    void alerts;
+    void alertIndex;
+    void showAlerts;
+    void alertTypeMask;
     scheduleRender();
   });
 
@@ -1041,6 +1161,13 @@
       canvasEl.height = h;
       canvasEl.style.width = w + 'px';
       canvasEl.style.height = h + 'px';
+      // Keep the alert overlay canvas the same size as the tile canvas.
+      if (alertCanvasEl) {
+        alertCanvasEl.width = w;
+        alertCanvasEl.height = h;
+        alertCanvasEl.style.width = w + 'px';
+        alertCanvasEl.style.height = h + 'px';
+      }
       // Safety: ensure FOV is sane after resize
       fov = zoomToFov(zoomLevel);
       // Reset offscreen canvas so it gets recreated at new size
@@ -1165,6 +1292,10 @@
     onkeydown={onKeyDown}
   ></canvas>
 
+  <!-- Alert/DIA overlay: a separate, non-interactive canvas kept pixel-aligned
+       with the tile canvas. Pointer events pass through to the tile canvas. -->
+  <canvas bind:this={alertCanvasEl} class="alert-canvas" aria-hidden="true"></canvas>
+
   {#if cursorReadout}
     <PixelReadout
       ra={cursorReadout.ra}
@@ -1247,6 +1378,14 @@
     cursor: grab;
     image-rendering: pixelated;
     outline: none;
+  }
+
+  .alert-canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    pointer-events: none;
+    z-index: 4;
   }
 
   .hips-canvas:active {

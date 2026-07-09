@@ -13,6 +13,16 @@
   import type { FilterBand } from '../constants.js';
   import { getToken, isAuthenticated } from '../api/auth.js';
   import { lookupObject, type AstroObject } from '../data/objects.js';
+  import {
+    generateSyntheticAlerts,
+    buildAlertIndex,
+    allTypesMask,
+    typeVisible,
+    ALERT_TYPE_NAMES,
+    ALERT_TYPE_COLORS,
+    type AlertSet,
+    type AlertIndex,
+  } from '../data/alerts.js';
 
   let scaling: ScalingFunction = $state('linear');
   let colorMap: ColorMapName = $state('grayscale');
@@ -55,6 +65,29 @@
     { id: 'dss', name: 'DSS2 Color', url: 'https://alasky.cds.unistra.fr/DSS/DSSColor' },
     { id: 'rubin', name: 'Rubin color_gri', url: 'https://data.lsst.cloud/api/hips/images/color_gri' },
   ];
+  // Alert / DIA overlay. Synthetic data is generated lazily on first enable
+  // (stand-in for the real, auth-gated Rubin alert stream).
+  let showAlerts = $state(false);
+  let alerts: AlertSet | null = $state(null);
+  let alertIndex: AlertIndex | null = $state(null);
+  let alertTypeMask = $state(allTypesMask());
+  const ALERT_SYNTHETIC_COUNT = 200000;
+
+  function toggleAlerts() {
+    showAlerts = !showAlerts;
+    if (showAlerts && !alerts) {
+      alerts = generateSyntheticAlerts(ALERT_SYNTHETIC_COUNT, 1);
+      alertIndex = buildAlertIndex(alerts);
+      statusMessage = `Alerts: ${alerts.count.toLocaleString()} synthetic events loaded`;
+    } else {
+      statusMessage = showAlerts ? 'Alerts: on' : 'Alerts: off';
+    }
+  }
+
+  function toggleAlertType(t: number) {
+    alertTypeMask = alertTypeMask ^ (1 << t);
+  }
+
   let baseLayerId = $state('auto');
   const baseLayer = $derived(BASE_LAYERS.find((b) => b.id === baseLayerId) ?? BASE_LAYERS[0]);
   const activeBaseName = $derived(
@@ -331,6 +364,10 @@
       {whitePoint}
       {contrast}
       {bias}
+      {alerts}
+      {alertIndex}
+      {showAlerts}
+      {alertTypeMask}
       initialRa={62.0}
       initialDec={-37.0}
       initialZoom={3}
@@ -357,6 +394,33 @@
               onclick={() => handleOverlayRemove(ov.survey.id)}>×</button>
           </span>
         {/each}
+
+        <button
+          class="alert-toggle"
+          class:on={showAlerts}
+          aria-pressed={showAlerts}
+          aria-label="Toggle alert overlay"
+          onclick={toggleAlerts}
+        >
+          ◈ Alerts{#if alerts && showAlerts} ({alerts.count.toLocaleString()}){/if}
+        </button>
+
+        {#if showAlerts}
+          <span class="alert-legend" aria-label="Alert type filter">
+            {#each ALERT_TYPE_NAMES as name, t (t)}
+              <button
+                class="type-chip"
+                class:off={!typeVisible(alertTypeMask, t)}
+                aria-pressed={typeVisible(alertTypeMask, t)}
+                aria-label={`Toggle ${name} alerts`}
+                onclick={() => toggleAlertType(t)}
+              >
+                <span class="type-dot" style={`background:${ALERT_TYPE_COLORS[t]}`}></span>
+                {name}
+              </button>
+            {/each}
+          </span>
+        {/if}
       </div>
     {/if}
     <div class="object-browser-overlay">
@@ -466,6 +530,56 @@
 
   .chip-remove:hover {
     color: #fff;
+  }
+
+  .alert-toggle {
+    background: rgba(10, 10, 30, 0.8);
+    border: 1px solid rgba(255, 180, 60, 0.35);
+    border-radius: 6px;
+    padding: 3px 8px;
+    color: #fc8;
+    font-family: inherit;
+    font-size: 11px;
+    cursor: pointer;
+  }
+
+  .alert-toggle.on {
+    background: rgba(60, 40, 10, 0.9);
+    color: #ffd24d;
+    border-color: rgba(255, 200, 80, 0.7);
+  }
+
+  .alert-legend {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: wrap;
+  }
+
+  .type-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: rgba(10, 10, 30, 0.8);
+    border: 1px solid #333;
+    border-radius: 5px;
+    padding: 2px 6px;
+    color: #ccd;
+    font-family: inherit;
+    font-size: 10px;
+    cursor: pointer;
+  }
+
+  .type-chip.off {
+    opacity: 0.4;
+    text-decoration: line-through;
+  }
+
+  .type-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
   }
 
   .ui-hidden .viewer-area {

@@ -61,8 +61,18 @@ for superseded views, an allsky/low-res preview layer, and caching/prefetch.
 
 ## 6. Rubin alert / DIA event overlay
 
-Rubin runs difference-image analysis producing millions of events/day (the alert
-stream). Optionally overlay their **positions + IDs** on the sky (asteroids,
-satellites, novae, variable stars, …), toggleable alongside the other catalog
-overlays. Longer term: **locally reproduce the simpler detections** (image
-differencing on multi-epoch cubes — depends on items 1, 2, 4).
+**Performant overlay architecture DONE** (`src/data/alerts.ts` + ImageViewer
+overlay canvas): columnar TypedArrays, a uniform RA/Dec spatial index with
+viewport culling, and a level-of-detail renderer (individual type-colored
+markers when sparse → density heatmap when dense) that stays O(cells) at volume.
+Driven by a deterministic synthetic generator (200k events) with a toggle,
+per-type filter legend, and count. Verified to full-sky at 200k.
+
+Remaining for this item:
+- **Real data source**: adapter from the actual Rubin alert stream / DIA-source
+  TAP tables into the `AlertSet` shape (auth-gated; pluggable behind the current
+  synthetic generator). Time-windowed / streaming loads.
+- **Hover/click**: hit-test to show an event's ID, type, magnitude, and time.
+- **Overlay with catalogs**: unify with the survey/catalog overlay controls.
+- Longer term: **locally reproduce the simpler detections** (image differencing
+  on multi-epoch cubes — depends on items 1, 2, 4).
