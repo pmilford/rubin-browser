@@ -574,6 +574,22 @@
     let loadAttempts = 0;
     let loadFailures = 0;
 
+    // Shared failure accounting for BOTH the <img> path and the authenticated
+    // fetch path — previously the fetch path incremented the counter but never
+    // surfaced an error, so Rubin tile failures (404 / no data rights / CORS)
+    // were completely silent ("showing as 0, no sign it failed").
+    const recordFailure = () => {
+      loadFailures++;
+      if (loadFailures > 5 && loadFailures > loadAttempts * 0.5) {
+        const isRubin = resolvedBaseUrl.includes('data.lsst.cloud');
+        showError(
+          isRubin
+            ? 'Rubin tiles unavailable here — your token may lack data rights for this survey/region, or the service is down. Switch the Base layer to “DSS2 Color” to use public imagery.'
+            : 'Multiple tiles failed to load. Check your connection or try different coordinates.'
+        );
+      }
+    };
+
     for (const tile of visibleTiles) {
       const cacheKey = `${tile.order}-${tile.pixelIndex}`;
       if (tileCache.has(cacheKey)) continue;
@@ -594,10 +610,7 @@
 
       img.onerror = () => {
         pendingLoads.delete(img);
-        loadFailures++;
-        if (loadFailures > 5 && loadFailures > loadAttempts * 0.5) {
-          showError('Multiple tiles failed to load. Check your connection or try different coordinates.');
-        }
+        recordFailure();
       };
 
       if (rspToken && Object.keys(auth).length > 0) {
@@ -612,7 +625,7 @@
           })
           .catch(() => {
             pendingLoads.delete(img);
-            loadFailures++;
+            recordFailure();
           });
       } else {
         img.src = url;

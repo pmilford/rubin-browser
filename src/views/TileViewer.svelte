@@ -91,11 +91,7 @@
   let baseLayerId = $state('auto');
   const baseLayer = $derived(BASE_LAYERS.find((b) => b.id === baseLayerId) ?? BASE_LAYERS[0]);
   const activeBaseName = $derived(
-    baseLayerId === 'auto'
-      ? authenticated
-        ? 'Rubin color_gri (auto)'
-        : 'DSS2 Color (auto)'
-      : baseLayer.name
+    baseLayerId === 'auto' ? (authenticated ? 'Rubin color_gri' : 'DSS2 Color') : baseLayer.name
   );
 
   // Time series state
@@ -381,9 +377,12 @@
           <span class="layer-label">Base</span>
           <select bind:value={baseLayerId} aria-label="Base layer">
             {#each BASE_LAYERS as bl (bl.id)}
-              <option value={bl.id}>{bl.id === 'auto' ? activeBaseName : bl.name}</option>
+              <option value={bl.id}>{bl.name}</option>
             {/each}
           </select>
+          {#if baseLayerId === 'auto'}
+            <span class="base-resolved" aria-label="Resolved base layer">→ {activeBaseName}</span>
+          {/if}
         </label>
         {#each surveyOverlays as ov (ov.survey.id)}
           <span class="layer-chip">
@@ -400,9 +399,10 @@
           class:on={showAlerts}
           aria-pressed={showAlerts}
           aria-label="Toggle alert overlay"
+          title="Synthetic demo events — NOT real Rubin alerts (no live alert-stream connection yet)"
           onclick={toggleAlerts}
         >
-          ◈ Alerts{#if alerts && showAlerts} ({alerts.count.toLocaleString()}){/if}
+          ◈ Alerts (demo{#if alerts && showAlerts}, {alerts.count.toLocaleString()}{/if})
         </button>
 
         {#if showAlerts}
@@ -495,6 +495,11 @@
     color: #88a;
     text-transform: uppercase;
     letter-spacing: 0.5px;
+  }
+
+  .base-resolved {
+    color: #789;
+    font-size: 10px;
   }
 
   .layer-base select {

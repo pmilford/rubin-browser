@@ -167,22 +167,10 @@
                 onchange={(e) => onInvertChange?.(e.currentTarget.checked)}
               />
             </div>
-          </div>
-        {/if}
-      </section>
 
-      <!-- Stretch (display transfer) section -->
-      <section class="panel-section">
-        <button
-          class="section-toggle"
-          onclick={() => toggleSection('stretch')}
-          aria-expanded={activeSection === 'stretch'}
-        >
-          <span class="toggle-arrow" class:open={activeSection === 'stretch'}>▶</span>
-          Stretch
-        </button>
-        {#if activeSection === 'stretch'}
-          <div class="section-content">
+            <div class="subsection-label">
+              Stretch <span class="subsection-hint">(the Scaling dropdown above is the stretch function — includes log / sqrt / asinh / histogram / zscale)</span>
+            </div>
             <StretchControls
               {blackPoint}
               {whitePoint}
@@ -392,6 +380,25 @@
 
   .section-content {
     padding: 4px 16px 12px;
+  }
+
+  .subsection-label {
+    margin: 12px 0 6px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #8cf;
+    border-top: 1px solid #2a2a3e;
+    padding-top: 10px;
+  }
+
+  .subsection-hint {
+    display: block;
+    text-transform: none;
+    letter-spacing: 0;
+    color: #778;
+    font-size: 10px;
+    margin-top: 2px;
   }
 
   .control-row {

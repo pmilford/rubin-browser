@@ -44,7 +44,7 @@
       value={blackPoint}
       oninput={(e) => emit({ blackPoint: Math.min(whitePoint - 0.01, +e.currentTarget.value) })}
     />
-    <output>{blackPoint.toFixed(2)}</output>
+    <span class="val">{blackPoint.toFixed(2)}</span>
   </div>
 
   <div class="ctl">
@@ -58,7 +58,7 @@
       value={whitePoint}
       oninput={(e) => emit({ whitePoint: Math.max(blackPoint + 0.01, +e.currentTarget.value) })}
     />
-    <output>{whitePoint.toFixed(2)}</output>
+    <span class="val">{whitePoint.toFixed(2)}</span>
   </div>
 
   <div class="ctl">
@@ -72,7 +72,7 @@
       value={contrast}
       oninput={(e) => emit({ contrast: +e.currentTarget.value })}
     />
-    <output>{contrast.toFixed(2)}</output>
+    <span class="val">{contrast.toFixed(2)}</span>
   </div>
 
   <div class="ctl">
@@ -86,7 +86,7 @@
       value={bias}
       oninput={(e) => emit({ bias: +e.currentTarget.value })}
     />
-    <output>{bias.toFixed(2)}</output>
+    <span class="val">{bias.toFixed(2)}</span>
   </div>
 
   <button class="reset-btn" onclick={reset} disabled={isDefault}>Reset stretch</button>
@@ -117,7 +117,7 @@
     accent-color: #6a6aff;
   }
 
-  .ctl output {
+  .ctl .val {
     text-align: right;
     font-family: monospace;
     color: #ccf;

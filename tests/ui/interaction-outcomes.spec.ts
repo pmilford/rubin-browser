@@ -183,8 +183,6 @@ test.describe('Interaction outcomes', () => {
   test('adjusting the stretch (black point) repaints the canvas', async ({ page }) => {
     await page.locator('button[aria-label="Toggle controls panel"]').click();
     await page.waitForTimeout(300);
-    await page.getByRole('button', { name: /Stretch/ }).click();
-    await page.waitForTimeout(200);
 
     const before = await fingerprint(page);
     // Range inputs can't be filled; set the value and dispatch input directly.
