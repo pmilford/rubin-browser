@@ -1,5 +1,37 @@
 # CLAUDE.md — Rubin Browser
 
+## MANDATORY: Design review before coding (non-trivial features)
+
+Most bugs caught by the user here were "obvious in hindsight" — a reflected tile,
+a readout wired to zeros, a swallowed error, a redundant dropdown. They share one
+cause: **intent/failure-mode gaps that tests missed because the tests checked
+self-consistency, not correctness.** To stop that class, before writing code for
+anything beyond a trivial fix:
+
+1. Write a short **spec**: intent · data flow (input → output) · failure modes ·
+   verification plan (the falsifiable tests). A few lines, not a document.
+2. Run the **`design-review` subagent** (Agent tool, `subagent_type: design-review`)
+   on that spec + the relevant files. It hunts placeholder/hardcoded values,
+   unwired components, silent failures, and tests that cannot fail.
+3. Resolve its BLOCKERS, fold its MUST-TEST assertions into the plan, THEN code.
+
+Trivial one-liners skip the spec. When in doubt, spec it.
+
+### Failure-mode checklist (apply to every user-facing change)
+For each external dependency, ask **"what does the user SEE when this fails?"** —
+failure must be visible, never silent:
+- Network 404 / timeout   - Invalid / expired / missing auth token
+- Empty or zero result     - Saturated / clipped source data (8-bit JPEG!)
+- Off-screen / degenerate geometry   - Default/unset value mistaken for real data
+
+### Adversarial test rule
+For every test you write, answer: **"what broken version of this feature still
+passes this test?"** If a reflected / hardcoded / silent / backwards
+implementation passes, the test is worthless — assert an OUTCOME against ground
+truth or a known-correct reference, not existence or self-consistency. Then
+actually drive the running app and LOOK — proactively, not only when a bug is
+reported.
+
 ## MANDATORY: Test rendering by its OUTCOME, never by mocks
 
 **After ANY change to rendering, tiles, canvas, projection, or coordinate

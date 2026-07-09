@@ -72,6 +72,16 @@ may not have it — never make DP1 access a hard requirement). KNOWN CODE SMELL:
 `/api/dp1/*`, and `auth.validateToken` hits `/api/dp1/query` (vs `/sync`).
 Reconcile the catalog namespace + endpoint when catalog search is actually wired.
 
+## Process: design review before coding (MANDATORY)
+
+Non-trivial features start with a short spec (intent · data flow · failure modes ·
+falsifiable tests) reviewed by the `design-review` subagent BEFORE any code — it
+catches the "obvious" class (hardcoded/placeholder values, unwired components,
+silent failures, tests that can't fail). Then apply the failure-mode checklist
+("what does the user SEE when this fails?") and the adversarial test rule ("what
+broken version still passes this test?"). See the root CLAUDE.md for the full
+process. Trivial one-liners skip the spec.
+
 ## Testing Philosophy (MANDATORY)
 
 The mandate is **meaningful visual/interaction coverage, not a line-count

@@ -76,3 +76,16 @@ Remaining for this item:
 - **Overlay with catalogs**: unify with the survey/catalog overlay controls.
 - Longer term: **locally reproduce the simpler detections** (image differencing
   on multi-epoch cubes — depends on items 1, 2, 4).
+- **Time filtering**: alerts need a time-window control (slider / range) to show
+  only events in a chosen interval — essential once real time-stamped events land
+  and for the multi-epoch analysis.
+
+## 7. Higher bit-depth / less-compressed imagery
+
+JPEG HiPS tiles are fine for quick browsing but are 8-bit and already stretched/
+clipped (e.g. M31's core is saturated to white at the source — no stretch can
+recover it). Add less-compressed / higher-bit-depth options: PNG HiPS where
+available, and a FITS path (Rubin SODA `read:image` cutouts / FITS HiPS) that
+keeps linear float pixels so real stretch, un-saturated cores, and calibrated
+value readouts work. Let the user choose fidelity vs. speed. Overlaps with the
+FITS-gated items (flux-accurate stretch, Lupton gri color, real value readout).
