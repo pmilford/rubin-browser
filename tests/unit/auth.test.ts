@@ -4,19 +4,22 @@ import {
   getToken,
   clearToken,
   isAuthenticated,
+  isTokenPersisted,
   getAuthHeader,
   validateToken,
 } from '../../src/api/auth.js';
 
-const mockStorage = new Map<string, string>();
-Object.defineProperty(globalThis, 'sessionStorage', {
-  value: {
-    getItem: (key: string) => mockStorage.get(key) ?? null,
-    setItem: (key: string, value: string) => mockStorage.set(key, value),
-    removeItem: (key: string) => mockStorage.delete(key),
-  },
-  writable: true,
-});
+const mockStorage = new Map<string, string>(); // sessionStorage
+const mockLocal = new Map<string, string>(); // localStorage
+function storageMock(m: Map<string, string>) {
+  return {
+    getItem: (key: string) => m.get(key) ?? null,
+    setItem: (key: string, value: string) => m.set(key, value),
+    removeItem: (key: string) => m.delete(key),
+  };
+}
+Object.defineProperty(globalThis, 'sessionStorage', { value: storageMock(mockStorage), writable: true });
+Object.defineProperty(globalThis, 'localStorage', { value: storageMock(mockLocal), writable: true });
 
 /** Build a fake JWT with the given payload */
 function fakeJwt(payload: Record<string, unknown>): string {
@@ -29,6 +32,7 @@ describe('Auth Module', () => {
   beforeEach(() => {
     clearToken();
     mockStorage.clear();
+    mockLocal.clear();
     vi.restoreAllMocks();
   });
 
@@ -59,6 +63,34 @@ describe('Auth Module', () => {
       // getToken should fall back to sessionStorage
       const token = getToken();
       expect(token).toBe('stored-token');
+    });
+
+    it('persist=false keeps the token in sessionStorage only', () => {
+      setToken('session-only', false);
+      expect(mockStorage.get('rubin_rsp_token')).toBe('session-only');
+      expect(mockLocal.has('rubin_rsp_token')).toBe(false);
+      expect(isTokenPersisted()).toBe(false);
+    });
+
+    it('persist=true stores the token in localStorage (survives session)', () => {
+      setToken('remembered', true);
+      expect(mockLocal.get('rubin_rsp_token')).toBe('remembered');
+      expect(mockStorage.has('rubin_rsp_token')).toBe(false);
+      expect(isTokenPersisted()).toBe(true);
+    });
+
+    it('reads a persisted token from localStorage when not in memory', () => {
+      mockLocal.set('rubin_rsp_token', 'persisted-token');
+      expect(getToken()).toBe('persisted-token');
+      expect(isTokenPersisted()).toBe(true);
+    });
+
+    it('switching persist=true then false moves the token between storages', () => {
+      setToken('t', true);
+      expect(mockLocal.has('rubin_rsp_token')).toBe(true);
+      setToken('t', false);
+      expect(mockLocal.has('rubin_rsp_token')).toBe(false);
+      expect(mockStorage.get('rubin_rsp_token')).toBe('t');
     });
   });
 

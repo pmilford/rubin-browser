@@ -15,6 +15,7 @@ vi.mock('../../src/api/auth.js', () => ({
   setToken: vi.fn(),
   clearToken: vi.fn(),
   isAuthenticated: vi.fn(() => false),
+  isTokenPersisted: vi.fn(() => false),
   getToken: vi.fn(() => null),
   validateToken: vi.fn(),
 }));
@@ -69,7 +70,7 @@ describe('TokenDialog', () => {
     const saveBtn = screen.getByRole('button', { name: 'Save' });
     await fireEvent.click(saveBtn);
 
-    expect(mockSetToken).toHaveBeenCalledWith('my-secret-token');
+    expect(mockSetToken).toHaveBeenCalledWith('my-secret-token', false);
     expect(onTokenChange).toHaveBeenCalledWith('my-secret-token');
     expect(onClose).toHaveBeenCalled();
   });
@@ -82,7 +83,7 @@ describe('TokenDialog', () => {
     await fireEvent.input(input, { target: { value: '  padded-token  ' } });
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
-    expect(mockSetToken).toHaveBeenCalledWith('padded-token');
+    expect(mockSetToken).toHaveBeenCalledWith('padded-token', false);
     expect(onTokenChange).toHaveBeenCalledWith('padded-token');
   });
 

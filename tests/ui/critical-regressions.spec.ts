@@ -160,9 +160,10 @@ test.describe('Critical Bug Regressions', () => {
       const surveyList = page.locator('[aria-label="Available surveys"]');
       await expect(surveyList).toBeVisible();
 
-      // Individual surveys should be listed
-      await expect(page.locator('text=Gaia DR3')).toBeVisible();
-      await expect(page.locator('text=DSS2 Color')).toBeVisible();
+      // Individual surveys should be listed (scoped to the survey list — the
+      // active-layers base indicator also contains a "DSS2 Color" label).
+      await expect(surveyList.getByText('Gaia DR3')).toBeVisible();
+      await expect(surveyList.getByText('DSS2 Color')).toBeVisible();
     });
   });
 

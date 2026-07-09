@@ -43,6 +43,23 @@
   }
   let surveyOverlays: OverlayEntry[] = $state([]);
 
+  // Base layer selection. 'auto' defers to the token (Rubin when authenticated,
+  // else public DSS); the explicit choices override that regardless of token.
+  const BASE_LAYERS = [
+    { id: 'auto', name: 'Auto', url: '' },
+    { id: 'dss', name: 'DSS2 Color', url: 'https://alasky.cds.unistra.fr/DSS/DSSColor' },
+    { id: 'rubin', name: 'Rubin color_gri', url: 'https://data.lsst.cloud/api/hips/images/color_gri' },
+  ];
+  let baseLayerId = $state('auto');
+  const baseLayer = $derived(BASE_LAYERS.find((b) => b.id === baseLayerId) ?? BASE_LAYERS[0]);
+  const activeBaseName = $derived(
+    baseLayerId === 'auto'
+      ? authenticated
+        ? 'Rubin color_gri (auto)'
+        : 'DSS2 Color (auto)'
+      : baseLayer.name
+  );
+
   // Time series state
   const mockEpochs: Epoch[] = DEFAULT_MOCK_EPOCHS.map(e => ({
     mjd: e.mjd,
@@ -282,6 +299,7 @@
     <ImageViewer
       bind:this={imageViewerRef}
       {rspToken}
+      hipsBaseUrl={baseLayer.url}
       {scaling}
       {colorMap}
       {interpolation}
@@ -291,6 +309,29 @@
       initialZoom={3}
       onViewerStateChange={handleViewerStateChange}
     />
+
+    {#if uiVisible}
+      <!-- Active layers: base survey + overlays, always visible -->
+      <div class="active-layers" aria-label="Active layers">
+        <label class="layer-base">
+          <span class="layer-label">Base</span>
+          <select bind:value={baseLayerId} aria-label="Base layer">
+            {#each BASE_LAYERS as bl (bl.id)}
+              <option value={bl.id}>{bl.id === 'auto' ? activeBaseName : bl.name}</option>
+            {/each}
+          </select>
+        </label>
+        {#each surveyOverlays as ov (ov.survey.id)}
+          <span class="layer-chip">
+            {ov.survey.name}
+            <button
+              class="chip-remove"
+              aria-label={`Remove ${ov.survey.name} overlay`}
+              onclick={() => handleOverlayRemove(ov.survey.id)}>×</button>
+          </span>
+        {/each}
+      </div>
+    {/if}
     <div class="object-browser-overlay">
       <ObjectBrowser onObjectSelect={handleObjectSelect} />
     </div>
@@ -332,6 +373,72 @@
     z-index: 15;
     max-height: 50%;
     overflow-y: auto;
+  }
+
+  .active-layers {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    z-index: 6;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    max-width: 60%;
+    font-size: 11px;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+  }
+
+  .layer-base {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(10, 10, 30, 0.8);
+    border: 1px solid rgba(100, 100, 255, 0.3);
+    border-radius: 6px;
+    padding: 3px 8px;
+    color: #aac;
+  }
+
+  .layer-label {
+    color: #88a;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .layer-base select {
+    background: #1a1a2e;
+    color: #ccf;
+    border: 1px solid #444;
+    border-radius: 4px;
+    padding: 2px 4px;
+    font-size: 11px;
+    font-family: inherit;
+  }
+
+  .layer-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: rgba(20, 40, 30, 0.85);
+    border: 1px solid rgba(110, 224, 140, 0.35);
+    border-radius: 6px;
+    padding: 3px 6px 3px 8px;
+    color: #bfe;
+  }
+
+  .chip-remove {
+    background: none;
+    border: none;
+    color: #9cb;
+    cursor: pointer;
+    font-size: 13px;
+    line-height: 1;
+    padding: 0 2px;
+  }
+
+  .chip-remove:hover {
+    color: #fff;
   }
 
   .ui-hidden .viewer-area {

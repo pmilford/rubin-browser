@@ -14,29 +14,48 @@ let authState: AuthState = {
   expiresAt: null,
 };
 
-export function setToken(token: string): void {
+/**
+ * Store the RSP token. By default it lives in `sessionStorage` (cleared when the
+ * tab closes). Pass `persist = true` to keep it in `localStorage` so it survives
+ * across sessions on this device — an explicit, opt-in trade-off (a bearer token
+ * on disk is a security consideration; only for a trusted personal machine).
+ */
+export function setToken(token: string, persist = false): void {
   authState = {
     token,
     authenticated: true,
     expiresAt: parseTokenExpiry(token),
   };
-  // Store in session only (not localStorage)
-  sessionStorage.setItem(TOKEN_KEY, token);
+  if (persist) {
+    localStorage.setItem(TOKEN_KEY, token);
+    sessionStorage.removeItem(TOKEN_KEY);
+  } else {
+    sessionStorage.setItem(TOKEN_KEY, token);
+    localStorage.removeItem(TOKEN_KEY);
+  }
 }
 
 export function getToken(): string | null {
   if (authState.token) return authState.token;
-  const stored = sessionStorage.getItem(TOKEN_KEY);
+  const persisted = localStorage.getItem(TOKEN_KEY);
+  const stored = sessionStorage.getItem(TOKEN_KEY) ?? persisted;
   if (stored) {
-    setToken(stored);
+    // Rehydrate in-memory state without moving the token between storages.
+    setToken(stored, persisted !== null);
     return stored;
   }
   return null;
 }
 
+/** Whether the current token is persisted to localStorage (survives tab close). */
+export function isTokenPersisted(): boolean {
+  return localStorage.getItem(TOKEN_KEY) !== null;
+}
+
 export function clearToken(): void {
   authState = { token: null, authenticated: false, expiresAt: null };
   sessionStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(TOKEN_KEY);
 }
 
 export function isAuthenticated(): boolean {
@@ -55,16 +74,18 @@ export function getAuthHeader(): Record<string, string> {
   return { Authorization: `Bearer ${token}` };
 }
 
-/** Validate token by making a test API call */
+/**
+ * Validate the token's IDENTITY against the RSP auth service.
+ *
+ * Uses Gafaelfawr's user-info endpoint, which returns 200 for any valid token
+ * and 401 for an invalid/expired one — independent of DP1 *data rights*. (The
+ * old check ran a DP0.2 TAP query against a DP1 endpoint, so it failed even for
+ * valid tokens and conflated "authenticated" with "has data access".)
+ */
 export async function validateToken(token: string): Promise<boolean> {
   try {
-    const resp = await fetch('https://data.lsst.cloud/api/dp1/query', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        Authorization: `Bearer ${token}`,
-      },
-      body: 'QUERY=SELECT+TOP+1+*+FROM+dp02_dc2_catalogs.Object&LANG=ADQL&FORMAT=json',
+    const resp = await fetch('https://data.lsst.cloud/auth/api/v1/user-info', {
+      headers: { Authorization: `Bearer ${token}` },
     });
     return resp.ok;
   } catch {

@@ -4,6 +4,7 @@
     clearToken,
     getToken,
     isAuthenticated,
+    isTokenPersisted,
     validateToken,
   } from '../api/auth.js';
 
@@ -19,6 +20,8 @@
 
   let tokenInput = $state('');
   let inputEl: HTMLInputElement | undefined = $state();
+  // Opt-in persistence: keep the token in localStorage across sessions.
+  let remember = $state(false);
 
   // Auth status snapshot — refreshed explicitly (on open and after mutations)
   // rather than re-derived, so isAuthenticated() side effects stay controlled.
@@ -58,6 +61,7 @@
       validationError = '';
       validating = false;
       refreshStatus();
+      remember = isTokenPersisted();
       // Focus after the DOM updates.
       queueMicrotask(() => inputEl?.focus());
     }
@@ -66,7 +70,7 @@
   function handleSave() {
     const token = tokenInput.trim();
     if (!token) return;
-    setToken(token);
+    setToken(token, remember);
     refreshStatus();
     onTokenChange(token);
     onClose();
@@ -153,6 +157,12 @@
           Token validation failed{validationError ? ` (${validationError})` : ''}.
         </p>
       {/if}
+
+      <label class="remember-row">
+        <input type="checkbox" bind:checked={remember} />
+        <span>Remember on this device</span>
+        <span class="remember-hint">(stores the token in this browser; only on a trusted machine)</span>
+      </label>
 
       <div class="button-row">
         <button class="btn btn-primary" onclick={handleSave} disabled={!tokenInput.trim()}>
@@ -301,6 +311,22 @@
 
   .validate-fail {
     color: #f66;
+  }
+
+  .remember-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 12px;
+    font-size: 12px;
+    color: #ccc;
+    cursor: pointer;
+  }
+
+  .remember-hint {
+    color: #888;
+    font-size: 11px;
   }
 
   .button-row {

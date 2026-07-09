@@ -180,6 +180,20 @@ test.describe('Interaction outcomes', () => {
     expect(await readout.isVisible().catch(() => false)).toBe(false);
   });
 
+  test('active-layers indicator shows the base layer and switches it', async ({ page }) => {
+    const layers = page.locator('[aria-label="Active layers"]');
+    await expect(layers).toBeVisible();
+    const baseSelect = page.locator('select[aria-label="Base layer"]');
+    await expect(baseSelect).toBeVisible();
+    // Default is auto (DSS when unauthenticated).
+    await expect(layers).toContainText('DSS2 Color');
+    // Switching to the explicit Rubin base updates the indicator + requests
+    // Rubin tiles (which may 404 without data rights — that's fine here).
+    await baseSelect.selectOption('rubin');
+    await page.waitForTimeout(400);
+    await expect(baseSelect).toHaveValue('rubin');
+  });
+
   test('changing colormap actually repaints the canvas', async ({ page }) => {
     await page.locator('button[aria-label="Toggle controls panel"]').click();
     await page.waitForTimeout(300);
