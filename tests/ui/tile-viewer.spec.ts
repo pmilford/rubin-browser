@@ -190,11 +190,10 @@ test.describe('Tile Viewer', () => {
     const viewer = page.locator('.image-viewer');
     await expect(viewer).toBeVisible();
 
-    // Aladin Lite should create canvas elements inside the viewer
-    // Wait for Aladin to initialize and try to load tiles
+    // The custom canvas viewer should populate the container with its canvas + HUD.
     await page.waitForTimeout(2000);
 
-    // Check that the viewer div is not empty (Aladin creates internal elements)
+    // Check that the viewer div is not empty (canvas + FOV indicator + minimap).
     const childCount = await page.locator('.image-viewer > *').count();
     expect(childCount).toBeGreaterThan(0);
   });
@@ -206,10 +205,10 @@ test.describe('Tile Viewer', () => {
     expect(box!.height).toBeGreaterThan(200);
   });
 
-  test('Aladin Lite canvas is rendered', async ({ page }) => {
-    // Aladin should render a canvas element inside the viewer
+  test('HiPS canvas is rendered', async ({ page }) => {
+    // The custom viewer renders a <canvas.hips-canvas> inside .image-viewer.
     await page.waitForTimeout(2000);
-    const canvas = page.locator('.image-viewer canvas, .image-viewer .aladin-container');
+    const canvas = page.locator('.image-viewer canvas.hips-canvas, .image-viewer canvas');
     await expect(canvas.first()).toBeAttached();
   });
 

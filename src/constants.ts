@@ -39,7 +39,7 @@ export interface SurveyInfo {
   id: string;
   /** Display name */
   name: string;
-  /** HiPS URL for Aladin Lite */
+  /** HiPS base URL for the canvas tile renderer */
   hipsUrl: string;
   /** Survey description */
   description: string;

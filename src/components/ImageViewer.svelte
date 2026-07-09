@@ -2,6 +2,13 @@
   import { getAuthHeader } from '../api/auth.js';
   import { parseHipsProperties, radecToThetaPhi, thetaPhiToRadec } from '../api/hips.js';
   import {
+    skyToCanvas,
+    canvasToSky,
+    zoomToFov,
+    fovToOrder,
+    type ViewParams,
+  } from '../utils/projection.js';
+  import {
     order2nside,
     nside2npix,
     ang2vec,
@@ -103,79 +110,16 @@
   const pendingLoads = new Set<HTMLImageElement>();
 
   // --- Coordinate Utilities ---
+  // Projection + FOV/order math lives in src/utils/projection.ts (pure, unit-
+  // tested for round-trip, zoom-centering, pan direction/magnitude, and tile
+  // winding). `currentView()` snapshots the component's live view state for it.
 
-  function zoomToFov(zoom: number): number {
-    return 180 / Math.pow(2, zoom);
-  }
-
-  /**
-   * Choose a HiPS order such that a tile's angular size is a reasonable
-   * fraction of the current FOV.
-   *
-   * A HEALPix tile at order N spans ~ (90 / Nside) degrees on a side, with
-   * Nside = 2^N. We aim for roughly TILES_ACROSS tiles across the FOV, i.e.
-   * tileAngle ≈ fov / TILES_ACROSS. Solving 90/2^N ≈ fov/TILES_ACROSS gives
-   * N ≈ log2(90 * TILES_ACROSS / fov). Clamp to [0, surveyMaxOrder].
-   */
-  function fovToOrder(viewFov: number): number {
-    const TILES_ACROSS = 4;
-    const raw = Math.log2((90 * TILES_ACROSS) / Math.max(viewFov, 1e-6));
-    const order = Math.round(raw);
-    return Math.max(0, Math.min(surveyMaxOrder, order));
+  function currentView(): ViewParams {
+    return { ra, dec, fov, canvasWidth, canvasHeight, panOffsetX, panOffsetY };
   }
 
   function zoomToOrder(zoom: number): number {
-    return fovToOrder(zoomToFov(zoom));
-  }
-
-  /**
-   * Gnomonic projection: sky coords (deg) → canvas coords (px).
-   * Pure projection without pan offset — offset is applied in render().
-   */
-  function skyToCanvas(skyRa: number, skyDec: number): [number, number] {
-    const cosDec0 = Math.cos((dec * Math.PI) / 180);
-    const sinDec0 = Math.sin((dec * Math.PI) / 180);
-    const cosDec = Math.cos((skyDec * Math.PI) / 180);
-    const sinDec = Math.sin((skyDec * Math.PI) / 180);
-    const dRa = ((skyRa - ra) * Math.PI) / 180;
-    const cosDRa = Math.cos(dRa);
-
-    const cosC = sinDec0 * sinDec + cosDec0 * cosDec * cosDRa;
-    if (cosC <= 0.01) return [NaN, NaN];
-
-    const k = 1 / cosC;
-    const u = k * cosDec * Math.sin(dRa);
-    const v = k * (cosDec0 * sinDec - sinDec0 * cosDec * cosDRa);
-    const scale = canvasWidth / ((fov * Math.PI) / 180);
-
-    return [canvasWidth / 2 + u * scale, canvasHeight / 2 - v * scale];
-  }
-
-  /**
-   * Canvas coords (px, relative to canvas) → sky coords (deg).
-   * Accounts for current pan offset so coordinate readout is correct during drag.
-   */
-  function canvasToSky(px: number, py: number): [number, number] {
-    // Undo pan offset to get logical canvas position
-    const logicalX = px - panOffsetX;
-    const logicalY = py - panOffsetY;
-
-    const scale = canvasWidth / ((fov * Math.PI) / 180);
-    // Convert pixel offsets to angular offsets in radians.
-    // scale is px/radian, so pixelOffset / scale = radians.
-    const u = (logicalX - canvasWidth / 2) / scale;
-    const v = -(logicalY - canvasHeight / 2) / scale;
-    const rho = Math.sqrt(u * u + v * v);
-    const c = Math.atan(rho);
-    const cosDec0 = Math.cos((dec * Math.PI) / 180);
-    const sinDec0 = Math.sin((dec * Math.PI) / 180);
-    const cosC = Math.cos(c);
-    const sinC = Math.sin(c);
-
-    const newDec = Math.asin(cosC * sinDec0 + (v * sinC * cosDec0) / (rho || 1));
-    const newRa = ra + (Math.atan2(u * sinC, rho * cosC * cosDec0 - v * sinC * sinDec0) * 180) / Math.PI;
-
-    return [((newRa % 360) + 360) % 360, (newDec * 180) / Math.PI];
+    return fovToOrder(zoomToFov(zoom), surveyMaxOrder);
   }
 
   // --- Tile URL Construction ---
@@ -378,10 +322,11 @@
     const screen: [number, number][] = [];
     let anyOnScreen = false;
     const margin = TILE_SIZE;
+    const view = currentView();
     for (const v of ordered) {
       const { theta, phi } = vec2ang(v);
       const { ra: cornerRa, dec: cornerDec } = thetaPhiToRadec(theta, phi);
-      const [sx, sy] = skyToCanvas(cornerRa, cornerDec);
+      const [sx, sy] = skyToCanvas(view, cornerRa, cornerDec);
       if (isNaN(sx) || isNaN(sy)) return; // corner behind viewer → skip whole tile
       screen.push([sx, sy]);
       if (sx >= -margin && sx <= canvasWidth + margin && sy >= -margin && sy <= canvasHeight + margin) {
@@ -609,7 +554,7 @@
 
     // Finalize: recenter on current view position
     if (panOffsetX !== 0 || panOffsetY !== 0) {
-      const [newRa, newDec] = canvasToSky(canvasWidth / 2, canvasHeight / 2);
+      const [newRa, newDec] = canvasToSky(currentView(), canvasWidth / 2, canvasHeight / 2);
       ra = newRa;
       dec = newDec;
       panOffsetX = 0;
@@ -629,7 +574,7 @@
     const delta = e.deltaY > 0 ? -0.5 : 0.5;
 
     // Find the sky point currently at screen center (accounting for pan offset)
-    const [centerRa, centerDec] = canvasToSky(canvasWidth / 2, canvasHeight / 2);
+    const [centerRa, centerDec] = canvasToSky(currentView(), canvasWidth / 2, canvasHeight / 2);
 
     // Apply zoom
     zoomLevel = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoomLevel + delta));
@@ -650,7 +595,7 @@
     const rect = canvasEl.getBoundingClientRect();
     const px = e.clientX - rect.left;
     const py = e.clientY - rect.top;
-    const [newRa, newDec] = canvasToSky(px, py);
+    const [newRa, newDec] = canvasToSky(currentView(), px, py);
     ra = newRa;
     dec = newDec;
     panOffsetX = 0;
@@ -766,7 +711,7 @@
    */
   export function setZoom(level: number) {
     // Find the sky point at screen center
-    const [centerRa, centerDec] = canvasToSky(canvasWidth / 2, canvasHeight / 2);
+    const [centerRa, centerDec] = canvasToSky(currentView(), canvasWidth / 2, canvasHeight / 2);
 
     zoomLevel = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, level));
     fov = zoomToFov(zoomLevel);

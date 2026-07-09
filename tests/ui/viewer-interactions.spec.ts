@@ -9,7 +9,7 @@ import { test, expect } from '@playwright/test';
 test.describe('Viewer Interactions', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
-    // Wait for Aladin/canvas viewer to initialize
+    // Wait for the canvas viewer to initialize.
     await page.waitForTimeout(3000);
   });
 

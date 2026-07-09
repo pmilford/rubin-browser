@@ -17,7 +17,7 @@ const BASE_URL = process.env.E2E_URL || 'http://localhost:5173';
 test.describe('Visual Smoke Tests (requires live server)', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto(BASE_URL);
-    // Wait for Aladin/OSD to initialize and load initial tiles
+    // Wait for the canvas viewer to initialize and load initial tiles.
     await page.waitForTimeout(3000);
   });
 
@@ -30,7 +30,7 @@ test.describe('Visual Smoke Tests (requires live server)', () => {
 
   test('canvas element exists and has rendered content', async ({ page }) => {
     // The image viewer should have a canvas with actual pixels
-    const canvas = page.locator('.image-viewer canvas, .aladin-canvas, canvas').first();
+    const canvas = page.locator('.image-viewer canvas.hips-canvas, .image-viewer canvas, canvas').first();
     await expect(canvas).toBeAttached();
 
     // Canvas should have non-zero dimensions

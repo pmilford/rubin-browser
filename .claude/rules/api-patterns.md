@@ -3,10 +3,12 @@
 ## Location
 
 All Rubin API clients live in `src/api/`. One file per service:
-- `tap.ts` — TAP catalog queries
-- `hips.ts` — HiPS image tiles
-- `soda.ts` — Image cutouts (SODA protocol)
-- `auth.ts` — Token management
+- `auth.ts` — RSP token management (single source of truth for auth)
+- `hips.ts` — HiPS image tiles + HEALPix helpers (wrappers over @hscmap/healpix)
+- `tap.ts`  — TAP catalog queries (sync + async)
+
+Planned, not yet present: a SODA cutout client (`soda.ts`). Do not import it
+until it exists.
 
 ## Authentication
 
@@ -66,3 +68,7 @@ const adql = `SELECT * FROM Object WHERE CONTAINS(...)`;
 ```
 
 This prevents SQL injection and keeps query logic testable.
+
+> Note: `buildConeSearch` currently prefixes tables as `dp02_dc2_catalogs.*`
+> (DP0.2) while the endpoint is `/api/dp1`. Reconcile the catalog namespace with
+> the intended DP1 tables when wiring up real catalog search.
