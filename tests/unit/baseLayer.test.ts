@@ -4,10 +4,43 @@ import {
   isRubinUrl,
   isOfflineUrl,
   activeBaseLabel,
+  rubinDatasetUrl,
+  RUBIN_DATASETS,
   PUBLIC_HIPS,
   RUBIN_HIPS,
   OFFLINE_HIPS,
 } from '../../src/utils/baseLayer.js';
+
+describe('Rubin DP1 dataset switching (multi-filter)', () => {
+  it('builds each dataset URL under the DP1 deep_coadd path', () => {
+    for (const d of RUBIN_DATASETS) {
+      const url = rubinDatasetUrl(d.id);
+      expect(url).toBe(`https://data.lsst.cloud/api/hips/v2/dp1/deep_coadd/${d.id}`);
+      expect(isRubinUrl(url)).toBe(true);
+      expect(url).not.toContain('/api/hips/images/');
+    }
+  });
+
+  it('offers the 6 ugrizy bands plus colour composites', () => {
+    const bands = RUBIN_DATASETS.filter((d) => d.kind === 'band').map((d) => d.id);
+    expect(bands).toEqual(['band_u', 'band_g', 'band_r', 'band_i', 'band_z', 'band_y']);
+    expect(RUBIN_DATASETS.some((d) => d.id === 'color_gri' && d.kind === 'color')).toBe(true);
+  });
+
+  it('resolveActiveBaseUrl honours the selected dataset for rubin AND auto', () => {
+    expect(resolveActiveBaseUrl('rubin', true, false, 'band_r')).toBe(rubinDatasetUrl('band_r'));
+    expect(resolveActiveBaseUrl('auto', true, false, 'band_g')).toBe(rubinDatasetUrl('band_g'));
+    // Auto that has fallen back stays on DSS regardless of dataset.
+    expect(resolveActiveBaseUrl('auto', true, true, 'band_r')).toBe(PUBLIC_HIPS);
+    // Default dataset is gri colour.
+    expect(resolveActiveBaseUrl('rubin', true, false)).toBe(RUBIN_HIPS);
+  });
+
+  it('labels each dataset distinctly', () => {
+    expect(activeBaseLabel(rubinDatasetUrl('band_r'))).toBe('Rubin r');
+    expect(activeBaseLabel(rubinDatasetUrl('color_izy'))).toBe('Rubin izy colour');
+  });
+});
 
 describe('resolveActiveBaseUrl — full truth table', () => {
   it('auto + token + not-fallen-back → Rubin', () => {
@@ -60,8 +93,8 @@ describe('isRubinUrl / activeBaseLabel', () => {
     expect(isRubinUrl(RUBIN_HIPS)).toBe(true);
     expect(isRubinUrl(PUBLIC_HIPS)).toBe(false);
   });
-  it('labels the resolved base', () => {
-    expect(activeBaseLabel(RUBIN_HIPS)).toBe('Rubin color_gri');
+  it('labels the resolved base (naming the specific DP1 dataset)', () => {
+    expect(activeBaseLabel(RUBIN_HIPS)).toBe('Rubin gri colour');
     expect(activeBaseLabel(PUBLIC_HIPS)).toBe('DSS2 Color');
   });
 });

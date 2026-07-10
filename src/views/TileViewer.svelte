@@ -11,6 +11,7 @@
   import OfflineLayerControls from '../components/OfflineLayerControls.svelte';
   import ObjectInfoPanel from '../components/ObjectInfoPanel.svelte';
   import { OFFLINE_EPOCHS, OFFLINE_BANDS, brightestOfflineVariable } from '../data/offlineDataset.js';
+  import { RUBIN_DATASETS } from '../utils/baseLayer.js';
   import type { IdentifyInfo } from '../data/objects.js';
   import type { Band } from '../data/syntheticSky.js';
   import type { LineProfile } from '../utils/crossSection.js';
@@ -115,6 +116,10 @@
       : 'Cross-section: off';
   }
 
+  // Rubin DP1 multi-filter: switch the active HiPS dataset (gri/ugri/… colour
+  // composites or a single ugrizy band). Shown when the Rubin base is active.
+  let rubinDataset = $state('color_gri');
+
   // Offline synthetic cube browsing: independent time (epoch) and wavelength
   // (band) axes. Only meaningful while the offline base layer is active; drive
   // ImageViewer to re-synthesize tiles per (band, mjd).
@@ -130,6 +135,11 @@
   let resolvedBaseLabel = $state('DSS2 Color');
   const activeBaseName = $derived(
     baseLayerId === 'auto' ? resolvedBaseLabel : baseLayer.name
+  );
+  // Whether the Rubin DP1 base is actually active (explicit, or auto-resolved to
+  // Rubin and not fallen back) — gates the multi-filter dataset selector.
+  const rubinActive = $derived(
+    baseLayerId === 'rubin' || (baseLayerId === 'auto' && resolvedBaseLabel.startsWith('Rubin'))
   );
 
   // Time series state
@@ -403,6 +413,7 @@
       {showAlerts}
       {alertTypeMask}
       {crossSectionMode}
+      {rubinDataset}
       {offlineBand}
       {offlineMjd}
       initialRa={62.0}
@@ -454,6 +465,27 @@
               statusMessage = `Jumped to synthetic transient at RA ${t.ra.toFixed(2)}°, Dec ${t.dec.toFixed(2)}° — blink epochs to watch it fade`;
             }}
           />
+        {/if}
+        {#if rubinActive}
+          <label class="rubin-filter" aria-label="Rubin filter">
+            <span class="layer-label">Filter</span>
+            <select
+              bind:value={rubinDataset}
+              aria-label="Rubin DP1 dataset"
+              onchange={() => { statusMessage = `Rubin dataset: ${rubinDataset}`; }}
+            >
+              <optgroup label="Colour composites">
+                {#each RUBIN_DATASETS.filter((d) => d.kind === 'color') as d (d.id)}
+                  <option value={d.id}>{d.label}</option>
+                {/each}
+              </optgroup>
+              <optgroup label="Single band">
+                {#each RUBIN_DATASETS.filter((d) => d.kind === 'band') as d (d.id)}
+                  <option value={d.id}>{d.label}-band</option>
+                {/each}
+              </optgroup>
+            </select>
+          </label>
         {/if}
         {#each surveyOverlays as ov (ov.survey.id)}
           <span class="layer-chip">
@@ -575,7 +607,8 @@
     font-family: 'SF Mono', 'Fira Code', monospace;
   }
 
-  .layer-base {
+  .layer-base,
+  .rubin-filter {
     display: flex;
     align-items: center;
     gap: 6px;
@@ -584,6 +617,18 @@
     border-radius: 6px;
     padding: 3px 8px;
     color: #aac;
+  }
+  .rubin-filter {
+    border-color: rgba(120, 200, 255, 0.4);
+  }
+  .rubin-filter select {
+    background: #1a1a2e;
+    color: #cef;
+    border: 1px solid #345;
+    border-radius: 4px;
+    padding: 2px 4px;
+    font-size: 11px;
+    font-family: inherit;
   }
 
   .layer-label {

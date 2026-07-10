@@ -49,6 +49,7 @@
   let {
     hipsBaseUrl = '',
     baseMode = 'auto' as BaseMode,
+    rubinDataset = 'color_gri',
     rspToken = '',
     tileFormat = '',
     initialRa = 62.0,
@@ -78,6 +79,8 @@
     hipsBaseUrl?: string;
     /** Base-layer selection: 'auto' | 'dss' | 'rubin'. Auto degrades to DSS on Rubin failure. */
     baseMode?: BaseMode;
+    /** Rubin DP1 dataset id (colour composite or single band) for the multi-filter switch. */
+    rubinDataset?: string;
     rspToken?: string;
     tileFormat?: string;
     initialRa?: number;
@@ -145,7 +148,7 @@
   let autoFallbackReason = $state('');
 
   const resolvedBaseUrl = $derived(
-    hipsBaseUrl || resolveActiveBaseUrl(baseMode, !!rspToken, autoFellBack)
+    hipsBaseUrl || resolveActiveBaseUrl(baseMode, !!rspToken, autoFellBack, rubinDataset)
   );
 
   let canvasEl: HTMLCanvasElement;
@@ -1646,12 +1649,15 @@
   // the token — a fresh choice deserves a fresh Rubin attempt.
   let lastBaseMode = baseMode;
   let lastToken = rspToken;
+  let lastRubinDataset = rubinDataset;
   $effect(() => {
     const m = baseMode;
     const t = rspToken;
-    if (m !== lastBaseMode || t !== lastToken) {
+    const ds = rubinDataset;
+    if (m !== lastBaseMode || t !== lastToken || ds !== lastRubinDataset) {
       lastBaseMode = m;
       lastToken = t;
+      lastRubinDataset = ds;
       autoFellBack = false;
       autoFallbackReason = '';
     }

@@ -140,6 +140,41 @@ test.describe('Base auto-fallback', () => {
     }), { timeout: 15000 }).toBeGreaterThan(0);
   });
 
+  test('Rubin multi-filter: switching the DP1 dataset changes the requested band path', async ({ page }) => {
+    await injectToken(page);
+    const white = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAD0lEQVR4nGP4jwMwDC0JALoev0Ewkwr8AAAAAElFTkSuQmCC',
+      'base64',
+    );
+    const AUTH_CORS = {
+      'access-control-allow-origin': '*',
+      'access-control-allow-headers': 'authorization',
+      'access-control-allow-methods': 'GET,OPTIONS',
+    };
+    await page.route('**/data.lsst.cloud/**', (route) => {
+      const req = route.request();
+      if (req.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: AUTH_CORS });
+      if (isTile(req.url())) return route.fulfill({ status: 200, contentType: 'image/png', headers: AUTH_CORS, body: white });
+      return route.fulfill({ status: 401, headers: AUTH_CORS, body: 'x' });
+    });
+
+    await page.goto('/');
+    await page.locator('select[aria-label="Base layer"]').selectOption('rubin');
+
+    // Now record tile requests and switch the filter dataset to the r band.
+    const gotBandR: string[] = [];
+    page.on('request', (req) => {
+      if (req.method() === 'GET' && /Norder\d+.*Npix\d+/.test(req.url()) && req.url().includes('/deep_coadd/band_r/')) {
+        gotBandR.push(req.url());
+      }
+    });
+    await page.locator('select[aria-label="Rubin DP1 dataset"]').selectOption('band_r');
+
+    // Tiles must now come from the band_r dataset path (not color_gri).
+    await expect.poll(() => gotBandR.length, { timeout: 15000 }).toBeGreaterThan(0);
+    for (const u of gotBandR) expect(u).toContain('/api/hips/v2/dp1/deep_coadd/band_r/');
+  });
+
   test('Explicit Rubin does NOT fall back — it shows the switch-layer error and stays on Rubin', async ({ page }) => {
     await injectToken(page);
     await page.route('**/data.lsst.cloud/**', (route) => route.fulfill({ status: 404, body: 'no rights' }));
