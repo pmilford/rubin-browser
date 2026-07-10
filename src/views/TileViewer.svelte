@@ -12,6 +12,8 @@
   import ObjectInfoPanel from '../components/ObjectInfoPanel.svelte';
   import SimbadPanel from '../components/SimbadPanel.svelte';
   import { objectsNear, type SimbadObject } from '../api/simbad.js';
+  import DiffPanel from '../components/DiffPanel.svelte';
+  import { radecToTileIndex } from '../api/hips.js';
   import SurfacePlot from '../components/SurfacePlot.svelte';
   import { OFFLINE_EPOCHS, OFFLINE_BANDS, brightestOfflineVariable, offlineLightCurve } from '../data/offlineDataset.js';
   import LightCurvePlot from '../components/LightCurvePlot.svelte';
@@ -242,6 +244,31 @@
     statusMessage = showCoverage
       ? 'DP1 coverage: showing the 7 Rubin fields (~15 deg² total) — data exists only inside these'
       : 'DP1 coverage: off';
+  }
+
+  // Offline image differencing (epoch A vs B → transients) over the synthetic cube.
+  const DIFF_ORDER = 6; // browsing order where the wide-beam synthetic sources show
+  let diffMode = $state(false);
+  let diffAIndex = $state(0);
+  let diffBIndex = $state(0);
+  // The HEALPix tile at the current view centre (recomputed as you pan).
+  const diffPix = $derived(radecToTileIndex(currentRa, currentDec, DIFF_ORDER));
+  function toggleDiff() {
+    diffMode = !diffMode;
+    if (diffMode) {
+      // Default the two epochs to the brightest transient's faint vs bright epoch,
+      // and jump to it so the differenced tile actually contains the event.
+      const t = brightestOfflineVariable(offlineBand);
+      diffAIndex = t.faintEpochIndex;
+      diffBIndex = t.brightEpochIndex;
+      currentRa = t.ra;
+      currentDec = t.dec;
+      imageViewerRef?.panTo(t.ra, t.dec);
+      imageViewerRef?.setZoom(7);
+      statusMessage = 'Differencing: faint vs bright epoch of the synthetic transient';
+    } else {
+      statusMessage = 'Differencing: off';
+    }
   }
 
   // Magnifier loupe of the pixels under the cursor.
@@ -851,6 +878,19 @@
           </button>
         {/if}
 
+        {#if baseLayerId === 'offline'}
+          <button
+            class="xsection-toggle"
+            class:on={diffMode}
+            aria-pressed={diffMode}
+            aria-label="Toggle image differencing"
+            title="Difference two epochs of the synthetic cube to find transients (offline ground truth)"
+            onclick={toggleDiff}
+          >
+            ⧉ Diff
+          </button>
+        {/if}
+
         {#if showAlerts}
           <label class="alert-source" aria-label="Alert source select">
             <span class="layer-label">Source</span>
@@ -918,7 +958,7 @@
         <span class="ai-note">synthetic demo event</span>
       </div>
     {/if}
-    {#if uiVisible && (identifyInfo || simbadQuery || crossSectionMode || surfaceMode || lightCurveMode)}
+    {#if uiVisible && (identifyInfo || simbadQuery || crossSectionMode || surfaceMode || lightCurveMode || (diffMode && baseLayerId === 'offline'))}
       <!-- Right-side stack: the object-ID popup sits ABOVE the analysis plots so
            they never overlap. -->
       <div class="right-stack">
@@ -933,6 +973,19 @@
             status={simbadStatus}
             onSelect={handleSimbadSelect}
             onClose={() => { simbadQuery = null; simbadResults = null; simbadStatus = null; }}
+          />
+        {/if}
+        {#if diffMode && baseLayerId === 'offline'}
+          <DiffPanel
+            order={DIFF_ORDER}
+            pixelIndex={diffPix}
+            band={offlineBand}
+            epochs={OFFLINE_EPOCHS}
+            aIndex={diffAIndex}
+            bIndex={diffBIndex}
+            onAChange={(i) => { diffAIndex = i; }}
+            onBChange={(i) => { diffBIndex = i; }}
+            onClose={toggleDiff}
           />
         {/if}
         {#if crossSectionMode}
