@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { profilePath, type LineProfile } from '../utils/crossSection.js';
+  import { profilePath, type LineProfile, type ProfileChannel } from '../utils/crossSection.js';
 
   let {
     profile = null as LineProfile | null,
@@ -10,6 +10,22 @@
   } = $props();
 
   let logScale = $state(false);
+
+  // Which channels to trace. Luminance (grayscale) on by default; R/G/B off. For a
+  // colour-composite base (DSS/Rubin gri) these are the composite's channels; true
+  // per-FILTER-layer traces need per-layer buffers (a follow-up).
+  const CHANNELS: { key: ProfileChannel; label: string; color: string }[] = [
+    { key: 'lum', label: 'Lum', color: '#9cc7ff' },
+    { key: 'r', label: 'R', color: '#ff6b6b' },
+    { key: 'g', label: 'G', color: '#5fd35f' },
+    { key: 'b', label: 'B', color: '#5fa8ff' },
+  ];
+  let enabled = $state<Record<ProfileChannel, boolean>>({ lum: true, r: false, g: false, b: false });
+  function toggleChannel(k: ProfileChannel) {
+    // Keep at least one channel visible.
+    const next = { ...enabled, [k]: !enabled[k] };
+    if (CHANNELS.some((c) => next[c.key])) enabled = next;
+  }
 
   const W = 280;
   const H = 120;
@@ -22,7 +38,16 @@
   });
   const hasData = $derived(coverage > 0);
 
-  const pathD = $derived(profile && hasData ? profilePath(profile, W, H, logScale) : '');
+  // One SVG path per enabled channel (drawn back-to-front: colours under lum).
+  const tracePaths = $derived.by(() =>
+    !profile || !hasData
+      ? []
+      : CHANNELS.filter((c) => enabled[c.key]).map((c) => ({
+          color: c.color,
+          key: c.key,
+          d: profilePath(profile, W, H, logScale, 1e-3, c.key),
+        }))
+  );
   const maxDist = $derived(
     profile && profile.distanceArcmin.length
       ? profile.distanceArcmin[profile.distanceArcmin.length - 1]!
@@ -39,6 +64,18 @@
 <div class="xsection-plot" role="region" aria-label="Cross-section profile">
   <div class="header">
     <span class="title">Cross-section</span>
+    <div class="channels" role="group" aria-label="Cross-section channels">
+      {#each CHANNELS as c (c.key)}
+        <button
+          class="chan-btn"
+          class:on={enabled[c.key]}
+          style={`--chan: ${c.color}`}
+          aria-pressed={enabled[c.key]}
+          aria-label={`Toggle ${c.label} channel`}
+          onclick={() => toggleChannel(c.key)}
+        >{c.label}</button>
+      {/each}
+    </div>
     <button
       class="mode-btn"
       aria-pressed={logScale}
@@ -61,7 +98,9 @@
       {#each [0.25, 0.5, 0.75] as g (g)}
         <line x1="0" y1={H * g} x2={W} y2={H * g} stroke="rgba(120,120,200,0.12)" stroke-width="0.5" />
       {/each}
-      <path d={pathD} fill="none" stroke="#7cf" stroke-width="1.3" />
+      {#each tracePaths as tp (tp.key)}
+        <path d={tp.d} fill="none" stroke={tp.color} stroke-width="1.3" data-channel={tp.key} />
+      {/each}
     </svg>
     <div class="axes">
       <span class="ax">0′</span>
@@ -111,6 +150,28 @@
     background: #2a3a5a;
     color: #bdf;
     border-color: #57a;
+  }
+  .channels {
+    display: inline-flex;
+    gap: 2px;
+  }
+  .chan-btn {
+    background: #1a1c30;
+    border: 1px solid #334;
+    border-radius: 3px;
+    color: #667;
+    cursor: pointer;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 5px;
+    font-family: inherit;
+    min-width: 20px;
+  }
+  .chan-btn.on {
+    color: var(--chan);
+    border-color: var(--chan);
+    background: #15182c;
+    box-shadow: inset 0 -2px 0 var(--chan);
   }
   .close-btn {
     padding: 2px 7px;

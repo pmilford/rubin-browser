@@ -81,6 +81,65 @@ test.describe('Base auto-fallback', () => {
     }
   });
 
+  test('DP1 Rubin renders: PNG tiles at the /v2/dp1/deep_coadd path, with the Bearer token', async ({ page }) => {
+    await injectToken(page);
+
+    const rubinTileReqs: { url: string; auth: string | undefined }[] = [];
+    page.on('request', (req) => {
+      const url = req.url();
+      // Only the real GET tile fetches — not the CORS preflight OPTIONS (which
+      // never carries Authorization).
+      if (req.method() === 'GET' && url.includes('data.lsst.cloud') && isTile(url)) {
+        rubinTileReqs.push({ url, auth: req.headers()['authorization'] });
+      }
+    });
+
+    const AUTH_CORS = {
+      'access-control-allow-origin': '*',
+      'access-control-allow-headers': 'authorization',
+      'access-control-allow-methods': 'GET,OPTIONS',
+    };
+    // Serve the Rubin DP1 host: answer the CORS preflight (the authed fetch needs
+    // it), 401 on /properties (auth-gated in reality), 200 PNG tiles at the correct
+    // path. The viewer must NOT depend on /properties and must request .png.
+    await page.route('**/data.lsst.cloud/**', (route) => {
+      const req = route.request();
+      if (req.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: AUTH_CORS });
+      const url = req.url();
+      if (url.endsWith('/properties')) return route.fulfill({ status: 401, headers: AUTH_CORS, body: 'auth required' });
+      if (isTile(url)) {
+        // A solid-WHITE 8×8 PNG so a successful render is genuinely non-black.
+        const white = Buffer.from(
+          'iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAD0lEQVR4nGP4jwMwDC0JALoev0Ewkwr8AAAAAElFTkSuQmCC',
+          'base64',
+        );
+        return route.fulfill({ status: 200, contentType: 'image/png', headers: AUTH_CORS, body: white });
+      }
+      return route.fulfill({ status: 404, headers: AUTH_CORS, body: 'nope' });
+    });
+
+    await page.goto('/');
+    // Explicitly select Rubin.
+    await page.locator('select[aria-label="Base layer"]').selectOption('rubin');
+
+    await expect.poll(() => rubinTileReqs.length, { timeout: 15000 }).toBeGreaterThan(0);
+    for (const r of rubinTileReqs) {
+      // Correct DP1 path...
+      expect(r.url).toContain('/api/hips/v2/dp1/deep_coadd/color_gri');
+      // ...requested as PNG (not the jpg default that 404'd every DP1 tile)...
+      expect(r.url).toMatch(/\.png(\?|$)/);
+      // ...and carrying the Bearer token (an <img> couldn't; the fetch→blob path does).
+      expect(r.auth).toMatch(/^Bearer /);
+    }
+    // The canvas actually paints (tiles decoded, no wholesale failure).
+    const canvas = page.locator('.hips-canvas').first();
+    await expect.poll(async () => canvas.evaluate((el: HTMLCanvasElement) => {
+      const d = el.getContext('2d')!.getImageData(0, 0, el.width, el.height).data;
+      let nb = 0; for (let i = 0; i < d.length; i += 40) if (d[i]! + d[i + 1]! + d[i + 2]! > 6) nb++;
+      return nb;
+    }), { timeout: 15000 }).toBeGreaterThan(0);
+  });
+
   test('Explicit Rubin does NOT fall back — it shows the switch-layer error and stays on Rubin', async ({ page }) => {
     await injectToken(page);
     await page.route('**/data.lsst.cloud/**', (route) => route.fulfill({ status: 404, body: 'no rights' }));

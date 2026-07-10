@@ -274,7 +274,10 @@
   function resolveFormat(): string {
     if (tileFormat) return formatToExtension(tileFormat);
     if (surveyFormat) return formatToExtension(surveyFormat);
-    return DEFAULT_FORMAT;
+    // Rubin DP1 tiles are PNG — return it even before the properties effect runs,
+    // so the very first (auto-mode) request isn't a jpg that 404s every DP1 tile.
+    if (isRubinUrl(resolvedBaseUrl)) return 'png';
+    return DEFAULT_FORMAT; // public DSS is jpg
   }
 
   // --- Tile Discovery ---
@@ -1713,6 +1716,21 @@
     if (isOfflineUrl(baseUrl)) {
       surveyMaxOrder = 6;
       surveyFormat = '';
+      scheduleRender();
+      loadTiles();
+      return;
+    }
+
+    // Rubin DP1 HiPS: every dataset is PNG at hips_order 11 (verified from the
+    // public https://data.lsst.cloud/api/hips/v2/dp1/list). Its /properties is
+    // auth-gated and a cross-origin authed fetch triggers a CORS preflight that
+    // fails — which used to drop us to the jpg/order-3 defaults, so every DP1 tile
+    // 404'd (requested .jpg at order ≤3). Seed the correct values directly instead
+    // of depending on that fetch; the tiles themselves carry the Bearer token via
+    // the fetch→blob path in loadTiles.
+    if (isRubinUrl(baseUrl)) {
+      surveyFormat = 'png';
+      surveyMaxOrder = 11;
       scheduleRender();
       loadTiles();
       return;

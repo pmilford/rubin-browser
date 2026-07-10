@@ -3,6 +3,7 @@ import {
   sampleProfile,
   luminance,
   profilePath,
+  channelValues,
   type PixelGetter,
 } from '../../src/utils/crossSection.js';
 
@@ -84,6 +85,45 @@ describe('sampleProfile — degenerate + distance axis', () => {
     const p = sampleProfile(getter, 0, 25, 49, 25, 10, 0, 10.1, 0, 20);
     expect(p.distanceArcmin[p.distanceArcmin.length - 1]).toBeCloseTo(6, 3);
     expect(p.distanceArcmin[0]).toBe(0);
+  });
+});
+
+describe('sampleProfile — per-channel R/G/B (not just luminance)', () => {
+  const W = 100;
+  const H = 10;
+  // A pure-RED horizontal gradient: red rises with x, green/blue stay 0.
+  const redGrad = makeGetter(W, H, (x) => [Math.round((x / (W - 1)) * 255), 0, 0]);
+
+  it('separates channels: R tracks red, G/B stay ~0, lum = 0.299·R', () => {
+    const p = sampleProfile(redGrad, 1, 5, W - 2, 5, 10, 0, 10, 1, 40);
+    // R channel is monotonic increasing (the red gradient).
+    const r = channelValues(p, 'r');
+    for (let i = 1; i < r.length; i++) expect(r[i]!).toBeGreaterThanOrEqual(r[i - 1]!);
+    // G and B are flat zero — a "luminance only" impl (r===lum) would fail this.
+    for (const v of channelValues(p, 'g')) expect(v).toBeCloseTo(0, 6);
+    for (const v of channelValues(p, 'b')) expect(v).toBeCloseTo(0, 6);
+    // Luminance is the red channel weighted by 0.299 — so lum < r wherever r>0,
+    // proving lum and r are distinct series (not a copy).
+    const mid = Math.floor(r.length / 2);
+    expect(p.lum[mid]!).toBeCloseTo(0.299 * r[mid]!, 5);
+    expect(r[mid]!).toBeGreaterThan(p.lum[mid]! + 0.05);
+  });
+
+  it('gaps set every channel to NaN, never 0', () => {
+    const p = sampleProfile(makeGetter(4, 4, () => null), 0, 0, 3, 3, 0, 0, 1, 1, 6);
+    for (const ch of ['lum', 'r', 'g', 'b'] as const) {
+      for (const v of channelValues(p, ch)) expect(Number.isNaN(v)).toBe(true);
+    }
+  });
+
+  it('profilePath draws distinct curves per channel', () => {
+    const p = sampleProfile(redGrad, 1, 5, W - 2, 5, 10, 0, 10, 1, 40);
+    const rPath = profilePath(p, 100, 50, false, 1e-3, 'r');
+    const lumPath = profilePath(p, 100, 50, false, 1e-3, 'lum');
+    const bPath = profilePath(p, 100, 50, false, 1e-3, 'b');
+    expect(rPath).not.toBe(lumPath); // red ≠ luminance shape
+    expect(rPath.length).toBeGreaterThan(0);
+    expect(bPath.length).toBeGreaterThan(0); // blue is flat-zero but still a valid path
   });
 });
 

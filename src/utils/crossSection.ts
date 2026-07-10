@@ -24,8 +24,22 @@ export interface LineProfile {
   distanceArcmin: number[];
   /** Relative luminance 0..1; NaN where `gap` is true. */
   lum: number[];
+  /** Red channel 0..1; NaN at gaps. */
+  r: number[];
+  /** Green channel 0..1; NaN at gaps. */
+  g: number[];
+  /** Blue channel 0..1; NaN at gaps. */
+  b: number[];
   /** True where the sample had no underlying data (off-canvas / no tile). */
   gap: boolean[];
+}
+
+/** A plottable channel of the profile: overall luminance or one colour channel. */
+export type ProfileChannel = 'lum' | 'r' | 'g' | 'b';
+
+/** The value array for a channel (0..1, NaN at gaps). */
+export function channelValues(p: LineProfile, ch: ProfileChannel): number[] {
+  return ch === 'r' ? p.r : ch === 'g' ? p.g : ch === 'b' ? p.b : p.lum;
 }
 
 /** Rec. 601 relative luminance of an 8-bit RGB triple, normalised to 0..1. */
@@ -59,6 +73,9 @@ export function sampleProfile(
   const t: number[] = new Array(n);
   const distanceArcmin: number[] = new Array(n);
   const lum: number[] = new Array(n);
+  const r: number[] = new Array(n);
+  const g: number[] = new Array(n);
+  const b: number[] = new Array(n);
   const gap: boolean[] = new Array(n);
 
   for (let i = 0; i < n; i++) {
@@ -67,21 +84,23 @@ export function sampleProfile(
     distanceArcmin[i] = f * totalArcmin;
     const x = x0 + (x1 - x0) * f;
     const y = y0 + (y1 - y0) * f;
-    const v = bilinearLuminance(getPixel, x, y);
-    if (v === null) {
-      lum[i] = NaN;
+    const rgb = bilinearRGB(getPixel, x, y);
+    if (rgb === null) {
+      lum[i] = NaN; r[i] = NaN; g[i] = NaN; b[i] = NaN;
       gap[i] = true;
     } else {
-      lum[i] = v;
+      r[i] = rgb[0]; g[i] = rgb[1]; b[i] = rgb[2];
+      // Luminance from the same interpolated channels (Rec. 601), 0..1.
+      lum[i] = 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2];
       gap[i] = false;
     }
   }
 
-  return { t, distanceArcmin, lum, gap };
+  return { t, distanceArcmin, lum, r, g, b, gap };
 }
 
-/** Bilinear-interpolated luminance at floating (x,y); null if any corner is null. */
-function bilinearLuminance(getPixel: PixelGetter, x: number, y: number): number | null {
+/** Bilinear-interpolated [r,g,b] in 0..1 at floating (x,y); null if any corner is null. */
+function bilinearRGB(getPixel: PixelGetter, x: number, y: number): [number, number, number] | null {
   const fx = Math.floor(x);
   const fy = Math.floor(y);
   const dx = x - fx;
@@ -93,14 +112,12 @@ function bilinearLuminance(getPixel: PixelGetter, x: number, y: number): number 
   const p11 = getPixel(fx + 1, fy + 1);
   if (!p00 || !p10 || !p01 || !p11) return null;
 
-  const l00 = luminance(p00[0], p00[1], p00[2]);
-  const l10 = luminance(p10[0], p10[1], p10[2]);
-  const l01 = luminance(p01[0], p01[1], p01[2]);
-  const l11 = luminance(p11[0], p11[1], p11[2]);
-
-  const top = l00 * (1 - dx) + l10 * dx;
-  const bot = l01 * (1 - dx) + l11 * dx;
-  return top * (1 - dy) + bot * dy;
+  const chan = (c: 0 | 1 | 2): number => {
+    const top = p00[c] * (1 - dx) + p10[c] * dx;
+    const bot = p01[c] * (1 - dx) + p11[c] * dx;
+    return (top * (1 - dy) + bot * dy) / 255;
+  };
+  return [chan(0), chan(1), chan(2)];
 }
 
 /**
@@ -115,12 +132,14 @@ export function profilePath(
   h: number,
   logScale: boolean,
   floor = 1e-3,
+  channel: ProfileChannel = 'lum',
 ): string {
-  const { distanceArcmin, lum, gap } = profile;
+  const { distanceArcmin, gap } = profile;
+  const vals = channelValues(profile, channel);
   const maxD = distanceArcmin[distanceArcmin.length - 1] || 1;
   const xy = (i: number): [number, number] => {
     const x = (distanceArcmin[i]! / maxD) * w;
-    let v = lum[i]!;
+    let v = vals[i]!;
     if (logScale) {
       const lo = Math.log10(floor);
       v = (Math.log10(Math.max(floor, v)) - lo) / (0 - lo); // log floor..1 → 0..1
@@ -131,8 +150,8 @@ export function profilePath(
 
   const parts: string[] = [];
   let open = false;
-  for (let i = 0; i < lum.length; i++) {
-    if (gap[i] || Number.isNaN(lum[i]!)) {
+  for (let i = 0; i < vals.length; i++) {
+    if (gap[i] || Number.isNaN(vals[i]!)) {
       open = false;
       continue;
     }

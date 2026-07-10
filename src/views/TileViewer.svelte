@@ -505,15 +505,16 @@
         {/if}
       </div>
     {/if}
-    {#if crossSectionMode && uiVisible}
-      <div class="xsection-overlay">
-        <CrossSectionPlot profile={crossSectionProfile} onClose={toggleCrossSection} />
-      </div>
-    {/if}
-
-    {#if identifyInfo && uiVisible}
-      <div class="identify-overlay">
-        <ObjectInfoPanel info={identifyInfo} onClose={() => { identifyInfo = null; }} />
+    {#if uiVisible && (identifyInfo || crossSectionMode)}
+      <!-- Right-side stack: the object-ID popup sits ABOVE the cross-section plot
+           so they never overlap. -->
+      <div class="right-stack">
+        {#if identifyInfo}
+          <ObjectInfoPanel info={identifyInfo} onClose={() => { identifyInfo = null; }} />
+        {/if}
+        {#if crossSectionMode}
+          <CrossSectionPlot profile={crossSectionProfile} onClose={toggleCrossSection} />
+        {/if}
       </div>
     {/if}
 
@@ -659,18 +660,17 @@
     border-color: rgba(120, 200, 255, 0.7);
   }
 
-  .xsection-overlay {
+  .right-stack {
     position: absolute;
     top: 44px;
     right: 12px;
     z-index: 16;
-  }
-
-  .identify-overlay {
-    position: absolute;
-    top: 44px;
-    right: 12px;
-    z-index: 17;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    align-items: flex-end;
+    max-height: calc(100% - 120px);
+    overflow-y: auto;
   }
 
   .alert-toggle.on {
