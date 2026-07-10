@@ -4,7 +4,12 @@ import { getAuthHeader } from './auth.js';
 import { toRequestUrl } from './rspProxy.js';
 import type { TapQueryResult, ColumnDef, ConeSearchParams } from '../types/catalog.js';
 
-const TAP_BASE = 'https://data.lsst.cloud/api/dp1';
+// The Rubin RSP TAP service (DP1 catalogs live in the `dp1` SCHEMA, queried via
+// ADQL — `dp1` is NOT a URL path segment). Verified against the DP1 docs
+// (dp1.lsst.io TAP tutorials) and rsp.lsst.io: the sync endpoint is /api/tap/sync.
+// The earlier /api/dp1 path is an unregistered route, so data.lsst.cloud served
+// the RSP portal SPA HTML back — which surfaced as a light-curve/TAP "error".
+const TAP_BASE = 'https://data.lsst.cloud/api/tap';
 
 export interface TapOptions {
   format?: 'json' | 'votable' | 'csv';
@@ -41,6 +46,18 @@ export async function query(
   }
 
   if (format === 'json') {
+    // A 200 that isn't JSON means we hit the wrong route (the RSP portal SPA
+    // returns HTML for unregistered paths) or the session isn't authenticated —
+    // surface that honestly instead of a cryptic JSON.parse "Unexpected token <".
+    const contentType = resp.headers?.get?.('content-type') ?? '';
+    if (contentType && !contentType.includes('json')) {
+      const text = await resp.text();
+      throw new Error(
+        `TAP returned a non-JSON response (content-type: ${contentType || 'unknown'}). ` +
+          'The request likely hit the wrong endpoint or was not authenticated. ' +
+          `First bytes: ${text.slice(0, 100).replace(/\s+/g, ' ').trim()}…`
+      );
+    }
     return parseJsonResponse(await resp.json());
   }
 

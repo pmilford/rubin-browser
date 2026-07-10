@@ -35,3 +35,4 @@ Status: `TODO` · `WIP` (in progress) · `DONE` · `BLOCKED` (needs a decision �
 | 127 | Cross-platform polish + PWA (pinch-zoom, responsive breakpoints, manifest/SW) | TODO | BACKLOG #8 |
 | 128 | `tap.ts` DP0.2→DP1 namespace reconciliation | TODO | blocks live Rubin Object cone search / "Fetch details"; unblocks 101's Object source |
 | 129 | DP1 dataset discovery: fetch `/api/hips/v2/dp1/list` instead of hardcoding datasets | TODO | BACKLOG B-a remainder |
+| 130 | Gravitational-lens catalog overlay | TODO | overlay known strong/galaxy-galaxy lenses (e.g. bundled set + a TAP/VizieR source) as a labelled catalog layer; reuses the 101 catalog overlay + linked table; click a lens → name/type/z. Rubin DP1's deep coadds are a natural place to look for lensing. |

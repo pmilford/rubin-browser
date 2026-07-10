@@ -93,6 +93,30 @@ describe('TAP Client', () => {
       expect(result.columns[0].name).toBe('objectId');
     });
 
+    it('throws a clear error when a 200 returns HTML, not JSON (wrong endpoint / SPA)', async () => {
+      // The RSP portal SPA answers unregistered routes (e.g. the old /api/dp1/sync)
+      // with a 200 HTML page; surface that honestly, not a cryptic JSON.parse error.
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        headers: { get: (h: string) => (h === 'content-type' ? 'text/html; charset=utf-8' : null) },
+        text: () => Promise.resolve('<!DOCTYPE html><html><body>Rubin Science Platform</body></html>'),
+        json: () => Promise.reject(new Error('Unexpected token <')),
+      });
+      setToken('test-token');
+      await expect(query('SELECT 1')).rejects.toThrow(/non-JSON response/i);
+    });
+
+    it('still parses JSON when the content-type header says json', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        headers: { get: (h: string) => (h === 'content-type' ? 'application/json' : null) },
+        json: () => Promise.resolve({ metadata: { fields: [{ name: 'x', datatype: 'int' }] }, data: [{ x: 1 }] }),
+      });
+      setToken('test-token');
+      const result = await query('SELECT 1');
+      expect(result.rowCount).toBe(1);
+    });
+
     it('throws on HTTP error', async () => {
       globalThis.fetch = vi.fn().mockResolvedValue({
         ok: false,

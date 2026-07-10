@@ -1200,6 +1200,28 @@
   // count so it still fires at high zoom where only a few tiles are visible.
   const FALLBACK_MIN_FAILURES = 3;
 
+  // Cap concurrent authenticated tile fetches. The <img> path is throttled by the
+  // browser (~6 per host), but the authenticated Rubin fetch() path is NOT — so a
+  // high-order view (hundreds–thousands of tiles) fired all at once, plus every
+  // superseded pan/zoom view piling on with no cancellation, exhausts the browser
+  // (net::ERR_INSUFFICIENT_RESOURCES) and starves the tiles that would succeed.
+  // This bounds in-flight fetches and lets loadTiles drop superseded queued work.
+  const MAX_CONCURRENT_FETCHES = 6;
+  let activeFetches = 0;
+  let fetchQueue: Array<() => void> = [];
+  function runQueuedFetch(task: () => Promise<void>): void {
+    const start = () => {
+      activeFetches++;
+      void task().finally(() => {
+        activeFetches--;
+        const next = fetchQueue.shift();
+        if (next) next();
+      });
+    };
+    if (activeFetches < MAX_CONCURRENT_FETCHES) start();
+    else fetchQueue.push(start);
+  }
+
   function loadTiles() {
     if (!canvasEl) return;
     const order = zoomToOrder(zoomLevel);
@@ -1268,6 +1290,10 @@
       }
     };
 
+    // Drop any not-yet-started fetches queued for a SUPERSEDED view (rapid
+    // pan/zoom) so the queue can't grow without bound; in-flight ones finish.
+    fetchQueue = [];
+
     for (const tile of visibleTiles) {
       const cacheKey = tileKey(tile.order, tile.pixelIndex);
       if (tileCache.has(cacheKey)) continue;
@@ -1313,24 +1339,28 @@
       } else if (useAuth) {
         // toRequestUrl → same-origin dev proxy so the credentialed cross-origin
         // request isn't CORS-blocked; recordFailure keeps the ORIGINAL url so the
-        // error reports the real RSP host, not the proxy path.
-        fetch(toRequestUrl(url), { headers: auth })
-          .then(resp => {
-            if (!resp.ok) {
-              const e = new Error(`HTTP ${resp.status}`) as Error & { status?: number };
-              e.status = resp.status;
-              throw e;
-            }
-            return resp.blob();
-          })
-          .then(blob => {
-            const objUrl = URL.createObjectURL(blob);
-            img.src = objUrl;
-          })
-          .catch((e: Error & { status?: number }) => {
-            pendingLoads.delete(img);
-            recordFailure(url, e?.status ?? null);
-          });
+        // error reports the real RSP host, not the proxy path. Throttled via the
+        // fetch queue so a high-order view doesn't fire thousands of concurrent
+        // requests and exhaust the browser (net::ERR_INSUFFICIENT_RESOURCES).
+        runQueuedFetch(() =>
+          fetch(toRequestUrl(url), { headers: auth })
+            .then(resp => {
+              if (!resp.ok) {
+                const e = new Error(`HTTP ${resp.status}`) as Error & { status?: number };
+                e.status = resp.status;
+                throw e;
+              }
+              return resp.blob();
+            })
+            .then(blob => {
+              const objUrl = URL.createObjectURL(blob);
+              img.src = objUrl;
+            })
+            .catch((e: Error & { status?: number }) => {
+              pendingLoads.delete(img);
+              recordFailure(url, e?.status ?? null);
+            })
+        );
       } else {
         img.src = toRequestUrl(url);
       }
@@ -1378,10 +1408,12 @@
       img.onerror = () => { /* backdrop tile missing → skip silently, no fallback */ };
 
       if (useA) {
-        fetch(toRequestUrl(buildUrl(ALLSKY_ORDER, pix, fmt, baseUrl)), { headers: auth })
-          .then((r) => (r.ok ? r.blob() : Promise.reject(new Error('allsky'))))
-          .then((b) => { img.src = URL.createObjectURL(b); })
-          .catch(() => { /* skip */ });
+        runQueuedFetch(() =>
+          fetch(toRequestUrl(buildUrl(ALLSKY_ORDER, pix, fmt, baseUrl)), { headers: auth })
+            .then((r) => (r.ok ? r.blob() : Promise.reject(new Error('allsky'))))
+            .then((b) => { img.src = URL.createObjectURL(b); })
+            .catch(() => { /* skip */ })
+        );
       } else {
         img.src = toRequestUrl(buildUrl(ALLSKY_ORDER, pix, fmt, baseUrl));
       }
@@ -2074,20 +2106,22 @@
           // Silently skip — overlay may not have tiles at this order
         };
 
-        // Use authenticated fetch for Rubin overlays
+        // Use authenticated fetch for Rubin overlays (throttled via the queue).
         if (useAuth && overlay.baseUrl.includes('data.lsst.cloud')) {
-          fetch(toRequestUrl(url), { headers: auth })
-            .then(resp => {
-              if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-              return resp.blob();
-            })
-            .then(blob => {
-              const objUrl = URL.createObjectURL(blob);
-              img.src = objUrl;
-            })
-            .catch(() => {
-              pendingLoads.delete(img);
-            });
+          runQueuedFetch(() =>
+            fetch(toRequestUrl(url), { headers: auth })
+              .then(resp => {
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                return resp.blob();
+              })
+              .then(blob => {
+                const objUrl = URL.createObjectURL(blob);
+                img.src = objUrl;
+              })
+              .catch(() => {
+                pendingLoads.delete(img);
+              })
+          );
         } else {
           img.src = toRequestUrl(url);
         }

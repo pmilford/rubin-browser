@@ -58,8 +58,10 @@ Keep this math here — do not re-inline it into the component.
 
 ## Rubin Data Access
 
-- **TAP (sync)**: `https://data.lsst.cloud/api/dp1/sync` (POST, ADQL)
-- **TAP (async)**: `https://data.lsst.cloud/api/dp1/async`
+- **TAP (sync)**: `https://data.lsst.cloud/api/tap/sync` (POST, ADQL). NOTE: `dp1`
+  is the SCHEMA (`FROM dp1.Object`), NOT a URL path — the old `/api/dp1/sync` is an
+  unregistered route and returned the RSP portal SPA HTML. Verified: dp1.lsst.io.
+- **TAP (async)**: `https://data.lsst.cloud/api/tap/async`
 - **HiPS tiles**: `https://data.lsst.cloud/api/hips/` (default `images/color_gri`)
 - **Auth**: RSP token, `Authorization: Bearer <token>`, held in `sessionStorage`.
 - **Public fallback**: with no/invalid token the viewer degrades to public CDS

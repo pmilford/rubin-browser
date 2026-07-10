@@ -22,7 +22,7 @@
  *     (`AlertType.Unknown`, legend "unknown"), not an invented taxonomy.
  *
  * NOT `dp02_dc2_catalogs.*` (that is DP0.2, a different data release and the
- * long-standing smell in `tap.ts`). Endpoint is `https://data.lsst.cloud/api/dp1/sync`.
+ * long-standing smell in `tap.ts`). Endpoint is `https://data.lsst.cloud/api/tap/sync`.
  */
 
 import { query } from './tap.js';
