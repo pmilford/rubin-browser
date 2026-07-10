@@ -407,6 +407,24 @@
 
   // --- Cross-section line profile ------------------------------------------
 
+  const XS_HANDLE_MARGIN = 10;
+
+  /** Absolute on-screen position of an endpoint handle, CLAMPED into the canvas so
+   *  a handle whose sky point has scrolled off-screen (e.g. after a zoom-in) stays
+   *  visible and grabbable. `clamped` is true when the true point is off-canvas. */
+  function xsEndpointScreen(p: { ra: number; dec: number }): { x: number; y: number; clamped: boolean } {
+    const [sx, sy] = skyToCanvas(currentView(), p.ra, p.dec);
+    const x = sx + panOffsetX;
+    const y = sy + panOffsetY;
+    if (Number.isNaN(x) || Number.isNaN(y)) {
+      // Behind the projection horizon: park the handle at the canvas centre edge.
+      return { x: canvasWidth / 2, y: XS_HANDLE_MARGIN, clamped: true };
+    }
+    const cx = Math.max(XS_HANDLE_MARGIN, Math.min(canvasWidth - XS_HANDLE_MARGIN, x));
+    const cy = Math.max(XS_HANDLE_MARGIN, Math.min(canvasHeight - XS_HANDLE_MARGIN, y));
+    return { x: cx, y: cy, clamped: cx !== x || cy !== y };
+  }
+
   /** Draw the cross-section line + endpoint handles on the interactive overlay. */
   function renderCrossSection() {
     if (!xsectionCtx || !xsectionCanvasEl) return;
@@ -415,26 +433,32 @@
     const view = currentView();
     const [x0, y0] = skyToCanvas(view, xsP0.ra, xsP0.dec);
     const [x1, y1] = skyToCanvas(view, xsP1.ra, xsP1.dec);
-    if ([x0, y0, x1, y1].some((n) => Number.isNaN(n))) return;
 
-    xsectionCtx.save();
-    xsectionCtx.translate(panOffsetX, panOffsetY); // stay aligned with the tiles
-    xsectionCtx.strokeStyle = 'rgba(120,220,255,0.9)';
-    xsectionCtx.lineWidth = 1.5;
-    xsectionCtx.beginPath();
-    xsectionCtx.moveTo(x0, y0);
-    xsectionCtx.lineTo(x1, y1);
-    xsectionCtx.stroke();
-    for (const [hx, hy] of [[x0, y0], [x1, y1]] as const) {
+    // The LINE follows the true (pan-translated) endpoints so it stays pinned to
+    // the sky; handles are drawn in absolute, edge-clamped screen space so they are
+    // always grabbable even when an endpoint has scrolled off-canvas.
+    if (![x0, y0, x1, y1].some((n) => Number.isNaN(n))) {
+      xsectionCtx.save();
+      xsectionCtx.translate(panOffsetX, panOffsetY);
+      xsectionCtx.strokeStyle = 'rgba(120,220,255,0.9)';
+      xsectionCtx.lineWidth = 1.5;
       xsectionCtx.beginPath();
-      xsectionCtx.arc(hx, hy, 6, 0, Math.PI * 2);
-      xsectionCtx.fillStyle = 'rgba(20,30,50,0.9)';
+      xsectionCtx.moveTo(x0, y0);
+      xsectionCtx.lineTo(x1, y1);
+      xsectionCtx.stroke();
+      xsectionCtx.restore();
+    }
+
+    for (const p of [xsP0, xsP1]) {
+      const { x, y, clamped } = xsEndpointScreen(p);
+      xsectionCtx.beginPath();
+      xsectionCtx.arc(x, y, 6, 0, Math.PI * 2);
+      xsectionCtx.fillStyle = clamped ? 'rgba(60,40,20,0.95)' : 'rgba(20,30,50,0.9)';
       xsectionCtx.fill();
-      xsectionCtx.strokeStyle = '#7cf';
+      xsectionCtx.strokeStyle = clamped ? '#fb7' : '#7cf'; // amber ring = off-screen endpoint
       xsectionCtx.lineWidth = 2;
       xsectionCtx.stroke();
     }
-    xsectionCtx.restore();
   }
 
   // Cached pre-colormap luminance raster. Rebuilt only when the view/content
@@ -1055,15 +1079,12 @@
   /** Which endpoint handle (0 or 1) is within grab range of a screen point, else null. */
   function xsHandleAt(px: number, py: number): 0 | 1 | null {
     if (!xsP0 || !xsP1) return null;
-    const view = currentView();
-    const screen = (p: { ra: number; dec: number }): [number, number] => {
-      const [x, y] = skyToCanvas(view, p.ra, p.dec);
-      return [x + panOffsetX, y + panOffsetY];
-    };
-    const [ax, ay] = screen(xsP0);
-    const [bx, by] = screen(xsP1);
-    const d0 = Math.hypot(px - ax, py - ay);
-    const d1 = Math.hypot(px - bx, py - by);
+    // Use the same edge-clamped screen positions the handles are DRAWN at, so an
+    // off-canvas endpoint's clamped handle is still grabbable (drag pulls it back).
+    const a = xsEndpointScreen(xsP0);
+    const b = xsEndpointScreen(xsP1);
+    const d0 = Math.hypot(px - a.x, py - a.y);
+    const d1 = Math.hypot(px - b.x, py - b.y);
     if (Math.min(d0, d1) > 14) return null;
     return d0 <= d1 ? 0 : 1;
   }
@@ -1477,15 +1498,22 @@
     scheduleRender();
   });
 
-  // Seed a default horizontal cross-section through the view center the first
-  // time the tool is enabled (so there's always a line to grab).
+  // (Re)seed a fresh horizontal cross-section across the CURRENT view every time
+  // the tool is enabled. Endpoints are anchored in RA/Dec and reproject with the
+  // sky, so after a zoom-in a previously-placed line can sit entirely off-canvas
+  // with its handles ungrabbable; and toggling the tool off/on used to restore
+  // that same stale off-screen line ("sticky"). Reseeding on each enable spans
+  // the current FOV, so there is always an on-screen, grabbable line to adjust.
+  let xsWasActive = false;
   $effect(() => {
-    if (crossSectionMode && (!xsP0 || !xsP1)) {
+    const active = crossSectionMode;
+    if (active && !xsWasActive) {
       const half = fov / 4;
       const cosd = Math.max(0.02, Math.cos(dec * DEG2RAD));
       xsP0 = { ra: ra - half / cosd, dec };
       xsP1 = { ra: ra + half / cosd, dec };
     }
+    xsWasActive = active;
   });
 
   // Resample the profile whenever the line, the view, or the tile content

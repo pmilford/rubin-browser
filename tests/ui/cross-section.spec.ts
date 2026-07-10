@@ -89,4 +89,38 @@ test.describe('Cross-section tool', () => {
     const dLog = (await pathLoc.getAttribute('d')) ?? '';
     expect(dLog).not.toBe(dAfterEndpointDrag);
   });
+
+  test('re-seeds an on-screen line after zoom + toggle (not a stale off-screen one)', async ({ page }) => {
+    await page.goto('/');
+    await waitForTiles(page);
+
+    const toggle = page.locator('button[aria-label="Toggle cross-section tool"]');
+    const pathLoc = page.locator('[aria-label="Intensity vs position"] path');
+
+    // Enable the tool: a default line is seeded across the current (wide) view.
+    await toggle.click();
+    await expect(page.locator('[aria-label="Cross-section profile"]')).toBeVisible();
+    await page.waitForTimeout(300);
+    expect(pathYRange((await pathLoc.getAttribute('d')) ?? '')).toBeGreaterThan(3);
+
+    // Zoom in several times. The seeded endpoints (spanning the OLD wide FOV) now
+    // project far off-canvas — with the old seed-once behaviour they would stay
+    // there and the profile would sample only gaps.
+    for (let i = 0; i < 4; i++) {
+      await page.locator('button[aria-label="Zoom in"]').click();
+      await waitForTiles(page);
+    }
+
+    // Toggle off then on: a FRESH line must be seeded across the CURRENT view.
+    await toggle.click();
+    await page.waitForTimeout(150);
+    await toggle.click();
+    await page.waitForTimeout(400);
+
+    // The reseeded line lies over on-screen content, so its profile has real
+    // vertical extent. A stale off-screen line (the bug) samples gaps → a flat or
+    // empty path → pathYRange ≈ 0.
+    await expect(pathLoc).toHaveCount(1);
+    expect(pathYRange((await pathLoc.getAttribute('d')) ?? '')).toBeGreaterThan(3);
+  });
 });
