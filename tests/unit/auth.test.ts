@@ -143,8 +143,12 @@ describe('Auth Module', () => {
       globalThis.fetch = vi.fn().mockResolvedValue({ ok: true });
       const result = await validateToken('good-token');
       expect(result).toBe(true);
+      // Assert the user-info ENDPOINT PATH, not the host: requests are routed
+      // through the same-origin dev proxy (/rsp/...) in a dev/test env and hit
+      // data.lsst.cloud directly in prod — the path is invariant across both
+      // (see src/api/rspProxy.ts::toRequestUrl).
       expect(fetch).toHaveBeenCalledWith(
-        expect.stringContaining('data.lsst.cloud'),
+        expect.stringContaining('/auth/api/v1/user-info'),
         expect.objectContaining({
           headers: expect.objectContaining({
             Authorization: 'Bearer good-token',

@@ -1,6 +1,7 @@
 /** TAP (Table Access Protocol) client for Rubin Observatory DP1 */
 
 import { getAuthHeader } from './auth.js';
+import { toRequestUrl } from './rspProxy.js';
 import type { TapQueryResult, ColumnDef, ConeSearchParams } from '../types/catalog.js';
 
 const TAP_BASE = 'https://data.lsst.cloud/api/dp1';
@@ -25,7 +26,7 @@ export async function query(
     MAXREC: String(maxRec),
   });
 
-  const resp = await fetch(`${TAP_BASE}/sync`, {
+  const resp = await fetch(toRequestUrl(`${TAP_BASE}/sync`), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
@@ -61,7 +62,7 @@ export async function queryAsync(
   const { format = 'json' } = options;
 
   // Submit job
-  const submitResp = await fetch(`${TAP_BASE}/async`, {
+  const submitResp = await fetch(toRequestUrl(`${TAP_BASE}/async`), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
@@ -87,13 +88,13 @@ export async function queryAsync(
   const start = Date.now();
 
   while (Date.now() - start < timeout) {
-    const statusResp = await fetch(`${jobUrl}/phase`, {
+    const statusResp = await fetch(toRequestUrl(`${jobUrl}/phase`), {
       headers: getAuthHeader(),
     });
     const phase = (await statusResp.text()).trim();
 
     if (phase === 'COMPLETED') {
-      const resultResp = await fetch(`${jobUrl}/results/result`, {
+      const resultResp = await fetch(toRequestUrl(`${jobUrl}/results/result`), {
         headers: getAuthHeader(),
       });
       if (format === 'json') {

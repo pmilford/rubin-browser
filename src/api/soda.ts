@@ -30,6 +30,7 @@
  */
 
 import { getAuthHeader, isAuthenticated } from './auth.js';
+import { toRequestUrl } from './rspProxy.js';
 
 /**
  * Base host for Rubin Data Access services (same host as the DP1 TAP endpoint in
@@ -149,7 +150,7 @@ export async function fetchCutout(params: CutoutParams): Promise<ArrayBuffer> {
 
   let resp: Response;
   try {
-    resp = await fetch(url, {
+    resp = await fetch(toRequestUrl(url), {
       headers: { ...getAuthHeader() },
     });
   } catch (err) {

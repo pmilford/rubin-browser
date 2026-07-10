@@ -1,5 +1,7 @@
 /** RSP Token management */
 
+import { toRequestUrl } from './rspProxy.js';
+
 const TOKEN_KEY = 'rubin_rsp_token';
 
 export interface AuthState {
@@ -84,7 +86,7 @@ export function getAuthHeader(): Record<string, string> {
  */
 export async function validateToken(token: string): Promise<boolean> {
   try {
-    const resp = await fetch('https://data.lsst.cloud/auth/api/v1/user-info', {
+    const resp = await fetch(toRequestUrl('https://data.lsst.cloud/auth/api/v1/user-info'), {
       headers: { Authorization: `Bearer ${token}` },
     });
     return resp.ok;

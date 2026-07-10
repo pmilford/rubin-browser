@@ -8,4 +8,22 @@ export default defineConfig({
     target: 'esnext',
     outDir: 'dist',
   },
+  server: {
+    // Rubin's RSP host (data.lsst.cloud) sends no Access-Control-Allow-Origin, so
+    // browser fetch/XHR to it from the dev origin (localhost:5173) is CORS-blocked
+    // — authenticated HiPS tiles, TAP queries and cutouts all fail with
+    // net::ERR_FAILED and the viewer shows black. In dev the client rewrites those
+    // absolute URLs to the same-origin path `/rsp/...` (see src/api/rspProxy.ts);
+    // this proxy forwards them to data.lsst.cloud server-side (no browser CORS,
+    // canvas not tainted), passing the Authorization header through. Prod is
+    // expected to be served from the RSP origin itself, so no rewrite happens there.
+    proxy: {
+      '/rsp': {
+        target: 'https://data.lsst.cloud',
+        changeOrigin: true,
+        secure: true,
+        rewrite: (p) => p.replace(/^\/rsp/, ''),
+      },
+    },
+  },
 });

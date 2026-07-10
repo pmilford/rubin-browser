@@ -1,5 +1,6 @@
 <script lang="ts">
   import { getAuthHeader } from '../api/auth.js';
+  import { toRequestUrl } from '../api/rspProxy.js';
   import { parseHipsProperties, radecToThetaPhi, thetaPhiToRadec } from '../api/hips.js';
   import {
     skyToCanvas,
@@ -1216,7 +1217,10 @@
           recordFailure(url, null);
         }
       } else if (useAuth) {
-        fetch(url, { headers: auth })
+        // toRequestUrl → same-origin dev proxy so the credentialed cross-origin
+        // request isn't CORS-blocked; recordFailure keeps the ORIGINAL url so the
+        // error reports the real RSP host, not the proxy path.
+        fetch(toRequestUrl(url), { headers: auth })
           .then(resp => {
             if (!resp.ok) {
               const e = new Error(`HTTP ${resp.status}`) as Error & { status?: number };
@@ -1234,7 +1238,7 @@
             recordFailure(url, e?.status ?? null);
           });
       } else {
-        img.src = url;
+        img.src = toRequestUrl(url);
       }
     }
 
@@ -1280,12 +1284,12 @@
       img.onerror = () => { /* backdrop tile missing → skip silently, no fallback */ };
 
       if (useA) {
-        fetch(buildUrl(ALLSKY_ORDER, pix, fmt, baseUrl), { headers: auth })
+        fetch(toRequestUrl(buildUrl(ALLSKY_ORDER, pix, fmt, baseUrl)), { headers: auth })
           .then((r) => (r.ok ? r.blob() : Promise.reject(new Error('allsky'))))
           .then((b) => { img.src = URL.createObjectURL(b); })
           .catch(() => { /* skip */ });
       } else {
-        img.src = buildUrl(ALLSKY_ORDER, pix, fmt, baseUrl);
+        img.src = toRequestUrl(buildUrl(ALLSKY_ORDER, pix, fmt, baseUrl));
       }
     }
   }
@@ -1876,7 +1880,7 @@
 
         // Use authenticated fetch for Rubin overlays
         if (useAuth && overlay.baseUrl.includes('data.lsst.cloud')) {
-          fetch(url, { headers: auth })
+          fetch(toRequestUrl(url), { headers: auth })
             .then(resp => {
               if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
               return resp.blob();
@@ -1889,7 +1893,7 @@
               pendingLoads.delete(img);
             });
         } else {
-          img.src = url;
+          img.src = toRequestUrl(url);
         }
       }
     }
