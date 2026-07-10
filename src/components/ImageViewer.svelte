@@ -129,6 +129,9 @@
   // public DSS WITHOUT user action. `autoFellBack` latches that; it is reset when
   // the user changes the base selection or the token (see the reset $effect).
   let autoFellBack = $state(false);
+  // Concrete reason (host + HTTP status) for the auto-fallback, shown in the info
+  // banner so a silent degrade to DSS still tells the user WHY Rubin failed.
+  let autoFallbackReason = $state('');
 
   const resolvedBaseUrl = $derived(
     hipsBaseUrl || resolveActiveBaseUrl(baseMode, !!rspToken, autoFellBack)
@@ -823,30 +826,47 @@
     let loadAttempts = 0;
     let loadFailures = 0;
     let loadSuccesses = 0;
+    // First failure's host + HTTP status, so the user SEES 404-wrong-path vs.
+    // 401/403-no-rights vs. network/CORS instead of a generic "unavailable".
+    let firstFailHost = '';
+    let firstFailStatus: number | null = null;
 
-    // Shared failure accounting for BOTH the <img> path and the authenticated
-    // fetch path — previously the fetch path incremented a counter but never
-    // surfaced anything, so Rubin failures were completely silent.
-    const recordFailure = () => {
+    const hostOf = (u: string): string => {
+      try { return new URL(u).host; } catch { return u; }
+    };
+    const statusHint = (status: number | null): string => {
+      if (status === 404) return `not found (HTTP 404) — the survey path may be wrong (DP0.2 vs DP1)`;
+      if (status === 401 || status === 403) return `rejected your token (HTTP ${status}) — sign in again or your account may lack data rights`;
+      if (status === null) return `could not be reached (network or CORS)`;
+      return `failed (HTTP ${status})`;
+    };
+
+    // Shared failure accounting for BOTH the <img> path (no status available) and
+    // the authenticated fetch path (real HTTP status) — previously the fetch path
+    // incremented a counter but never surfaced anything, so Rubin failures were
+    // completely silent, and a 404-wrong-path looked identical to a 401/no-rights.
+    const recordFailure = (url: string, status: number | null) => {
       loadFailures++;
+      if (!firstFailHost) { firstFailHost = hostOf(url); firstFailStatus = status; }
       if (loadSuccesses > 0) return; // some tiles rendered → not a wholesale failure
       if (loadFailures < Math.min(FALLBACK_MIN_FAILURES, loadAttempts)) return;
 
+      const detail = `${firstFailHost} ${statusHint(firstFailStatus)}`;
       if (canAutoFallback) {
-        // Degrade to public DSS automatically. Latching autoFellBack flips
-        // resolvedBaseUrl → the base-change $effect clears the cache and reloads
-        // DSS tiles. A persistent info banner (not the red error) explains it.
+        // Degrade to public DSS automatically, but SURFACE the swallowed Rubin
+        // error (host + status) so a wrong path can't masquerade as "no rights".
+        autoFallbackReason = detail;
         autoFellBack = true;
       } else if (batchIsRubin) {
         // Explicit Rubin choice (or DSS already failed after fallback): the user
         // picked Rubin deliberately, so tell them to switch rather than silently
-        // swapping their chosen layer.
+        // swapping their chosen layer — with the concrete host + status.
         showError(
-          'Rubin tiles unavailable here — your token may lack data rights for this survey/region, or the service is down. Switch the Base layer to “DSS2 Color” to use public imagery.'
+          `Rubin tiles ${detail}. Switch the Base layer to “DSS2 Color” to use public imagery.`
         );
       } else {
         showError(
-          'Multiple tiles failed to load. Check your connection or try different coordinates.'
+          `Tiles from ${detail}. Check your connection or try different coordinates.`
         );
       }
     };
@@ -873,7 +893,7 @@
 
       img.onerror = () => {
         pendingLoads.delete(img);
-        recordFailure();
+        recordFailure(url, null); // <img> path exposes no HTTP status
       };
 
       if (offline) {
@@ -888,24 +908,28 @@
             octx.putImageData(new ImageData(rgba, OFFLINE_TILE_SIZE, OFFLINE_TILE_SIZE), 0, 0);
             img.src = oc.toDataURL(); // fires img.onload → cache
           } else {
-            recordFailure();
+            recordFailure(url, null);
           }
         } catch {
-          recordFailure();
+          recordFailure(url, null);
         }
       } else if (useAuth) {
         fetch(url, { headers: auth })
           .then(resp => {
-            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            if (!resp.ok) {
+              const e = new Error(`HTTP ${resp.status}`) as Error & { status?: number };
+              e.status = resp.status;
+              throw e;
+            }
             return resp.blob();
           })
           .then(blob => {
             const objUrl = URL.createObjectURL(blob);
             img.src = objUrl;
           })
-          .catch(() => {
+          .catch((e: Error & { status?: number }) => {
             pendingLoads.delete(img);
-            recordFailure();
+            recordFailure(url, e?.status ?? null);
           });
       } else {
         img.src = url;
@@ -1546,6 +1570,7 @@
       lastBaseMode = m;
       lastToken = t;
       autoFellBack = false;
+      autoFallbackReason = '';
     }
   });
 
@@ -1841,7 +1866,7 @@
 
   {#if autoFellBack}
     <div class="info-banner" role="status">
-      Rubin imagery unavailable — showing public DSS2 preview. Pick a Base layer to override.
+      Rubin imagery unavailable — showing public DSS2 preview.{#if autoFallbackReason} Rubin {autoFallbackReason}.{/if} Pick a Base layer to override.
     </div>
   {/if}
 

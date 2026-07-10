@@ -58,7 +58,7 @@ describe('fetchHipsProperties', () => {
     await fetchHipsProperties();
 
     expect(globalThis.fetch).toHaveBeenCalledWith(
-      'https://data.lsst.cloud/api/hips/images/color_gri/properties',
+      'https://data.lsst.cloud/api/hips/v2/dp1/deep_coadd/color_gri/properties',
       { headers: { Authorization: 'Bearer test-token' } }
     );
   });
@@ -72,7 +72,7 @@ describe('fetchHipsProperties', () => {
     await fetchHipsProperties('images/band_r');
 
     expect(globalThis.fetch).toHaveBeenCalledWith(
-      'https://data.lsst.cloud/api/hips/images/band_r/properties',
+      'https://data.lsst.cloud/api/hips/v2/dp1/images/band_r/properties',
       expect.any(Object)
     );
   });
@@ -132,7 +132,7 @@ describe('buildTileUrl', () => {
   it('builds correct URL with defaults', () => {
     const url = buildTileUrl(3, 42);
     expect(url).toBe(
-      'https://data.lsst.cloud/api/hips/images/color_gri/Norder3/Dir0/Npix42.png'
+      'https://data.lsst.cloud/api/hips/v2/dp1/deep_coadd/color_gri/Norder3/Dir0/Npix42.png'
     );
   });
 
@@ -164,7 +164,7 @@ describe('buildTileUrl', () => {
   it('handles large pixel indices', () => {
     const url = buildTileUrl(11, 35000);
     expect(url).toBe(
-      'https://data.lsst.cloud/api/hips/images/color_gri/Norder11/Dir30000/Npix35000.png'
+      'https://data.lsst.cloud/api/hips/v2/dp1/deep_coadd/color_gri/Norder11/Dir30000/Npix35000.png'
     );
   });
 });
@@ -181,7 +181,7 @@ describe('fetchTile', () => {
 
     expect(blob).toBe(mockBlob);
     expect(globalThis.fetch).toHaveBeenCalledWith(
-      'https://data.lsst.cloud/api/hips/images/color_gri/Norder3/Dir0/Npix42.png',
+      'https://data.lsst.cloud/api/hips/v2/dp1/deep_coadd/color_gri/Norder3/Dir0/Npix42.png',
       { headers: { Authorization: 'Bearer test-token' } }
     );
   });
@@ -196,7 +196,7 @@ describe('fetchTile', () => {
     await fetchTile(5, 100, 'fits', 'images/band_r');
 
     expect(globalThis.fetch).toHaveBeenCalledWith(
-      'https://data.lsst.cloud/api/hips/images/band_r/Norder5/Dir0/Npix100.fits',
+      'https://data.lsst.cloud/api/hips/v2/dp1/images/band_r/Norder5/Dir0/Npix100.fits',
       expect.any(Object)
     );
   });

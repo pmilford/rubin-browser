@@ -8,8 +8,11 @@ import {
 import { getAuthHeader } from './auth.js';
 import type { HipsProperties } from '../types/image.js';
 
-const HIPS_BASE = 'https://data.lsst.cloud/api/hips';
-const DEFAULT_SURVEY = 'images/color_gri';
+// DP1 HiPS lives under /api/hips/v2/dp1/…; the retired DP0.2 path was
+// /api/hips/images/<dataset>. Keep these in sync with utils/baseLayer.ts
+// (RUBIN_HIPS) — the two drifting is what served the wrong path.
+const HIPS_BASE = 'https://data.lsst.cloud/api/hips/v2/dp1';
+const DEFAULT_SURVEY = 'deep_coadd/color_gri';
 
 const DEG2RAD = Math.PI / 180;
 const RAD2DEG = 180 / Math.PI;

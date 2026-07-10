@@ -10,7 +10,11 @@
  */
 
 export const PUBLIC_HIPS = 'https://alasky.cds.unistra.fr/DSS/DSSColor';
-export const RUBIN_HIPS = 'https://data.lsst.cloud/api/hips/images/color_gri';
+// DP1 gri colour coadd HiPS. NOTE: DP1 lives under /api/hips/v2/dp1/deep_coadd/…;
+// the old DP0.2 path (/api/hips/images/color_gri) 404s against a DP1 deployment,
+// which silently degraded authenticated users to DSS. See the Rubin HiPS `list`
+// endpoint: https://data.lsst.cloud/api/hips/v2/dp1/list
+export const RUBIN_HIPS = 'https://data.lsst.cloud/api/hips/v2/dp1/deep_coadd/color_gri';
 /** Sentinel "URL" for the in-app offline synthetic dataset (never fetched). */
 export const OFFLINE_HIPS = 'offline://synthetic';
 

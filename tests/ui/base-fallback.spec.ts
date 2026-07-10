@@ -53,14 +53,32 @@ test.describe('Base auto-fallback', () => {
       return stubImage(route);
     });
 
+    // Record the Rubin URLs actually requested, to assert the DP1 path.
+    const rubinUrls: string[] = [];
+    page.on('request', (req) => {
+      const url = req.url();
+      if (url.includes('data.lsst.cloud')) rubinUrls.push(url);
+    });
+
     await page.goto('/');
 
     // The viewer should switch to DSS on its own and say so — no user action.
     await expect(page.locator('.info-banner')).toContainText('DSS2', { timeout: 15000 });
+    // The swallowed Rubin failure must be SURFACED (host + HTTP status), so a
+    // wrong-path 404 can never again masquerade as "no data rights".
+    await expect(page.locator('.info-banner')).toContainText('404', { timeout: 15000 });
+    await expect(page.locator('.info-banner')).toContainText('data.lsst.cloud');
     // It must actually request DSS tiles...
     await expect.poll(() => dssTileRequests, { timeout: 15000 }).toBeGreaterThan(0);
     // ...and NONE of those DSS requests may carry the Rubin Bearer token.
     expect(dssAuthHeaders.every((h) => !h)).toBe(true);
+
+    // Every Rubin request used the DP1 path — never the retired DP0.2 one.
+    expect(rubinUrls.length).toBeGreaterThan(0);
+    for (const u of rubinUrls) {
+      expect(u).toContain('/api/hips/v2/dp1/deep_coadd/color_gri');
+      expect(u).not.toContain('/api/hips/images/');
+    }
   });
 
   test('Explicit Rubin does NOT fall back — it shows the switch-layer error and stays on Rubin', async ({ page }) => {

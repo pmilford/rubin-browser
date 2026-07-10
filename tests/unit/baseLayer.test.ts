@@ -45,6 +45,16 @@ describe('isOfflineUrl / offline label', () => {
   });
 });
 
+describe('RUBIN_HIPS points at the DP1 HiPS path (not retired DP0.2)', () => {
+  it('uses the /api/hips/v2/dp1/deep_coadd/ path and NOT /api/hips/images/', () => {
+    // Ground truth from the live Rubin HiPS list: DP1 gri coadd lives here.
+    expect(RUBIN_HIPS).toBe('https://data.lsst.cloud/api/hips/v2/dp1/deep_coadd/color_gri');
+    // The retired DP0.2 path 404s against DP1 and silently degraded to DSS.
+    expect(RUBIN_HIPS).not.toContain('/api/hips/images/');
+    expect(isRubinUrl(RUBIN_HIPS)).toBe(true);
+  });
+});
+
 describe('isRubinUrl / activeBaseLabel', () => {
   it('detects the Rubin host', () => {
     expect(isRubinUrl(RUBIN_HIPS)).toBe(true);

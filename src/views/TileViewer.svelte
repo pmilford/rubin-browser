@@ -68,7 +68,7 @@
   const BASE_LAYERS = [
     { id: 'auto', name: 'Auto', url: '' },
     { id: 'dss', name: 'DSS2 Color', url: 'https://alasky.cds.unistra.fr/DSS/DSSColor' },
-    { id: 'rubin', name: 'Rubin color_gri', url: 'https://data.lsst.cloud/api/hips/images/color_gri' },
+    { id: 'rubin', name: 'Rubin color_gri', url: 'https://data.lsst.cloud/api/hips/v2/dp1/deep_coadd/color_gri' },
     { id: 'offline', name: 'Offline demo (synthetic)', url: '' },
   ];
   // Alert / DIA overlay. Synthetic data is generated lazily on first enable
