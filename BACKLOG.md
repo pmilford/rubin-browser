@@ -267,3 +267,21 @@ against ground truth, not asserted to exist.
   and degrades gracefully (lower confidence) on luminance-only input.
 - Wire the result into the existing `ObjectInfoPanel` as an "image-inferred"
   section distinct from the catalog match.
+
+## 11. Plain-language glossary / hover help for domain terms
+
+Requested 2026-07-10. The UI is dense with jargon from two domains the user
+shouldn't have to already know:
+- **Rubin/LSST**: DP1 (Data Preview 1 — the first release of Rubin data: seven
+  ~1 deg² fields, ~15 deg² total, coadded per filter ugrizy), DP2/DR1, coadd,
+  deep_coadd, visit, ForcedSource, DIASource/DIAObject, RSP, data rights.
+- **Astronomy/VO**: HiPS, HEALPix, WCS, SODA (Server-side Operations for Data
+  Access — the IVOA cutout protocol), TAP/ADQL, MJD, MOC, gnomonic/TAN, FITS,
+  BITPIX/BSCALE, arcmin/arcsec, RA/Dec, FOV, colour composite vs single band.
+
+Deliverable: a short, friendly one-liner for each, surfaced as **hover tooltips**
+(`title=` / an accessible tooltip component) on the relevant controls and labels,
+plus optionally a "?" glossary panel. Keep the copy plain (e.g. "DP1 — Rubin's
+first data release: 7 small fields imaged in 2024, one image stack per colour
+filter"). Single source of truth: a `src/data/glossary.ts` term→definition map,
+unit-tested for coverage of the terms actually shown in the UI.

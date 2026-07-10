@@ -1416,16 +1416,23 @@
   }
 
   function onKeyDown(e: KeyboardEvent) {
-    const panStep = fov / 4;
+    // Shift = coarse step (half the FOV), otherwise a quarter.
+    const panStep = e.shiftKey ? fov / 2 : fov / 4;
     switch (e.key) {
       case '+':
       case '=':
+      case 'PageUp':
         e.preventDefault();
         zoomIn();
         break;
       case '-':
+      case 'PageDown':
         e.preventDefault();
         zoomOut();
+        break;
+      case 'Home':
+        e.preventDefault();
+        resetView();
         break;
       case 'ArrowLeft':
         e.preventDefault();
@@ -1500,6 +1507,26 @@
     panOffsetX = 0;
     panOffsetY = 0;
     setZoom(initZoom);
+  }
+
+  /**
+   * Clear the auto→DSS fallback latch and re-attempt the nominal base survey.
+   * The latch (autoFellBack) only resets on a base/token change, so once Auto
+   * degraded to DSS (e.g. the initial view sat off every DP1 field) panning to a
+   * covered field would keep showing DSS. Callers invoke this on an explicit
+   * "go to" (search / DP1-field jump) so navigating onto Rubin coverage retries
+   * Rubin instead of staying stuck on the fallback.
+   */
+  export function retryBase() {
+    if (!autoFellBack) return;
+    autoFellBack = false;
+    autoFallbackReason = '';
+    clearError();
+    for (const key of tileCache.keys()) {
+      if (!key.startsWith('overlay-')) tileCache.delete(key);
+    }
+    scheduleRender();
+    loadTiles();
   }
 
   export function panTo(newRa: number, newDec: number) {

@@ -19,8 +19,11 @@
   import type { LineProfile } from '../utils/crossSection.js';
   import type { ScalingFunction, ColorMapName, InterpolationMethod, ViewerState, Epoch } from '../types/image.js';
   import { mjdToIso } from '../types/image.js';
-  import { DEFAULT_MOCK_EPOCHS, type SurveyInfo } from '../constants.js';
+  import { DEFAULT_MOCK_EPOCHS, SURVEY_OVERLAYS, type SurveyInfo } from '../constants.js';
   import type { FilterBand } from '../constants.js';
+  import { onMount } from 'svelte';
+  import { readStateFromUrl, applyStateToUrl } from '../utils/urlState.js';
+  import { DP1_FIELDS } from '../data/dp1Fields.js';
   import { getToken, isAuthenticated } from '../api/auth.js';
   import { fetchLightCurve, toLightCurvePoints } from '../api/lightcurve.js';
   import type { LightCurvePoint } from '../data/offlineDataset.js';
@@ -39,10 +42,14 @@
     type AlertHit,
   } from '../data/alerts.js';
 
-  let scaling: ScalingFunction = $state('linear');
-  let colorMap: ColorMapName = $state('grayscale');
+  // Seed the view from the URL permalink (pure read; {} outside a browser or with
+  // no hash). Present keys override defaults; absent keys keep them.
+  const seed = readStateFromUrl();
+
+  let scaling: ScalingFunction = $state(seed.scaling ?? 'linear');
+  let colorMap: ColorMapName = $state(seed.colorMap ?? 'grayscale');
   let interpolation: InterpolationMethod = $state('bilinear');
-  let invert = $state(false);
+  let invert = $state(seed.invert ?? false);
   // Display transfer (DS9-style) — identity at these defaults.
   let blackPoint = $state(0);
   let whitePoint = $state(1);
@@ -56,9 +63,9 @@
   let isFullscreen = $state(false);
   let uiVisible = $state(true);
 
-  let currentRa = $state(62.0);
-  let currentDec = $state(-37.0);
-  let zoomLevel = $state(3);
+  let currentRa = $state(seed.ra ?? 62.0);
+  let currentDec = $state(seed.dec ?? -37.0);
+  let zoomLevel = $state(seed.zoom ?? 3);
   let statusMessage = $state('Ready');
 
   // Filter state
@@ -198,17 +205,19 @@
 
   // Rubin DP1 multi-filter: switch the active HiPS dataset (gri/ugri/… colour
   // composites or a single ugrizy band). Shown when the Rubin base is active.
-  let rubinDataset = $state('color_gri');
+  let rubinDataset = $state(seed.rubinDataset ?? 'color_gri');
 
   // Offline synthetic cube browsing: independent time (epoch) and wavelength
   // (band) axes. Only meaningful while the offline base layer is active; drive
   // ImageViewer to re-synthesize tiles per (band, mjd).
-  let offlineBand = $state<Band>('r');
-  let offlineEpochIndex = $state(0);
+  let offlineBand = $state<Band>((seed.offlineBand as Band) ?? 'r');
+  let offlineEpochIndex = $state(
+    Math.max(0, Math.min(OFFLINE_EPOCHS.length - 1, seed.offlineEpoch ?? 0))
+  );
   let offlineBlinkPlaying = $state(false);
   const offlineMjd = $derived(OFFLINE_EPOCHS[offlineEpochIndex] ?? OFFLINE_EPOCHS[0] ?? 60000);
 
-  let baseLayerId = $state<'auto' | 'dss' | 'rubin' | 'offline'>('auto');
+  let baseLayerId = $state<'auto' | 'dss' | 'rubin' | 'offline'>(seed.base ?? 'auto');
   const baseLayer = $derived(BASE_LAYERS.find((b) => b.id === baseLayerId) ?? BASE_LAYERS[0]);
   // The label of the base survey ImageViewer ACTUALLY resolved (reflects a silent
   // Auto→DSS2 fallback), reported via onBaseResolved. Not the nominal selection.
@@ -278,8 +287,55 @@
     currentRa = ra;
     currentDec = dec;
     imageViewerRef?.panToAndReload(ra, dec);
+    // An explicit go-to may land on Rubin coverage — clear a prior auto→DSS
+    // fallback so Auto re-attempts Rubin at the new position.
+    imageViewerRef?.retryBase();
     statusMessage = `Go to RA=${ra.toFixed(2)}°, Dec=${dec.toFixed(2)}°`;
   }
+
+  /** Navigate to a DP1 field centre (see src/data/dp1Fields.ts). */
+  function gotoDp1Field(id: string) {
+    const f = DP1_FIELDS.find((x) => x.id === id);
+    if (!f) return;
+    // If the user is on DSS/offline, switch to Auto so an authenticated session
+    // resolves to Rubin over the field (Auto → Rubin when a token is present).
+    if (baseLayerId === 'dss' || baseLayerId === 'offline') baseLayerId = 'auto';
+    handleSearch(f.ra, f.dec);
+    statusMessage = authenticated
+      ? `DP1 field: ${f.name} — RA ${f.ra}°, Dec ${f.dec}°`
+      : `DP1 field: ${f.name} (sign in with an RSP token to see Rubin data here)`;
+  }
+
+  // --- Permalink: reflect the shareable view state into the URL hash ---
+  // Debounced (300ms) so continuous pan/zoom updates the hash in place
+  // (history.replaceState — no back-button spam) without writing every frame.
+  $effect(() => {
+    const s = {
+      ra: currentRa,
+      dec: currentDec,
+      zoom: zoomLevel,
+      base: baseLayerId,
+      rubinDataset,
+      scaling,
+      colorMap,
+      invert,
+      overlays: surveyOverlays.map((o) => o.survey.id),
+      offlineBand,
+      offlineEpoch: offlineEpochIndex,
+    };
+    const t = setTimeout(() => applyStateToUrl(s), 300);
+    return () => clearTimeout(t);
+  });
+
+  onMount(() => {
+    // Seed survey overlays from the permalink (needs imageViewerRef → after mount).
+    if (seed.overlays && seed.overlays.length) {
+      for (const id of seed.overlays) {
+        const survey = SURVEY_OVERLAYS.find((sv) => sv.id === id);
+        if (survey) handleOverlayAdd(survey);
+      }
+    }
+  });
 
   function handleEpochChange(index: number, epoch: Epoch) {
     currentEpochIndex = index;
@@ -499,9 +555,9 @@
       {rubinDataset}
       {offlineBand}
       {offlineMjd}
-      initialRa={62.0}
-      initialDec={-37.0}
-      initialZoom={3}
+      initialRa={currentRa}
+      initialDec={currentDec}
+      initialZoom={zoomLevel}
       onViewerStateChange={handleViewerStateChange}
       onBaseResolved={(label) => { resolvedBaseLabel = label; }}
       onProfileChange={(p) => { crossSectionProfile = p; }}
@@ -522,6 +578,23 @@
           {#if baseLayerId === 'auto'}
             <span class="base-resolved" aria-label="Resolved base layer">→ {activeBaseName}</span>
           {/if}
+        </label>
+        <label class="layer-dp1">
+          <span class="layer-label">DP1</span>
+          <select
+            class="dp1-jump"
+            aria-label="Jump to DP1 field"
+            onchange={(e) => {
+              const v = e.currentTarget.value;
+              e.currentTarget.selectedIndex = 0; // act as a menu, re-selectable
+              if (v) gotoDp1Field(v);
+            }}
+          >
+            <option value="">Jump to field…</option>
+            {#each DP1_FIELDS as f (f.id)}
+              <option value={f.id}>{f.name}</option>
+            {/each}
+          </select>
         </label>
         {#if baseLayerId === 'offline'}
           <OfflineLayerControls
