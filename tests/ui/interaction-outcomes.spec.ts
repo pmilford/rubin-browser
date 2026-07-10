@@ -128,6 +128,31 @@ test.describe('Interaction outcomes', () => {
     expect(midNonBlack).toBeGreaterThan(0.4); // old tiles must stay painted while dragging
   });
 
+  test('no black flash between zoom orders (ancestor-tile preview)', async ({ page }) => {
+    // Regression for the real "zoom feels slow" complaint: drawAllTiles used to
+    // draw ONLY the exact target order, so a zoom step blanked the canvas until
+    // the new order's tiles streamed in. The ancestor-preview keeps the cached
+    // lower-order tiles painted, so the canvas stays non-black IMMEDIATELY after
+    // a zoom, before any new tile arrives.
+    const canvas = page.locator('.hips-canvas').first();
+    const nonBlack = (el: HTMLCanvasElement): number => {
+      const ctx = el.getContext('2d')!;
+      const d = ctx.getImageData(0, 0, el.width, el.height).data;
+      let nb = 0, t = 0;
+      for (let i = 0; i < d.length; i += 4 * 11) {
+        if (d[i]! + d[i + 1]! + d[i + 2]! > 6) nb++;
+        t++;
+      }
+      return nb / t;
+    };
+    // Zoom in a couple steps and sample the canvas right away (NO waitForTiles).
+    await page.locator('button[aria-label="Zoom in"]').click();
+    await page.locator('button[aria-label="Zoom in"]').click();
+    await page.waitForTimeout(80); // one RAF, far less than a network round-trip
+    const immediate = await canvas.evaluate(nonBlack);
+    expect(immediate).toBeGreaterThan(0.4); // stays painted via ancestor preview
+  });
+
   test('zoom in keeps the center sky point fixed and shrinks FOV', async ({ page }) => {
     const before = await readView(page);
     await page.locator('button[aria-label="Zoom in"]').click();

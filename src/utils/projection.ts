@@ -40,13 +40,29 @@ export const TILE_RASTER_CORNERS: readonly [number, number][] = [
  * computed with the authoritative `pixcoord2vec_nest` HEALPix geometry — the
  * same primitive that indexes the tile's pixels. Used to texture-map the tile
  * onto the canvas without guessing the corner orientation.
+ *
+ * The corners depend only on (nside, pix), never on the view, so the default-
+ * mapping result is memoized — `drawTile` calls this every frame for every
+ * visible tile, and each call is 4× `pixcoord2vec_nest` (trig-heavy). A custom
+ * `corners` override (the `__tileCorners` test seam) BYPASSES the cache so
+ * tile-orientation.spec.ts can still compare alternative mappings.
  */
+const cornerVectorCache = new Map<string, V3[]>();
+
 export function tileImageCornerVectors(
   nside: number,
   pix: number,
   corners: readonly [number, number][] = TILE_RASTER_CORNERS
 ): V3[] {
-  return corners.map(([x, y]) => pixcoord2vec_nest(nside, pix, x, y));
+  if (corners !== TILE_RASTER_CORNERS) {
+    return corners.map(([x, y]) => pixcoord2vec_nest(nside, pix, x, y));
+  }
+  const key = `${nside}-${pix}`;
+  const cached = cornerVectorCache.get(key);
+  if (cached) return cached;
+  const vecs = corners.map(([x, y]) => pixcoord2vec_nest(nside, pix, x, y));
+  cornerVectorCache.set(key, vecs);
+  return vecs;
 }
 
 export interface ViewParams {

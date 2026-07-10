@@ -154,6 +154,10 @@
   // Tile cache: "order-pixelIndex" -> HTMLImageElement
   const tileCache = new Map<string, HTMLImageElement>();
 
+  // Bumped whenever a tile finishes loading, so the post-processing memo (below)
+  // knows the composited content changed even though ra/dec/fov didn't.
+  let contentVersion = 0;
+
   // Overlay tracking
   interface OverlayEntry {
     id: string;
@@ -381,6 +385,11 @@
     ctx.restore();
   }
 
+  // Key describing everything the post-processed offscreen depends on. During a
+  // pan drag only panOffsetX/Y change (they are NOT in the key), so the expensive
+  // redraw+getImageData+applyPostProcessing is skipped and we just re-composite.
+  let ppLastKey = '';
+
   function renderWithPostProcessing() {
     if (!ctx) return;
 
@@ -392,20 +401,24 @@
     if (offscreenCanvas.width !== canvasWidth || offscreenCanvas.height !== canvasHeight) {
       offscreenCanvas.width = canvasWidth;
       offscreenCanvas.height = canvasHeight;
+      ppLastKey = ''; // resized buffer → force a redraw
     }
     if (!offscreenCtx) return;
 
-    // Draw tiles to offscreen canvas (no pan offset — we composite with offset later)
-    offscreenCtx.fillStyle = '#000';
-    offscreenCtx.fillRect(0, 0, canvasWidth, canvasHeight);
-    drawAllTiles(offscreenCtx);
+    const key = `${ra}|${dec}|${fov}|${zoomLevel}|${canvasWidth}x${canvasHeight}|${scaling}|${colorMap}|${invert}|${blackPoint}|${whitePoint}|${contrast}|${bias}|${contentVersion}`;
+    if (key !== ppLastKey) {
+      ppLastKey = key;
+      // Draw tiles to offscreen (no pan offset — we composite with offset below).
+      offscreenCtx.fillStyle = '#000';
+      offscreenCtx.fillRect(0, 0, canvasWidth, canvasHeight);
+      drawAllTiles(offscreenCtx);
 
-    // Apply post-processing
-    const imageData = offscreenCtx.getImageData(0, 0, canvasWidth, canvasHeight);
-    applyPostProcessing(imageData);
-    offscreenCtx.putImageData(imageData, 0, 0);
+      const imageData = offscreenCtx.getImageData(0, 0, canvasWidth, canvasHeight);
+      applyPostProcessing(imageData);
+      offscreenCtx.putImageData(imageData, 0, 0);
+    }
 
-    // Composite to main canvas with pan offset
+    // Composite to main canvas with pan offset (cheap; runs every frame).
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, canvasWidth, canvasHeight);
     ctx.drawImage(offscreenCanvas, panOffsetX, panOffsetY);
@@ -413,19 +426,44 @@
 
   function drawAllTiles(context: CanvasRenderingContext2D) {
     const order = zoomToOrder(zoomLevel);
-    const fmt = resolveFormat();
+    const view = currentView();
     const visibleTiles = getVisibleTiles(ra, dec, fov, order);
 
-    const drawn = new Set<string>();
+    const isLoaded = (key: string): boolean => {
+      const img = tileCache.get(key);
+      return !!img && img.complete && img.naturalWidth > 0;
+    };
 
+    // Pass 1 — ancestor (lower-order) backdrop. For every target tile that hasn't
+    // loaded yet, draw the nearest already-cached NESTED-parent tile (pix >> 2k)
+    // upscaled underneath. This is what makes zoom/pan feel instant: a blurry but
+    // correct image is always painted instead of a black flash while the new
+    // order streams in. A parent covers ≥ the child's sky, so the sharp pass
+    // simply overwrites it. Same drawTile machinery → identical orientation.
+    const drawnAncestors = new Set<string>();
+    for (const tile of visibleTiles) {
+      if (isLoaded(`${tile.order}-${tile.pixelIndex}`)) continue;
+      for (let k = 1; k <= tile.order; k++) {
+        const ancestorOrder = tile.order - k;
+        const ancestorPix = tile.pixelIndex >> (2 * k);
+        const aKey = `${ancestorOrder}-${ancestorPix}`;
+        if (drawnAncestors.has(aKey)) break; // already painted this ancestor
+        if (isLoaded(aKey)) {
+          drawnAncestors.add(aKey);
+          drawTile(context, tileCache.get(aKey)!, { order: ancestorOrder, pixelIndex: ancestorPix }, view);
+          break;
+        }
+      }
+    }
+
+    // Pass 2 — sharp target-order tiles on top.
+    const drawn = new Set<string>();
     for (const tile of visibleTiles) {
       const cacheKey = `${tile.order}-${tile.pixelIndex}`;
       if (drawn.has(cacheKey)) continue;
       drawn.add(cacheKey);
-
-      const img = tileCache.get(cacheKey);
-      if (img && img.complete && img.naturalWidth > 0) {
-        drawTile(context, img, tile);
+      if (isLoaded(cacheKey)) {
+        drawTile(context, tileCache.get(cacheKey)!, tile, view);
       }
     }
 
@@ -435,11 +473,9 @@
         const cacheKey = `overlay-${overlay.id}-${tile.order}-${tile.pixelIndex}`;
         if (drawn.has(cacheKey)) continue;
         drawn.add(cacheKey);
-
-        const img = tileCache.get(cacheKey);
-        if (img && img.complete && img.naturalWidth > 0) {
+        if (isLoaded(cacheKey)) {
           context.globalAlpha = overlay.opacity / 100;
-          drawTile(context, img, tile);
+          drawTile(context, tileCache.get(cacheKey)!, tile, view);
           context.globalAlpha = 1.0;
         }
       }
@@ -466,7 +502,8 @@
   function drawTile(
     context: CanvasRenderingContext2D,
     img: HTMLImageElement,
-    tile: TileKey
+    tile: TileKey,
+    view: ViewParams = currentView()
   ) {
     const nside = order2nside(tile.order);
     const totalPixels = nside2npix(nside);
@@ -482,7 +519,6 @@
     const screen: [number, number][] = [];
     let anyOnScreen = false;
     const margin = TILE_SIZE;
-    const view = currentView();
     for (const v of ordered) {
       const { theta, phi } = vec2ang(v);
       const { ra: cornerRa, dec: cornerDec } = thetaPhiToRadec(theta, phi);
@@ -652,6 +688,7 @@
         pendingLoads.delete(img);
         loadSuccesses++;
         tileCache.set(cacheKey, img);
+        contentVersion++;
         clearError();
         scheduleRender();
       };
@@ -696,6 +733,19 @@
       rafId = null;
       render();
     });
+  }
+
+  // Coalesce tile FETCHES during a rapid gesture (wheel/keyboard zoom) to the
+  // gesture's final view — otherwise every intermediate order fires a burst of
+  // requests for tiles the user scrolls straight past. Rendering stays immediate
+  // (RAF) so the ancestor-preview paints instantly; only the network is delayed.
+  let loadTilesTimer: ReturnType<typeof setTimeout> | null = null;
+  function loadTilesSoon(delay = 150) {
+    if (loadTilesTimer) clearTimeout(loadTilesTimer);
+    loadTilesTimer = setTimeout(() => {
+      loadTilesTimer = null;
+      loadTiles();
+    }, delay);
   }
 
   // --- Error Handling ---
@@ -867,7 +917,7 @@
     panOffsetY = 0;
 
     scheduleRender();
-    loadTiles();
+    loadTilesSoon();
     emitState();
   }
 
@@ -903,7 +953,7 @@
         panOffsetX = 0;
         panOffsetY = 0;
         scheduleRender();
-        loadTiles();
+        loadTilesSoon();
         emitState();
         break;
       case 'ArrowRight':
@@ -912,7 +962,7 @@
         panOffsetX = 0;
         panOffsetY = 0;
         scheduleRender();
-        loadTiles();
+        loadTilesSoon();
         emitState();
         break;
       case 'ArrowUp':
@@ -921,7 +971,7 @@
         panOffsetX = 0;
         panOffsetY = 0;
         scheduleRender();
-        loadTiles();
+        loadTilesSoon();
         emitState();
         break;
       case 'ArrowDown':
@@ -930,7 +980,7 @@
         panOffsetX = 0;
         panOffsetY = 0;
         scheduleRender();
-        loadTiles();
+        loadTilesSoon();
         emitState();
         break;
       case '0':
@@ -1003,7 +1053,7 @@
     panOffsetY = 0;
 
     scheduleRender();
-    loadTiles();
+    loadTilesSoon();
     emitState();
   }
 
@@ -1051,6 +1101,7 @@
         img.onload = () => {
           pendingLoads.delete(img);
           tileCache.set(cacheKey, img);
+          contentVersion++;
           scheduleRender();
         };
         img.onerror = () => {
@@ -1165,6 +1216,10 @@
       if (rafId !== null) {
         cancelAnimationFrame(rafId);
         rafId = null;
+      }
+      if (loadTilesTimer) {
+        clearTimeout(loadTilesTimer);
+        loadTilesTimer = null;
       }
       for (const img of pendingLoads) {
         img.onload = null;

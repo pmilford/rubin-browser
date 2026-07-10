@@ -15,6 +15,8 @@ import {
   canvasToSky,
   zoomToFov,
   fovToOrder,
+  tileImageCornerVectors,
+  TILE_RASTER_CORNERS,
   type ViewParams,
 } from '../../src/utils/projection.js';
 import { order2nside, corners_nest, vec2ang, type V3 } from '@hscmap/healpix';
@@ -184,5 +186,33 @@ describe('tile-quad winding (catches warped / flipped tiles + gross gaps)', () =
     expect(positive === 0 || positive === areas.length).toBe(true);
     // ...and none may collapse to ~0 area (which would draw a sliver / gap).
     for (const a of areas) expect(Math.abs(a)).toBeGreaterThan(1);
+  });
+});
+
+describe('tileImageCornerVectors memoization (perf: computed once per tile, not per frame)', () => {
+  it('returns the SAME cached array for repeated (nside,pix) with default corners', () => {
+    const nside = order2nside(4);
+    const a = tileImageCornerVectors(nside, 123);
+    const b = tileImageCornerVectors(nside, 123);
+    // Reference identity proves it was memoized rather than recomputed — a
+    // per-frame recompute (the old behavior) would return a fresh array.
+    expect(a).toBe(b);
+    expect(a).toHaveLength(4);
+  });
+
+  it('does not collide across different tiles', () => {
+    const nside = order2nside(4);
+    expect(tileImageCornerVectors(nside, 100)).not.toBe(tileImageCornerVectors(nside, 101));
+  });
+
+  it('BYPASSES the cache when a custom corner override is passed (test seam intact)', () => {
+    const nside = order2nside(4);
+    const override: [number, number][] = [[0, 0], [1, 0], [1, 1], [0, 1]];
+    const a = tileImageCornerVectors(nside, 123, override);
+    const b = tileImageCornerVectors(nside, 123, override);
+    // Override path must not be memoized (tile-orientation.spec.ts compares
+    // alternative mappings for the same tile) and must differ from default.
+    expect(a).not.toBe(b);
+    expect(a).not.toEqual(tileImageCornerVectors(nside, 123, TILE_RASTER_CORNERS));
   });
 });
