@@ -99,6 +99,7 @@
     onProfileChange,
     onSurfaceChange,
     onIdentify,
+    onSkyContext,
     onAlertHover,
   }: {
     /** Explicit base URL override (mainly for tests). When empty, `baseMode` + token drive resolution. */
@@ -160,6 +161,8 @@
     onSurfaceChange?: (grid: number[][] | null) => void;
     /** Fired when the user CLICKS (not drags) to identify the object at a sky point. */
     onIdentify?: (info: IdentifyInfo) => void;
+    /** Fired on right-click (context menu) with the sky RA/Dec under the cursor. */
+    onSkyContext?: (ra: number, dec: number) => void;
     /** Fired on hover over the alert overlay with the nearest alert (or null). */
     onAlertHover?: (hit: AlertHit | null) => void;
   } = $props();
@@ -1707,6 +1710,17 @@
     emitState();
   }
 
+  /** Right-click: report the sky RA/Dec under the cursor (for a "what's here?"
+   *  SIMBAD lookup). Only intercept the browser context menu when a handler is
+   *  wired, so the default menu still works otherwise. */
+  function onContextMenu(e: MouseEvent) {
+    if (!onSkyContext) return;
+    e.preventDefault();
+    const rect = canvasEl.getBoundingClientRect();
+    const [r, d] = canvasToSky(currentView(), e.clientX - rect.left, e.clientY - rect.top);
+    onSkyContext(r, d);
+  }
+
   function onDblClick(e: MouseEvent) {
     // A double-click NAVIGATES; cancel the pending single-click identify.
     if (pendingIdentifyTimer) { clearTimeout(pendingIdentifyTimer); pendingIdentifyTimer = null; }
@@ -2460,6 +2474,7 @@
     onpointerleave={onPointerLeave}
     onwheel={onWheel}
     ondblclick={onDblClick}
+    oncontextmenu={onContextMenu}
     onkeydown={onKeyDown}
   ></canvas>
 

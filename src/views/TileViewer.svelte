@@ -10,6 +10,8 @@
   import CrossSectionPlot from '../components/CrossSectionPlot.svelte';
   import OfflineLayerControls from '../components/OfflineLayerControls.svelte';
   import ObjectInfoPanel from '../components/ObjectInfoPanel.svelte';
+  import SimbadPanel from '../components/SimbadPanel.svelte';
+  import { objectsNear, type SimbadObject } from '../api/simbad.js';
   import SurfacePlot from '../components/SurfacePlot.svelte';
   import { OFFLINE_EPOCHS, OFFLINE_BANDS, brightestOfflineVariable, offlineLightCurve } from '../data/offlineDataset.js';
   import LightCurvePlot from '../components/LightCurvePlot.svelte';
@@ -177,6 +179,32 @@
 
   function toggleAlertType(t: number) {
     alertTypeMask = alertTypeMask ^ (1 << t);
+  }
+
+  // Right-click "what's here?" → public SIMBAD cone lookup (no auth). Independent
+  // of the bundled-catalog click-identify below.
+  let simbadQuery = $state<{ ra: number; dec: number } | null>(null);
+  let simbadResults = $state<SimbadObject[] | null>(null);
+  let simbadStatus = $state<string | null>(null);
+  async function handleSkyContext(ra: number, dec: number) {
+    simbadQuery = { ra, dec };
+    simbadResults = null;
+    simbadStatus = 'Querying SIMBAD…';
+    statusMessage = `SIMBAD: what's near ${ra.toFixed(3)}, ${dec.toFixed(3)}?`;
+    try {
+      // ~1′ cone — tight enough to name the object under the cursor.
+      const found = await objectsNear({ ra, dec, radiusArcsec: 60, maxRows: 12 });
+      simbadResults = found;
+      simbadStatus = found.length ? null : 'No catalogued SIMBAD object within 1′.';
+      statusMessage = found.length
+        ? `SIMBAD: ${found.length} object(s) — nearest ${found[0]!.mainId} (${found[0]!.objectType})`
+        : 'SIMBAD: nothing catalogued within 1′ here';
+    } catch (e) {
+      simbadStatus = e instanceof Error ? e.message : 'SIMBAD query failed.';
+    }
+  }
+  function handleSimbadSelect(o: SimbadObject) {
+    handleSearch(o.ra, o.dec);
   }
 
   // Click-to-identify object info panel
@@ -617,6 +645,7 @@
       onProfileChange={(p) => { crossSectionProfile = p; }}
       onSurfaceChange={(g) => { surfaceGrid = g; }}
       onIdentify={handleIdentify}
+      onSkyContext={handleSkyContext}
     />
 
     {#if uiVisible}
@@ -870,12 +899,22 @@
         <span class="ai-note">synthetic demo event</span>
       </div>
     {/if}
-    {#if uiVisible && (identifyInfo || crossSectionMode || surfaceMode || lightCurveMode)}
+    {#if uiVisible && (identifyInfo || simbadQuery || crossSectionMode || surfaceMode || lightCurveMode)}
       <!-- Right-side stack: the object-ID popup sits ABOVE the analysis plots so
            they never overlap. -->
       <div class="right-stack">
         {#if identifyInfo}
           <ObjectInfoPanel info={identifyInfo} onClose={() => { identifyInfo = null; }} />
+        {/if}
+        {#if simbadQuery}
+          <SimbadPanel
+            ra={simbadQuery.ra}
+            dec={simbadQuery.dec}
+            results={simbadResults}
+            status={simbadStatus}
+            onSelect={handleSimbadSelect}
+            onClose={() => { simbadQuery = null; simbadResults = null; simbadStatus = null; }}
+          />
         {/if}
         {#if crossSectionMode}
           <CrossSectionPlot profile={crossSectionProfile} onClose={toggleCrossSection} />
