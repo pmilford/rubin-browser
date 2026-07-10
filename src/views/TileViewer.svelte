@@ -152,6 +152,13 @@
       : 'Cross-section: off';
   }
 
+  // Curved RA/Dec coordinate graticule + compass + scale bar overlay.
+  let showGraticule = $state(false);
+  function toggleGraticule() {
+    showGraticule = !showGraticule;
+    statusMessage = showGraticule ? 'Coordinate grid: on' : 'Coordinate grid: off';
+  }
+
   // 3D surface ("mountain") plot of the central region's intensity.
   let surfaceMode = $state(false);
   let surfaceGrid = $state<number[][] | null>(null);
@@ -447,6 +454,13 @@
         return;
       }
     }
+    // G toggles the coordinate grid
+    if (e.key === 'g' || e.key === 'G') {
+      if (!e.ctrlKey && !e.metaKey) {
+        toggleGraticule();
+        return;
+      }
+    }
     // I toggles invert
     if (e.key === 'i' || e.key === 'I') {
       if (!e.ctrlKey && !e.metaKey) {
@@ -552,6 +566,7 @@
       onAlertHover={(h) => { alertHover = h; }}
       {crossSectionMode}
       {surfaceMode}
+      {showGraticule}
       {rubinDataset}
       {offlineBand}
       {offlineMjd}
@@ -685,6 +700,17 @@
           onclick={toggleSurface}
         >
           ▲ 3D surface
+        </button>
+
+        <button
+          class="xsection-toggle"
+          class:on={showGraticule}
+          aria-pressed={showGraticule}
+          aria-label="Toggle coordinate grid"
+          title="Curved RA/Dec coordinate grid, N/E compass, and scale bar (key: g)"
+          onclick={toggleGraticule}
+        >
+          ⊞ Grid
         </button>
 
         {#if baseLayerId === 'offline' || rubinLcAvailable}

@@ -45,6 +45,13 @@
   import type { Band } from '../data/syntheticSky.js';
   import { constellationFor } from '../utils/constellation.js';
   import { cardinalDirection, formatSeparation } from '../utils/skyGeom.js';
+  import {
+    graticuleLines,
+    compassRose,
+    scaleBar,
+    formatRa,
+    formatDec,
+  } from '../utils/graticule.js';
   import { nearestObject, identifyAt, type IdentifyInfo } from '../data/objects.js';
   import { sampleProfile, type LineProfile } from '../utils/crossSection.js';
   import type { ViewerState, ScalingFunction, ColorMapName, InterpolationMethod } from '../types/image.js';
@@ -73,6 +80,7 @@
     alertTimeWindow = null as { min: number; max: number } | null,
     crossSectionMode = false,
     surfaceMode = false,
+    showGraticule = false,
     offlineBand = 'r' as Band,
     offlineMjd = OFFLINE_MJD,
     onViewerStateChange,
@@ -118,6 +126,8 @@
     /** When true, the viewer is in cross-section mode: dragging draws/edits a
      *  line profile instead of panning the sky. */
     crossSectionMode?: boolean;
+    /** When true, draw the curved RA/Dec coordinate graticule + compass + scale bar. */
+    showGraticule?: boolean;
     /** OFFLINE mode only: wavelength band to synthesize (g/r/i/z/y). */
     offlineBand?: Band;
     /** OFFLINE mode only: epoch (MJD) to synthesize — drives light curves + noise. */
@@ -624,9 +634,100 @@
       renderDirect();
     }
 
+    renderGraticule();
     renderAlerts();
     renderCrossSection();
   }
+
+  /** A short screen-space compass ray (screen +y points down, so the angle from
+   *  compassRose maps straight to cos/sin). */
+  function drawCompassRay(cx: number, cy: number, angle: number, len: number, color: string, label: string) {
+    if (!ctx) return;
+    const dx = Math.cos(angle) * len;
+    const dy = Math.sin(angle) * len;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(cx + dx, cy + dy);
+    ctx.stroke();
+    ctx.fillStyle = color;
+    ctx.font = 'bold 11px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(label, cx + dx * 1.35, cy + dy * 1.35 + 3);
+    ctx.textAlign = 'left';
+  }
+
+  /**
+   * Draw the curved RA/Dec graticule (projected polylines that follow the real
+   * gnomonic curve), a true N/E compass, and a scale bar sized from the actual
+   * projected pixels-per-degree — on the MAIN canvas, over the image. Grid lines
+   * track the pan offset like the tiles; the compass and scale bar are screen-
+   * anchored. Replaces the old decorative WcsOverlay.
+   */
+  function renderGraticule() {
+    if (!ctx || !showGraticule) return;
+    const view = currentView();
+
+    // Grid lines follow the sky → apply the same pan translate the image uses.
+    ctx.save();
+    ctx.translate(panOffsetX, panOffsetY);
+    const lines = graticuleLines(view);
+    ctx.lineWidth = 1;
+    for (const line of lines) {
+      if (line.points.length < 2) continue;
+      ctx.strokeStyle = line.kind === 'ra' ? 'rgba(120,200,255,0.32)' : 'rgba(120,255,180,0.28)';
+      ctx.beginPath();
+      ctx.moveTo(line.points[0]!.x, line.points[0]!.y);
+      for (let i = 1; i < line.points.length; i++) ctx.lineTo(line.points[i]!.x, line.points[i]!.y);
+      ctx.stroke();
+    }
+    // One label per distinct isoline value, near the middle of a run.
+    ctx.fillStyle = 'rgba(210,235,255,0.85)';
+    ctx.font = '10px monospace';
+    const labeled = new Set<string>();
+    for (const line of lines) {
+      const key = `${line.kind}:${line.value}`;
+      if (labeled.has(key)) continue;
+      labeled.add(key);
+      const p = line.points[Math.floor(line.points.length / 2)];
+      if (!p) continue;
+      ctx.fillText(line.kind === 'ra' ? formatRa(line.value) : formatDec(line.value), p.x + 3, p.y - 3);
+    }
+    ctx.restore();
+
+    // Compass (screen-anchored, bottom-left) — TRUE north/east from the projection.
+    const compass = compassRose(view);
+    const cx = 48;
+    const cy = canvasHeight - 64;
+    drawCompassRay(cx, cy, compass.northAngleRad, 26, '#f88', 'N');
+    drawCompassRay(cx, cy, compass.eastAngleRad, 26, '#8cf', 'E');
+
+    // Scale bar (screen-anchored, bottom-right) — real pixels-per-degree.
+    const bar = scaleBar(view);
+    const bx2 = canvasWidth - 24;
+    const bx1 = bx2 - bar.lengthPx;
+    const by = canvasHeight - 26;
+    ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(bx1, by);
+    ctx.lineTo(bx2, by);
+    ctx.moveTo(bx1, by - 4); ctx.lineTo(bx1, by + 4);
+    ctx.moveTo(bx2, by - 4); ctx.lineTo(bx2, by + 4);
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,0.95)';
+    ctx.font = '11px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(bar.label, (bx1 + bx2) / 2, by - 6);
+    ctx.textAlign = 'left';
+  }
+
+  // Repaint when the graticule is toggled on/off.
+  $effect(() => {
+    void showGraticule;
+    scheduleRender();
+  });
 
   function renderDirect() {
     if (!ctx) return;
