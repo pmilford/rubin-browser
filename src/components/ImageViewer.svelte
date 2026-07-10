@@ -956,6 +956,43 @@
       }
     }
 
+    // Pass 1.5 — residual FINER cached tiles. A SPARSE survey (Rubin DP1 has tiles
+    // only in a few fields and no low-order/all-sky tiles) 404s the target tiles
+    // when you zoom OUT below its available orders, and Pass 1 finds no ancestor
+    // either — so a field you had zoomed into would vanish (black on explicit
+    // Rubin). Here we draw any cached tile FINER than the target order whose
+    // target-order ancestor is a visible-but-unloaded tile, keeping that field
+    // embedded when you zoom back out. Skipped for offline (tiles synthesize on
+    // demand, never 404) and inert for dense surveys like DSS (their target tiles
+    // load, so the ancestor-is-loaded guard skips this pass).
+    const drawnFiner = new Set<string>();
+    if (!offlineActive) {
+      const visiblePix = new Set(visibleTiles.map((t) => t.pixelIndex));
+      const finer: { order: number; pix: number }[] = [];
+      for (const key of tileCache.keys()) {
+        const m = /^(\d+)-(\d+)$/.exec(key); // base tiles only (skip overlay/offline keys)
+        if (!m) continue;
+        const o = Number(m[1]);
+        if (o <= order) continue; // only tiles finer than the current target order
+        const pix = Number(m[2]);
+        // Integer divide (not >>, which overflows 32-bit at high orders) to the
+        // target-order ancestor pixel.
+        const ancestorPix = Math.floor(pix / Math.pow(4, o - order));
+        if (!visiblePix.has(ancestorPix)) continue; // not under the current view
+        if (isLoaded(tileKey(order, ancestorPix))) continue; // the sharp tile will cover it
+        if (!isLoaded(key)) continue;
+        finer.push({ order: o, pix });
+      }
+      // Coarser first so finer tiles paint on top.
+      finer.sort((a, b) => a.order - b.order);
+      for (const t of finer) {
+        const k = tileKey(t.order, t.pix);
+        touchLru(tileCache, k);
+        drawnFiner.add(k);
+        drawTile(context, tileCache.get(k)!, { order: t.order, pixelIndex: t.pix }, view);
+      }
+    }
+
     // Pass 2 — sharp target-order tiles on top.
     const drawn = new Set<string>();
     for (const tile of visibleTiles) {
@@ -988,6 +1025,7 @@
     // never drop a tile the current view needs. Bounds the offline epochs×bands×
     // tiles growth and long browsing sessions.
     for (const a of drawnAncestors) drawn.add(a);
+    for (const f of drawnFiner) drawn.add(f); // keep residual finer tiles (zoom-out)
     for (const p of pinnedTiles) drawn.add(p); // never evict the allsky backdrop
     evictLru(tileCache, MAX_TILE_CACHE, drawn);
   }
