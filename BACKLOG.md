@@ -12,6 +12,22 @@ and the project CLAUDE.md.
 > network (`src/data/offlineDataset.ts`). The offline layer is now a MULTI-EPOCH +
 > MULTI-BAND browsable cube (`OfflineLayerControls.svelte`): scrub time, switch
 > g/r/i/z/y, blink, "Find a transient". Remaining sub-items noted inline below.
+>
+> STATUS (2026-07-10, session 10): shipped the #9 "quick wins" + more —
+> **permalink URL state** (`src/utils/urlState.ts`), **keyboard nav** polish
+> (Shift/Home/PgUp/PgDn), **curved WCS graticule + compass + scale bar**
+> (`src/utils/graticule.ts`, replaced the dead WcsOverlay) and a **distance
+> ruler** (great-circle sep + PA). **#6 real alert source** DONE — a
+> Synthetic/Live-DIA toggle over `src/api/diaSource.ts` (auth-gated, honest).
+> **DP1-field quick-jump** (`src/data/dp1Fields.ts`) + `ImageViewer.retryBase()`
+> fix the "authenticated but no Rubin data" case (default view sits off every DP1
+> field). Removed the dead MOCK epoch/blink controls; greened the coverage gate
+> honestly (canvas viewers Playwright-covered → scoped out of the unit floor;
+> tested the 0% SVG components) and ratcheted thresholds UP. Fixed the
+> `base-fallback` Playwright flake at root (quiesce DSS before recording).
+> **#7 (FITS) + #3 (differencing): pure modules built + fully tested**
+> (`src/api/soda.ts`, `src/utils/wcs.ts`, `src/utils/imageDiff.ts`) — only the UI
+> DISPLAY wiring remains (top next-todo).
 
 ## USER-REPORTED BUGS (2026-07-09, mid-session)
 
@@ -285,3 +301,29 @@ plus optionally a "?" glossary panel. Keep the copy plain (e.g. "DP1 — Rubin's
 first data release: 7 small fields imaged in 2024, one image stack per colour
 filter"). Single source of truth: a `src/data/glossary.ts` term→definition map,
 unit-tested for coverage of the terms actually shown in the UI.
+
+## 12. Gaia catalog overlay via TAP (params, epoch photometry, BP/RP, redshift)
+
+Requested 2026-07-10. Today Gaia DR3 is only a visual HiPS *image* overlay. Add a
+real **catalog** overlay driven by the ESA Gaia / VizieR TAP service (cone search
+→ markers → click for parameters), reusing the alert-overlay architecture.
+Accurate scope (don't overpromise):
+- **Bands/filters**: Gaia has three broad bands — G, G_BP (blue), G_RP (red).
+  Not per-filter images like Rubin ugrizy.
+- **Multiple epochs / time series**: DR3 has **epoch photometry** (per-transit G/
+  BP/RP light curves) for the variable-star subset (~10M), retrievable via
+  DataLink — plottable in the existing LightCurvePlot. Full-catalogue epoch data
+  is a DR4 item.
+- **"Prism" data = BP/RP (XP) spectra**: the blue/red photometers are prisms →
+  low-resolution (R~20–100) spectrophotometry; DR3 published XP spectra for ~220M
+  sources (continuous coefficients or sampled). Enables Teff / extinction /
+  [M/H] via `astrophysical_parameters` (GSP-Phot) and source classification.
+- **Redshift — IMPORTANT nuance**: Gaia is a Milky-Way STAR survey; stars have no
+  cosmological redshift. Redshift exists only for the **extragalactic subset** —
+  DR3 `qso_candidates` (~6.6M, `redshift_qsoc` from BP/RP) and `galaxy_candidates`
+  (~4.8M). Surface THOSE published redshifts; do NOT claim to compute redshift for
+  arbitrary sources. We can display Gaia's values with provenance, and (stretch)
+  fit a crude photo-z only where multi-band SEDs justify it, clearly labelled.
+- Cross-links: feeds #9 (live TAP catalog overlay) and #10 (image classification
+  ground-truth labels). New client `src/api/gaia.ts` (ADQL cone + parser), pure +
+  tested; overlay wiring reuses `AlertSet`/index or a parallel catalog layer.
