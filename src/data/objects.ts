@@ -1,9 +1,10 @@
 /**
  * Catalog of astronomical objects for the Object Browser and name search.
  *
- * The bulk data lives in `catalog-data.ts` (3029 REAL objects parsed from the
- * HYG star database + HYG DSO catalog — bright stars to V≤5.5, all 110 Messier,
- * and named NGC/IC highlights; see that file's header for sources). This module
+ * The bulk data lives in `catalog-data.ts` (~11,900 REAL objects parsed from the
+ * HYG star database + HYG DSO + OpenNGC — naked-eye stars to V≤6.5, all 110
+ * Messier, and NGC/IC objects to V/B≤13; see that file's header for sources).
+ * This module
  * cleans it up for display, adds common-name aliases so famous objects resolve
  * by their popular names, and provides lookup / search / nearest-object helpers.
  */

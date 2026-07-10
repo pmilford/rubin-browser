@@ -51,6 +51,37 @@ describe('known objects present at correct DEGREE coordinates (catches RA hours-
   }
 });
 
+describe('newly-added NGC/IC objects present at correct DEGREE coords', () => {
+  // Adversarial guard against a re-introduced hours-vs-degrees (or wrong-object)
+  // bug in the expanded batch. Coordinates are published J2000 positions in
+  // DEGREES, independent of the catalog file, matched to within 0.05 deg.
+  const cases: [string, number, number, ObjectType][] = [
+    ['NGC-4565', 189.088, 25.988, 'galaxy'], // Needle Galaxy
+    ['NGC-6543', 269.639, 66.633, 'planetary-nebula'], // Cat's Eye Nebula
+    ['NGC-40', 3.254, 72.523, 'planetary-nebula'], // Bow-Tie Nebula
+    ['NGC-7331', 339.267, 34.416, 'galaxy'],
+    ['NGC-2903', 143.042, 21.5, 'galaxy'],
+    ['NGC-4631', 190.533, 32.541, 'galaxy'], // Whale Galaxy
+    ['NGC-5128', 201.365, -43.019, 'galaxy'], // Centaurus A
+    ['NGC-1300', 49.921, -19.411, 'galaxy'], // barred spiral
+  ];
+  for (const [id, ra, dec, type] of cases) {
+    it(`${id} exists at ~${ra}, ${dec} as a ${type}`, () => {
+      const o = ALL_OBJECTS.find((x) => x.id === id);
+      expect(o, `missing ${id}`).toBeTruthy();
+      expect(Math.abs(o!.ra - ra), `${id} ra`).toBeLessThan(0.05);
+      expect(Math.abs(o!.dec - dec), `${id} dec`).toBeLessThan(0.05);
+      expect(o!.type).toBe(type);
+    });
+  }
+});
+
+describe('the expanded catalog is substantially larger', () => {
+  it('has thousands of objects (naked-eye stars + NGC/IC slice)', () => {
+    expect(ALL_OBJECTS.length).toBeGreaterThan(10000);
+  });
+});
+
 describe('object types are correct (not just enum-valid)', () => {
   it('M31 is a galaxy, M45 an open cluster, M13 a globular cluster', () => {
     expect(lookupObject('M31')!.type).toBe('galaxy');
