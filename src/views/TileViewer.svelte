@@ -14,6 +14,9 @@
   import { objectsNear, type SimbadObject } from '../api/simbad.js';
   import DiffPanel from '../components/DiffPanel.svelte';
   import { radecToTileIndex } from '../api/hips.js';
+  import CatalogTable from '../components/CatalogTable.svelte';
+  import { fetchGaiaCone } from '../api/gaia.js';
+  import { gaiaToCatalogSet, type CatalogSet } from '../data/catalog.js';
   import SurfacePlot from '../components/SurfacePlot.svelte';
   import { OFFLINE_EPOCHS, OFFLINE_BANDS, brightestOfflineVariable, offlineLightCurve } from '../data/offlineDataset.js';
   import LightCurvePlot from '../components/LightCurvePlot.svelte';
@@ -271,6 +274,45 @@
     } else {
       statusMessage = 'Differencing: off';
     }
+  }
+
+  // Gaia catalog overlay + linked table (public ESA Gaia TAP — no RSP token).
+  let showCatalog = $state(false);
+  let catalog = $state<CatalogSet | null>(null);
+  let catalogStatus = $state<string | null>(null);
+  let catalogLoading = $state(false);
+  let selectedCatalogIndex = $state(-1);
+
+  async function loadGaiaCatalog() {
+    catalogLoading = true;
+    catalog = null;
+    selectedCatalogIndex = -1;
+    catalogStatus = `Querying Gaia DR3 near ${currentRa.toFixed(3)}, ${currentDec.toFixed(3)}…`;
+    try {
+      const cat = await fetchGaiaCone({ ra: currentRa, dec: currentDec, radiusDeg: 0.2, maxRows: 2000 });
+      catalog = gaiaToCatalogSet(cat);
+      catalogStatus = catalog.count > 0 ? null : 'No Gaia sources in this 12′ cone.';
+      statusMessage = `Gaia DR3: ${catalog.count.toLocaleString()} sources near the view centre`;
+    } catch (e) {
+      catalogStatus = e instanceof Error ? e.message : 'Gaia query failed.';
+    } finally {
+      catalogLoading = false;
+    }
+  }
+  function toggleCatalog() {
+    showCatalog = !showCatalog;
+    if (showCatalog && !catalog) void loadGaiaCatalog();
+    statusMessage = showCatalog ? 'Gaia catalog: on' : 'Gaia catalog: off';
+  }
+  function handleCatalogSelect(i: number) {
+    if (!catalog || i < 0 || i >= catalog.count) return;
+    selectedCatalogIndex = i;
+    const ra = catalog.ra[i]!;
+    const dec = catalog.dec[i]!;
+    currentRa = ra;
+    currentDec = dec;
+    imageViewerRef?.panTo(ra, dec);
+    statusMessage = `Gaia: ${catalog.label[i]} at ${ra.toFixed(4)}, ${dec.toFixed(4)}`;
   }
 
   // Magnifier loupe of the pixels under the cursor.
@@ -670,6 +712,8 @@
       {gridSystem}
       {showCoverage}
       {showMagnifier}
+      catalog={showCatalog ? catalog : null}
+      {selectedCatalogIndex}
       {rulerMode}
       onRulerChange={handleRulerChange}
       {rubinDataset}
@@ -852,6 +896,17 @@
 
         <button
           class="xsection-toggle"
+          class:on={showCatalog}
+          aria-pressed={showCatalog}
+          aria-label="Toggle Gaia catalog"
+          title="Overlay Gaia DR3 sources near the view centre + a linked table (public — no token)"
+          onclick={toggleCatalog}
+        >
+          ◎ Gaia{#if showCatalog && catalog} ({catalog.count.toLocaleString()}){/if}
+        </button>
+
+        <button
+          class="xsection-toggle"
           class:on={rulerMode}
           aria-pressed={rulerMode}
           aria-label="Toggle distance ruler"
@@ -976,7 +1031,7 @@
         <span class="ai-note">synthetic demo event</span>
       </div>
     {/if}
-    {#if uiVisible && (identifyInfo || simbadQuery || crossSectionMode || surfaceMode || lightCurveMode || (diffMode && baseLayerId === 'offline'))}
+    {#if uiVisible && (identifyInfo || simbadQuery || showCatalog || crossSectionMode || surfaceMode || lightCurveMode || (diffMode && baseLayerId === 'offline'))}
       <!-- Right-side stack: the object-ID popup sits ABOVE the analysis plots so
            they never overlap. -->
       <div class="right-stack">
@@ -991,6 +1046,16 @@
             status={simbadStatus}
             onSelect={handleSimbadSelect}
             onClose={() => { simbadQuery = null; simbadResults = null; simbadStatus = null; }}
+          />
+        {/if}
+        {#if showCatalog}
+          <CatalogTable
+            {catalog}
+            selectedIndex={selectedCatalogIndex}
+            title="Gaia DR3"
+            status={catalogLoading ? 'Loading…' : catalogStatus}
+            onSelect={handleCatalogSelect}
+            onClose={toggleCatalog}
           />
         {/if}
         {#if diffMode && baseLayerId === 'offline'}

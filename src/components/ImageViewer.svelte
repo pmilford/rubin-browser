@@ -44,6 +44,7 @@
   } from '../utils/baseLayer.js';
   import { offlineTileRGBA, OFFLINE_TILE_SIZE, OFFLINE_MJD } from '../data/offlineDataset.js';
   import { dp1CoverageCircles, coverageCirclePoints } from '../data/footprint.js';
+  import type { CatalogSet } from '../data/catalog.js';
   import { touchLru, evictLru } from '../utils/tileCache.js';
   import type { Band } from '../data/syntheticSky.js';
   import { constellationFor } from '../utils/constellation.js';
@@ -92,6 +93,8 @@
     gridSystem = 'equatorial' as CoordSystem,
     showCoverage = false,
     showMagnifier = false,
+    catalog = null,
+    selectedCatalogIndex = -1,
     rulerMode = false,
     onRulerChange,
     offlineBand = 'r' as Band,
@@ -148,6 +151,10 @@
     showCoverage?: boolean;
     /** When true, show a magnifier loupe of the pixels under the cursor. */
     showMagnifier?: boolean;
+    /** Catalog overlay (e.g. Gaia cone-search) to draw as markers; null = none. */
+    catalog?: CatalogSet | null;
+    /** Index of the selected catalog source (highlighted marker), or -1. */
+    selectedCatalogIndex?: number;
     /** When true, dragging measures a great-circle distance instead of panning. */
     rulerMode?: boolean;
     /** Fired with the current ruler measurement (or null when cleared). */
@@ -683,9 +690,44 @@
 
     renderGraticule();
     renderCoverage();
+    renderCatalog();
     renderAlerts();
     renderCrossSection();
     renderRuler();
+  }
+
+  /**
+   * Draw the catalog overlay (e.g. a Gaia cone-search) as markers on the main
+   * canvas: a small ring per source at its projected position, with the selected
+   * source highlighted. Sources off-canvas or on the far hemisphere are skipped.
+   * Bounded by the cone's row cap, so a per-frame projection sweep is cheap.
+   */
+  function renderCatalog() {
+    if (!ctx || !catalog || catalog.count === 0) return;
+    const view = currentView();
+    ctx.save();
+    ctx.lineWidth = 1.2;
+    for (let i = 0; i < catalog.count; i++) {
+      const [x, y] = skyToCanvas(view, catalog.ra[i]!, catalog.dec[i]!);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      if (x < -8 || y < -8 || x > canvasWidth + 8 || y > canvasHeight + 8) continue;
+      if (i === selectedCatalogIndex) {
+        ctx.strokeStyle = '#ff3';
+        ctx.beginPath();
+        ctx.arc(x, y, 8, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(x - 12, y); ctx.lineTo(x - 5, y);
+        ctx.moveTo(x + 5, y); ctx.lineTo(x + 12, y);
+        ctx.stroke();
+      } else {
+        ctx.strokeStyle = 'rgba(90,220,255,0.85)';
+        ctx.beginPath();
+        ctx.arc(x, y, 4, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
   }
 
   /**
@@ -873,6 +915,8 @@
     void gridSystem;
     void showCoverage;
     void rulerMode;
+    void catalog;
+    void selectedCatalogIndex;
     scheduleRender();
   });
 
