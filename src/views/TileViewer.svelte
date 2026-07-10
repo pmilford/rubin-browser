@@ -7,6 +7,8 @@
   import HelpModal from '../components/HelpModal.svelte';
   import TokenDialog from '../components/TokenDialog.svelte';
   import ObjectBrowser from '../components/ObjectBrowser.svelte';
+  import CrossSectionPlot from '../components/CrossSectionPlot.svelte';
+  import type { LineProfile } from '../utils/crossSection.js';
   import type { ScalingFunction, ColorMapName, InterpolationMethod, ViewerState, Epoch } from '../types/image.js';
   import { mjdToIso } from '../types/image.js';
   import { DEFAULT_MOCK_EPOCHS, type SurveyInfo } from '../constants.js';
@@ -86,6 +88,16 @@
 
   function toggleAlertType(t: number) {
     alertTypeMask = alertTypeMask ^ (1 << t);
+  }
+
+  // Cross-section / line-profile tool
+  let crossSectionMode = $state(false);
+  let crossSectionProfile = $state<LineProfile | null>(null);
+  function toggleCrossSection() {
+    crossSectionMode = !crossSectionMode;
+    statusMessage = crossSectionMode
+      ? 'Cross-section: drag a line across the image to profile intensity'
+      : 'Cross-section: off';
   }
 
   let baseLayerId = $state<'auto' | 'dss' | 'rubin'>('auto');
@@ -367,11 +379,13 @@
       {alertIndex}
       {showAlerts}
       {alertTypeMask}
+      {crossSectionMode}
       initialRa={62.0}
       initialDec={-37.0}
       initialZoom={3}
       onViewerStateChange={handleViewerStateChange}
       onBaseResolved={(label) => { resolvedBaseLabel = label; }}
+      onProfileChange={(p) => { crossSectionProfile = p; }}
     />
 
     {#if uiVisible}
@@ -409,6 +423,17 @@
           ◈ Alerts (demo{#if alerts && showAlerts}, {alerts.count.toLocaleString()}{/if})
         </button>
 
+        <button
+          class="xsection-toggle"
+          class:on={crossSectionMode}
+          aria-pressed={crossSectionMode}
+          aria-label="Toggle cross-section tool"
+          title="Draw a line across the image to plot intensity vs. position (relative luminance)"
+          onclick={toggleCrossSection}
+        >
+          ╱ Cross-section
+        </button>
+
         {#if showAlerts}
           <span class="alert-legend" aria-label="Alert type filter">
             {#each ALERT_TYPE_NAMES as name, t (t)}
@@ -427,6 +452,12 @@
         {/if}
       </div>
     {/if}
+    {#if crossSectionMode && uiVisible}
+      <div class="xsection-overlay">
+        <CrossSectionPlot profile={crossSectionProfile} onClose={toggleCrossSection} />
+      </div>
+    {/if}
+
     <div class="object-browser-overlay">
       <ObjectBrowser onObjectSelect={handleObjectSelect} />
     </div>
@@ -550,6 +581,30 @@
     font-family: inherit;
     font-size: 11px;
     cursor: pointer;
+  }
+
+  .xsection-toggle {
+    background: rgba(10, 10, 30, 0.8);
+    border: 1px solid rgba(120, 200, 255, 0.35);
+    border-radius: 6px;
+    padding: 3px 8px;
+    color: #9cf;
+    font-family: inherit;
+    font-size: 11px;
+    cursor: pointer;
+  }
+
+  .xsection-toggle.on {
+    background: rgba(20, 40, 60, 0.9);
+    color: #bdf;
+    border-color: rgba(120, 200, 255, 0.7);
+  }
+
+  .xsection-overlay {
+    position: absolute;
+    top: 44px;
+    right: 12px;
+    z-index: 16;
   }
 
   .alert-toggle.on {

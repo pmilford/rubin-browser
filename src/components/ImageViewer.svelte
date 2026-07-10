@@ -37,6 +37,7 @@
   import { constellationFor } from '../utils/constellation.js';
   import { cardinalDirection, formatSeparation } from '../utils/skyGeom.js';
   import { nearestObject } from '../data/objects.js';
+  import { sampleProfile, type LineProfile } from '../utils/crossSection.js';
   import type { ViewerState, ScalingFunction, ColorMapName, InterpolationMethod } from '../types/image.js';
 
   let {
@@ -59,8 +60,10 @@
     alertIndex = null as AlertIndex | null,
     showAlerts = false,
     alertTypeMask = 0x1f,
+    crossSectionMode = false,
     onViewerStateChange,
     onBaseResolved,
+    onProfileChange,
   }: {
     /** Explicit base URL override (mainly for tests). When empty, `baseMode` + token drive resolution. */
     hipsBaseUrl?: string;
@@ -91,9 +94,14 @@
     showAlerts?: boolean;
     /** Bitmask of visible AlertTypes. */
     alertTypeMask?: number;
+    /** When true, the viewer is in cross-section mode: dragging draws/edits a
+     *  line profile instead of panning the sky. */
+    crossSectionMode?: boolean;
     onViewerStateChange?: (state: ViewerState) => void;
     /** Fired with the human label of the actually-resolved base survey (reflects auto-fallback). */
     onBaseResolved?: (label: string) => void;
+    /** Fired with the sampled line profile whenever the cross-section changes. */
+    onProfileChange?: (profile: LineProfile | null) => void;
   } = $props();
 
   const DEFAULT_FORMAT = 'jpg';
@@ -124,6 +132,22 @@
   // Alert overlay canvas (separate layer over the tile canvas).
   let alertCanvasEl: HTMLCanvasElement | undefined;
   let alertCtx: CanvasRenderingContext2D | null = null;
+
+  // Cross-section overlay canvas (interactive: pointer-events on only in mode).
+  // Endpoints are stored as RA/Dec and reprojected every render so the line
+  // stays pinned to the sky through pan/zoom.
+  let xsectionCanvasEl: HTMLCanvasElement | undefined;
+  let xsectionCtx: CanvasRenderingContext2D | null = null;
+  let xsP0 = $state<{ ra: number; dec: number } | null>(null);
+  let xsP1 = $state<{ ra: number; dec: number } | null>(null);
+  let xsDragHandle: 0 | 1 | null = null;
+  // Private scratch canvas for honest PRE-colormap luminance sampling: base tiles
+  // are drawn to it raw (no scaling/colormap/invert), so the profile reflects the
+  // displayed image intensity, never the post-processed/colormapped pixels.
+  let xsScratch: HTMLCanvasElement | null = null;
+  let xsScratchCtx: CanvasRenderingContext2D | null = null;
+  let xsLastKey = '';
+  const XS_SAMPLES = 200;
 
   // Offscreen canvas for post-processing
   let offscreenCanvas: HTMLCanvasElement | null = null;
@@ -353,6 +377,106 @@
     alertCtx.restore();
   }
 
+  // --- Cross-section line profile ------------------------------------------
+
+  /** Draw the cross-section line + endpoint handles on the interactive overlay. */
+  function renderCrossSection() {
+    if (!xsectionCtx || !xsectionCanvasEl) return;
+    xsectionCtx.clearRect(0, 0, canvasWidth, canvasHeight);
+    if (!crossSectionMode || !xsP0 || !xsP1) return;
+    const view = currentView();
+    const [x0, y0] = skyToCanvas(view, xsP0.ra, xsP0.dec);
+    const [x1, y1] = skyToCanvas(view, xsP1.ra, xsP1.dec);
+    if ([x0, y0, x1, y1].some((n) => Number.isNaN(n))) return;
+
+    xsectionCtx.save();
+    xsectionCtx.translate(panOffsetX, panOffsetY); // stay aligned with the tiles
+    xsectionCtx.strokeStyle = 'rgba(120,220,255,0.9)';
+    xsectionCtx.lineWidth = 1.5;
+    xsectionCtx.beginPath();
+    xsectionCtx.moveTo(x0, y0);
+    xsectionCtx.lineTo(x1, y1);
+    xsectionCtx.stroke();
+    for (const [hx, hy] of [[x0, y0], [x1, y1]] as const) {
+      xsectionCtx.beginPath();
+      xsectionCtx.arc(hx, hy, 6, 0, Math.PI * 2);
+      xsectionCtx.fillStyle = 'rgba(20,30,50,0.9)';
+      xsectionCtx.fill();
+      xsectionCtx.strokeStyle = '#7cf';
+      xsectionCtx.lineWidth = 2;
+      xsectionCtx.stroke();
+    }
+    xsectionCtx.restore();
+  }
+
+  // Cached pre-colormap luminance raster. Rebuilt only when the view/content
+  // changes (keyed); endpoint drags re-walk the line over this buffer cheaply.
+  let xsScratchData: Uint8ClampedArray | null = null;
+  let xsScratchKey = '';
+  let xsScratchTainted = false;
+
+  /** Ensure the scratch grayscale raster is current; false if pixels are unreadable. */
+  function ensureScratch(): boolean {
+    const key = `${ra}|${dec}|${fov}|${zoomLevel}|${canvasWidth}x${canvasHeight}|${contentVersion}`;
+    if (key === xsScratchKey && xsScratchData) return true;
+    if (!xsScratch) {
+      xsScratch = document.createElement('canvas');
+      xsScratchCtx = xsScratch.getContext('2d', { willReadFrequently: true });
+    }
+    if (xsScratch.width !== canvasWidth || xsScratch.height !== canvasHeight) {
+      xsScratch.width = canvasWidth;
+      xsScratch.height = canvasHeight;
+    }
+    if (!xsScratchCtx) return false;
+    // Base tiles only, drawn RAW (no pan, no colormap/scaling/invert) — this is
+    // the honest displayed-luminance source the profile samples.
+    xsScratchCtx.fillStyle = '#000';
+    xsScratchCtx.fillRect(0, 0, canvasWidth, canvasHeight);
+    drawAllTiles(xsScratchCtx);
+    try {
+      xsScratchData = xsScratchCtx.getImageData(0, 0, canvasWidth, canvasHeight).data;
+      xsScratchKey = key;
+      return true;
+    } catch {
+      // Never fabricate zeros — surface the failure and render "no data".
+      if (!xsScratchTainted) {
+        xsScratchTainted = true;
+        showError('Cross-section unavailable: the image is cross-origin protected (cannot read pixels).');
+      }
+      xsScratchData = null;
+      return false;
+    }
+  }
+
+  /** Sample the current line and push the profile to the parent. */
+  function sampleCurrentProfile() {
+    if (!crossSectionMode || !xsP0 || !xsP1) {
+      onProfileChange?.(null);
+      return;
+    }
+    if (!ensureScratch() || !xsScratchData) {
+      onProfileChange?.(null);
+      return;
+    }
+    const data = xsScratchData;
+    const W = canvasWidth;
+    const H = canvasHeight;
+    const getPixel = (x: number, y: number): [number, number, number] | null => {
+      if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0 || x >= W || y >= H) return null;
+      const i = (y * W + x) * 4;
+      const r = data[i]!;
+      const g = data[i + 1]!;
+      const b = data[i + 2]!;
+      if (r === 0 && g === 0 && b === 0) return null; // uncovered / no tile → gap, not 0
+      return [r, g, b];
+    };
+    const view = currentView();
+    const [x0, y0] = skyToCanvas(view, xsP0.ra, xsP0.dec);
+    const [x1, y1] = skyToCanvas(view, xsP1.ra, xsP1.dec);
+    const profile = sampleProfile(getPixel, x0, y0, x1, y1, xsP0.ra, xsP0.dec, xsP1.ra, xsP1.dec, XS_SAMPLES);
+    onProfileChange?.(profile);
+  }
+
   function render() {
     if (!ctx) return;
 
@@ -372,6 +496,7 @@
     }
 
     renderAlerts();
+    renderCrossSection();
   }
 
   function renderDirect() {
@@ -779,6 +904,7 @@
 
   function onPointerDown(e: PointerEvent) {
     if (e.button !== 0) return;
+    if (crossSectionMode) return; // in cross-section mode the overlay handles drags
     isDragging = true;
     dragStartX = e.clientX;
     dragStartY = e.clientY;
@@ -876,6 +1002,61 @@
 
     scheduleRender();
     emitState();
+  }
+
+  // --- Cross-section overlay pointer handlers (own the drag; never pan) ---
+
+  /** Which endpoint handle (0 or 1) is within grab range of a screen point, else null. */
+  function xsHandleAt(px: number, py: number): 0 | 1 | null {
+    if (!xsP0 || !xsP1) return null;
+    const view = currentView();
+    const screen = (p: { ra: number; dec: number }): [number, number] => {
+      const [x, y] = skyToCanvas(view, p.ra, p.dec);
+      return [x + panOffsetX, y + panOffsetY];
+    };
+    const [ax, ay] = screen(xsP0);
+    const [bx, by] = screen(xsP1);
+    const d0 = Math.hypot(px - ax, py - ay);
+    const d1 = Math.hypot(px - bx, py - by);
+    if (Math.min(d0, d1) > 14) return null;
+    return d0 <= d1 ? 0 : 1;
+  }
+
+  function onXsPointerDown(e: PointerEvent) {
+    if (!crossSectionMode || !xsectionCanvasEl || e.button !== 0) return;
+    e.stopPropagation();
+    const rect = xsectionCanvasEl.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    const py = e.clientY - rect.top;
+    const handle = xsHandleAt(px, py);
+    if (handle === null) {
+      // Not on a handle → start a fresh line at the click; drag defines the far end.
+      const [r, d] = canvasToSky(currentView(), px, py);
+      if (!Number.isFinite(r) || !Number.isFinite(d)) return;
+      xsP0 = { ra: r, dec: d };
+      xsP1 = { ra: r, dec: d };
+      xsDragHandle = 1;
+    } else {
+      xsDragHandle = handle;
+    }
+    xsectionCanvasEl.setPointerCapture(e.pointerId);
+    scheduleRender();
+  }
+
+  function onXsPointerMove(e: PointerEvent) {
+    if (xsDragHandle === null) return;
+    const rect = xsectionCanvasEl!.getBoundingClientRect();
+    const [r, d] = canvasToSky(currentView(), e.clientX - rect.left, e.clientY - rect.top);
+    if (!Number.isFinite(r) || !Number.isFinite(d)) return;
+    if (xsDragHandle === 0) xsP0 = { ra: r, dec: d };
+    else xsP1 = { ra: r, dec: d };
+    scheduleRender();
+  }
+
+  function onXsPointerUp(e: PointerEvent) {
+    if (xsDragHandle === null) return;
+    xsDragHandle = null;
+    xsectionCanvasEl?.releasePointerCapture?.(e.pointerId);
   }
 
   function onPointerUp() {
@@ -1198,8 +1379,9 @@
   $effect(() => {
     if (!containerEl) return;
 
-    ctx = canvasEl.getContext('2d');
+    ctx = canvasEl.getContext('2d', { willReadFrequently: true });
     if (alertCanvasEl) alertCtx = alertCanvasEl.getContext('2d');
+    if (xsectionCanvasEl) xsectionCtx = xsectionCanvasEl.getContext('2d');
     resizeToContainer();
 
     const ro = new ResizeObserver(() => resizeToContainer());
@@ -1243,7 +1425,38 @@
     void alertIndex;
     void showAlerts;
     void alertTypeMask;
+    void crossSectionMode;
+    void xsP0;
+    void xsP1;
     scheduleRender();
+  });
+
+  // Seed a default horizontal cross-section through the view center the first
+  // time the tool is enabled (so there's always a line to grab).
+  $effect(() => {
+    if (crossSectionMode && (!xsP0 || !xsP1)) {
+      const half = fov / 4;
+      const cosd = Math.max(0.02, Math.cos(dec * DEG2RAD));
+      xsP0 = { ra: ra - half / cosd, dec };
+      xsP1 = { ra: ra + half / cosd, dec };
+    }
+  });
+
+  // Resample the profile whenever the line, the view, or the tile content
+  // changes. ensureScratch() only rebuilds the raster on view/content change, so
+  // endpoint drags just re-walk the cached buffer (cheap).
+  $effect(() => {
+    void crossSectionMode;
+    void xsP0;
+    void xsP1;
+    void ra;
+    void dec;
+    void fov;
+    void zoomLevel;
+    void contentVersion;
+    void canvasWidth;
+    void canvasHeight;
+    sampleCurrentProfile();
   });
 
   // Reset the auto-fallback latch whenever the user changes the base selection or
@@ -1357,6 +1570,12 @@
         alertCanvasEl.height = h;
         alertCanvasEl.style.width = w + 'px';
         alertCanvasEl.style.height = h + 'px';
+      }
+      if (xsectionCanvasEl) {
+        xsectionCanvasEl.width = w;
+        xsectionCanvasEl.height = h;
+        xsectionCanvasEl.style.width = w + 'px';
+        xsectionCanvasEl.style.height = h + 'px';
       }
       // Safety: ensure FOV is sane after resize
       fov = zoomToFov(zoomLevel);
@@ -1486,6 +1705,19 @@
        with the tile canvas. Pointer events pass through to the tile canvas. -->
   <canvas bind:this={alertCanvasEl} class="alert-canvas" aria-hidden="true"></canvas>
 
+  <!-- Cross-section overlay: interactive ONLY in mode (pointer-events toggled),
+       so it structurally steals the drag from the tile canvas → no sky pan. -->
+  <canvas
+    bind:this={xsectionCanvasEl}
+    class="xsection-canvas"
+    class:active={crossSectionMode}
+    aria-hidden="true"
+    onpointerdown={onXsPointerDown}
+    onpointermove={onXsPointerMove}
+    onpointerup={onXsPointerUp}
+    onpointercancel={onXsPointerUp}
+  ></canvas>
+
   {#if cursorReadout}
     <PixelReadout
       ra={cursorReadout.ra}
@@ -1585,6 +1817,19 @@
     left: 0;
     pointer-events: none;
     z-index: 4;
+  }
+
+  .xsection-canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    pointer-events: none;
+    z-index: 6;
+  }
+
+  .xsection-canvas.active {
+    pointer-events: auto;
+    cursor: crosshair;
   }
 
   .hips-canvas:active {
