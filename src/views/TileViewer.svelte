@@ -757,6 +757,15 @@
           📏 Ruler{#if rulerReadout} · {rulerReadout}{/if}
         </button>
 
+        <button
+          class="xsection-toggle"
+          aria-label="Save PNG screenshot"
+          title="Download the current view (base + overlays + grid) as a PNG image"
+          onclick={() => { imageViewerRef?.exportPng(); statusMessage = 'Saved PNG screenshot of the current view'; }}
+        >
+          ⤓ PNG
+        </button>
+
         {#if baseLayerId === 'offline' || rubinLcAvailable}
           <button
             class="xsection-toggle"

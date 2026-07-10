@@ -14,9 +14,9 @@ Status: `TODO` · `WIP` (in progress) · `DONE` · `BLOCKED` (needs a decision �
 | 101 | Catalog overlay + linked table (Gaia / Rubin Object via TAP) | WIP | modules `src/api/gaia.ts` DONE, `src/data/catalog.ts` building |
 | 102 | MOC / DP1 footprint coverage layer (shade where data exists) | WIP | module `src/data/footprint.ts` building |
 | 103 | Simbad "what's here?" (right-click) + name resolve | WIP | module `src/api/simbad.ts` building |
-| 104 | Click-to-copy coordinates (sexagesimal ⟷ decimal) | TODO | small; StatusBar/readout |
+| 104 | Click-to-copy coordinates (sexagesimal ⟷ decimal) | DONE | StatusBar: click RA/Dec to copy, format toggle, copy-pair (decimal); 4 tests |
 | 105 | Grid coordinate-system toggle (equatorial ↔ galactic ↔ ecliptic) | WIP | module `src/utils/coords.ts` building; feeds `graticule.ts` |
-| 106 | PNG screenshot export of the current view | TODO | `canvas.toBlob` compose visible layers |
+| 106 | PNG screenshot export of the current view | DONE | ImageViewer.exportPng() composites stacked canvases → toBlob download; ⤓ PNG button; Playwright download-outcome test |
 | 107 | Magnifier loupe + whole-sky locator inset | TODO | reuses the render path |
 | 108 | Offline image-diff display (epoch A vs B → transients) | WIP | linear-frame accessor `renderSyntheticIntensityFrame`/`offlineIntensityFrame` DONE; need diverging colormap + `DiffPanel` + `framePixelToRaDec` |
 | 109 | FITS cutout display pipeline (SODA→FITS→WCS readout) | BLOCKED | **Design Q:** the DP1 SODA sync endpoint + per-band dataset `ID` (DataLink discovery) are unconfirmed and there is no DataLink client. Building the display pipeline (tested against a routed synthetic FITS) + honest live-endpoint errors; the live path stays unverified until the endpoint/ID is confirmed. |

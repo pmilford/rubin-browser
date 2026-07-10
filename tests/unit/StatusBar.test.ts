@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { render, screen } from '@testing-library/svelte';
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/svelte';
 import StatusBar from '../../src/components/StatusBar.svelte';
 
 describe('StatusBar', () => {
@@ -187,5 +187,40 @@ describe('StatusBar', () => {
     render(StatusBar, { props: { ra: -30 } });
     const status = screen.getByRole('status');
     expect(status.textContent).toContain('RA:');
+  });
+});
+
+describe('StatusBar coordinate copy + format (feature 104)', () => {
+  it('copies the displayed RA when the RA readout is clicked', async () => {
+    const onCopy = vi.fn();
+    render(StatusBar, { props: { ra: 62.5, dec: -37.25, onCopy } });
+    await fireEvent.click(screen.getByLabelText('Copy right ascension'));
+    // Sexagesimal by default: 62.5° = 4h 10m ... — the copied text is what is shown.
+    expect(onCopy).toHaveBeenCalledOnce();
+    expect(onCopy.mock.calls[0]![0]).toContain('h');
+  });
+
+  it('toggles between sexagesimal and decimal degrees', async () => {
+    render(StatusBar, { props: { ra: 62.5, dec: -37.25 } });
+    const raBtn = screen.getByLabelText('Copy right ascension');
+    expect(raBtn.textContent).toContain('h'); // sexagesimal default
+    await fireEvent.click(screen.getByLabelText('Toggle coordinate format'));
+    expect(raBtn.textContent).toContain('62.5'); // now decimal degrees
+    expect(raBtn.textContent).toContain('°');
+    expect(raBtn.textContent).not.toContain('h');
+  });
+
+  it('copies the RA,Dec pair as decimal degrees regardless of display format', async () => {
+    const onCopy = vi.fn();
+    render(StatusBar, { props: { ra: 62.5, dec: -37.25, onCopy } });
+    await fireEvent.click(screen.getByLabelText('Copy coordinates as decimal degrees'));
+    expect(onCopy).toHaveBeenCalledWith('62.500000, -37.250000');
+  });
+
+  it('shows a transient "copied" confirmation after copying', async () => {
+    render(StatusBar, { props: { ra: 10, dec: 20 } });
+    expect(document.querySelector('.copied')).toBeFalsy();
+    await fireEvent.click(screen.getByLabelText('Copy declination'));
+    expect(document.querySelector('.copied')).toBeTruthy();
   });
 });

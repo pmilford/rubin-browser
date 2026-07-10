@@ -1822,6 +1822,48 @@
     emitState();
   }
 
+  /**
+   * Export the current view as a PNG download, compositing every stacked canvas
+   * in the container in z-order (base+overlays+graticule on the main canvas, then
+   * the alert / cross-section / ruler overlay canvases on top). Same-origin tiles
+   * (dev proxy / public CDS with CORS / offline) keep the canvas untainted so
+   * toBlob succeeds; a taint (cross-origin tile without CORS) is surfaced as a
+   * visible error rather than a silent failure.
+   */
+  export function exportPng(filename = 'rubin-view.png') {
+    if (!canvasEl) return;
+    const w = canvasEl.width;
+    const h = canvasEl.height;
+    const out = document.createElement('canvas');
+    out.width = w;
+    out.height = h;
+    const octx = out.getContext('2d');
+    if (!octx) return;
+    octx.fillStyle = '#000';
+    octx.fillRect(0, 0, w, h);
+    const canvases = containerEl?.querySelectorAll('canvas') ?? [];
+    canvases.forEach((c) => {
+      const cc = c as HTMLCanvasElement;
+      if (cc.width > 0 && cc.height > 0) octx.drawImage(cc, 0, 0, w, h);
+    });
+    try {
+      out.toBlob((blob) => {
+        if (!blob) { showError('Screenshot failed: could not encode the image.'); return; }
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      }, 'image/png');
+    } catch {
+      // A tainted canvas (cross-origin tile without CORS) throws on toBlob.
+      showError('Screenshot blocked: cross-origin tiles tainted the canvas.');
+    }
+  }
+
   export function addOverlay(id: string, hipsUrl: string, opacity: number = 80) {
     if (overlays.has(id)) return;
     overlays.set(id, { id, baseUrl: hipsUrl, opacity });
