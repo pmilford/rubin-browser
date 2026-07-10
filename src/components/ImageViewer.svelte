@@ -31,9 +31,11 @@
   import {
     resolveActiveBaseUrl,
     isRubinUrl,
+    isOfflineUrl,
     activeBaseLabel,
     type BaseMode,
   } from '../utils/baseLayer.js';
+  import { offlineTileRGBA, OFFLINE_TILE_SIZE } from '../data/offlineDataset.js';
   import { constellationFor } from '../utils/constellation.js';
   import { cardinalDirection, formatSeparation } from '../utils/skyGeom.js';
   import { nearestObject } from '../data/objects.js';
@@ -765,6 +767,7 @@
     // rejects, which would make the DSS fallback itself fail).
     const useAuth = !!rspToken && batchIsRubin;
     const auth = useAuth ? getAuthHeader() : {};
+    const offline = isOfflineUrl(batchBaseUrl);
     const canAutoFallback = baseMode === 'auto' && !autoFellBack && batchIsRubin;
 
     let loadAttempts = 0;
@@ -823,7 +826,24 @@
         recordFailure();
       };
 
-      if (useAuth) {
+      if (offline) {
+        // Synthesize the tile locally from the bundled synthetic sky — no network.
+        try {
+          const rgba = offlineTileRGBA(tile.order, tile.pixelIndex);
+          const oc = document.createElement('canvas');
+          oc.width = OFFLINE_TILE_SIZE;
+          oc.height = OFFLINE_TILE_SIZE;
+          const octx = oc.getContext('2d');
+          if (octx) {
+            octx.putImageData(new ImageData(rgba, OFFLINE_TILE_SIZE, OFFLINE_TILE_SIZE), 0, 0);
+            img.src = oc.toDataURL(); // fires img.onload → cache
+          } else {
+            recordFailure();
+          }
+        } catch {
+          recordFailure();
+        }
+      } else if (useAuth) {
         fetch(url, { headers: auth })
           .then(resp => {
             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -1512,6 +1532,15 @@
     const baseUrl = resolvedBaseUrl;
     if (!baseUrl) return;
 
+    // Offline synthetic dataset has no server; render locally up to a modest order.
+    if (isOfflineUrl(baseUrl)) {
+      surveyMaxOrder = 6;
+      surveyFormat = '';
+      scheduleRender();
+      loadTiles();
+      return;
+    }
+
     let cancelled = false;
     const cleanBase = baseUrl.replace(/\/properties$/, '').replace(/\/$/, '');
     const auth = rspToken ? getAuthHeader() : {};
@@ -1738,6 +1767,12 @@
     </div>
   {/if}
 
+  {#if baseMode === 'offline'}
+    <div class="synthetic-banner" role="status">
+      SYNTHETIC OFFLINE DATA — generated locally, not a real survey
+    </div>
+  {/if}
+
   <!-- FOV Minimap (Issue #2) -->
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -1890,6 +1925,25 @@
     padding: 6px 14px;
     color: #bcf;
     font-size: 12px;
+    z-index: 8;
+    pointer-events: none;
+    max-width: 80%;
+    text-align: center;
+  }
+
+  .synthetic-banner {
+    position: absolute;
+    bottom: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(60, 40, 10, 0.92);
+    border: 1px solid #b83;
+    border-radius: 6px;
+    padding: 5px 14px;
+    color: #fd9;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
     z-index: 8;
     pointer-events: none;
     max-width: 80%;

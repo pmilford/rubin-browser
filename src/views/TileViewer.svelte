@@ -66,6 +66,7 @@
     { id: 'auto', name: 'Auto', url: '' },
     { id: 'dss', name: 'DSS2 Color', url: 'https://alasky.cds.unistra.fr/DSS/DSSColor' },
     { id: 'rubin', name: 'Rubin color_gri', url: 'https://data.lsst.cloud/api/hips/images/color_gri' },
+    { id: 'offline', name: 'Offline demo (synthetic)', url: '' },
   ];
   // Alert / DIA overlay. Synthetic data is generated lazily on first enable
   // (stand-in for the real, auth-gated Rubin alert stream).
@@ -100,7 +101,7 @@
       : 'Cross-section: off';
   }
 
-  let baseLayerId = $state<'auto' | 'dss' | 'rubin'>('auto');
+  let baseLayerId = $state<'auto' | 'dss' | 'rubin' | 'offline'>('auto');
   const baseLayer = $derived(BASE_LAYERS.find((b) => b.id === baseLayerId) ?? BASE_LAYERS[0]);
   // The label of the base survey ImageViewer ACTUALLY resolved (reflects a silent
   // Auto→DSS2 fallback), reported via onBaseResolved. Not the nominal selection.

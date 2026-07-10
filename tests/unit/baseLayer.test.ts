@@ -2,9 +2,11 @@ import { describe, it, expect } from 'vitest';
 import {
   resolveActiveBaseUrl,
   isRubinUrl,
+  isOfflineUrl,
   activeBaseLabel,
   PUBLIC_HIPS,
   RUBIN_HIPS,
+  OFFLINE_HIPS,
 } from '../../src/utils/baseLayer.js';
 
 describe('resolveActiveBaseUrl — full truth table', () => {
@@ -24,6 +26,22 @@ describe('resolveActiveBaseUrl — full truth table', () => {
   it('explicit rubin → Rubin even with NO token and even if a stale fellBack is set', () => {
     expect(resolveActiveBaseUrl('rubin', false, false)).toBe(RUBIN_HIPS);
     expect(resolveActiveBaseUrl('rubin', true, true)).toBe(RUBIN_HIPS);
+  });
+  it('offline → the synthetic sentinel regardless of token/fallback', () => {
+    expect(resolveActiveBaseUrl('offline', false, false)).toBe(OFFLINE_HIPS);
+    expect(resolveActiveBaseUrl('offline', true, true)).toBe(OFFLINE_HIPS);
+  });
+});
+
+describe('isOfflineUrl / offline label', () => {
+  it('detects the offline sentinel and nothing else', () => {
+    expect(isOfflineUrl(OFFLINE_HIPS)).toBe(true);
+    expect(isOfflineUrl(RUBIN_HIPS)).toBe(false);
+    expect(isOfflineUrl(PUBLIC_HIPS)).toBe(false);
+    expect(isRubinUrl(OFFLINE_HIPS)).toBe(false);
+  });
+  it('labels the offline base', () => {
+    expect(activeBaseLabel(OFFLINE_HIPS)).toBe('Offline demo');
   });
 });
 

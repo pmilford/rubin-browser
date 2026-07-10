@@ -11,8 +11,10 @@
 
 export const PUBLIC_HIPS = 'https://alasky.cds.unistra.fr/DSS/DSSColor';
 export const RUBIN_HIPS = 'https://data.lsst.cloud/api/hips/images/color_gri';
+/** Sentinel "URL" for the in-app offline synthetic dataset (never fetched). */
+export const OFFLINE_HIPS = 'offline://synthetic';
 
-export type BaseMode = 'auto' | 'dss' | 'rubin';
+export type BaseMode = 'auto' | 'dss' | 'rubin' | 'offline';
 
 /**
  * Resolve the active base HiPS URL.
@@ -25,6 +27,7 @@ export type BaseMode = 'auto' | 'dss' | 'rubin';
  *            action when Rubin is unavailable.
  */
 export function resolveActiveBaseUrl(mode: BaseMode, hasToken: boolean, fellBack: boolean): string {
+  if (mode === 'offline') return OFFLINE_HIPS;
   if (mode === 'dss') return PUBLIC_HIPS;
   if (mode === 'rubin') return RUBIN_HIPS;
   if (!hasToken || fellBack) return PUBLIC_HIPS;
@@ -36,7 +39,13 @@ export function isRubinUrl(url: string): boolean {
   return url.includes('data.lsst.cloud');
 }
 
+/** Whether a resolved base URL is the in-app offline synthetic dataset. */
+export function isOfflineUrl(url: string): boolean {
+  return url === OFFLINE_HIPS;
+}
+
 /** The label shown for the resolved base layer (for the active-layers indicator). */
 export function activeBaseLabel(url: string): string {
+  if (isOfflineUrl(url)) return 'Offline demo';
   return isRubinUrl(url) ? 'Rubin color_gri' : 'DSS2 Color';
 }
