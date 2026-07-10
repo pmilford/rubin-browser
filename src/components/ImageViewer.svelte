@@ -22,6 +22,7 @@
   } from '@hscmap/healpix';
   import { applyScaling } from '../utils/scaling.js';
   import { applyColorMap } from '../utils/colormap.js';
+  import { postProcessMemoKey } from '../utils/renderKey.js';
   import PixelReadout from './PixelReadout.svelte';
   import {
     queryViewport,
@@ -285,6 +286,20 @@
     opacity: number;
   }
   const overlays = new Map<string, OverlayEntry>();
+
+  /**
+   * Signature of the overlay stack (ids + opacities), for the post-processing
+   * memo key. Without this, the offscreen composite in renderWithPostProcessing
+   * is cached across an overlay add/remove or an opacity change while the view is
+   * unchanged, so the slider/toggle appears dead until the next pan busts the key
+   * on ra/dec. `overlays` is a plain Map (not $state), so this is computed at
+   * render time from the live entries rather than via a $derived.
+   */
+  function overlaysSignature(): string {
+    let sig = '';
+    for (const [, o] of overlays) sig += `${o.id}:${o.opacity};`;
+    return sig;
+  }
 
   // Pending image loads for cleanup
   const pendingLoads = new Set<HTMLImageElement>();
@@ -830,7 +845,12 @@
     }
     if (!offscreenCtx) return;
 
-    const key = `${ra}|${dec}|${fov}|${zoomLevel}|${canvasWidth}x${canvasHeight}|${scaling}|${colorMap}|${invert}|${blackPoint}|${whitePoint}|${contrast}|${bias}|${layerSignature}|${contentVersion}`;
+    const key = postProcessMemoKey({
+      ra, dec, fov, zoomLevel,
+      width: canvasWidth, height: canvasHeight,
+      scaling, colorMap, invert, blackPoint, whitePoint, contrast, bias,
+      layerSignature, overlaysSignature: overlaysSignature(), contentVersion,
+    });
     if (key !== ppLastKey) {
       ppLastKey = key;
       // Draw tiles to offscreen (no pan offset — we composite with offset below).
@@ -1802,6 +1822,10 @@
     if (overlays.has(id)) return;
     overlays.set(id, { id, baseUrl: hipsUrl, opacity });
     loadOverlayTiles();
+    // Paint immediately: any already-cached overlay tiles (e.g. re-adding, or
+    // tiles shared with a prior view) would otherwise not show until a network
+    // onload or a pan, since loadOverlayTiles only scheduleRenders on load.
+    scheduleRender();
   }
 
   export function removeOverlay(id: string) {
