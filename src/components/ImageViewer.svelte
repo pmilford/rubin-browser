@@ -57,8 +57,8 @@
     graticuleLines,
     compassRose,
     scaleBar,
-    formatRa,
-    formatDec,
+    formatGridLabel,
+    type CoordSystem,
   } from '../utils/graticule.js';
   import { nearestObject, identifyAt, type IdentifyInfo } from '../data/objects.js';
   import { sampleProfile, type LineProfile } from '../utils/crossSection.js';
@@ -89,6 +89,7 @@
     crossSectionMode = false,
     surfaceMode = false,
     showGraticule = false,
+    gridSystem = 'equatorial' as CoordSystem,
     showCoverage = false,
     showMagnifier = false,
     rulerMode = false,
@@ -139,8 +140,10 @@
     /** When true, the viewer is in cross-section mode: dragging draws/edits a
      *  line profile instead of panning the sky. */
     crossSectionMode?: boolean;
-    /** When true, draw the curved RA/Dec coordinate graticule + compass + scale bar. */
+    /** When true, draw the curved coordinate graticule + compass + scale bar. */
     showGraticule?: boolean;
+    /** Coordinate system the graticule follows: equatorial | galactic | ecliptic. */
+    gridSystem?: CoordSystem;
     /** When true, shade the Rubin DP1 field footprints (where data actually exists). */
     showCoverage?: boolean;
     /** When true, show a magnifier loupe of the pixels under the cursor. */
@@ -812,7 +815,7 @@
     // Grid lines follow the sky → apply the same pan translate the image uses.
     ctx.save();
     ctx.translate(panOffsetX, panOffsetY);
-    const lines = graticuleLines(view);
+    const lines = graticuleLines(view, { system: gridSystem });
     ctx.lineWidth = 1;
     for (const line of lines) {
       if (line.points.length < 2) continue;
@@ -832,7 +835,7 @@
       labeled.add(key);
       const p = line.points[Math.floor(line.points.length / 2)];
       if (!p) continue;
-      ctx.fillText(line.kind === 'ra' ? formatRa(line.value) : formatDec(line.value), p.x + 3, p.y - 3);
+      ctx.fillText(formatGridLabel(line.kind, line.value, gridSystem), p.x + 3, p.y - 3);
     }
     ctx.restore();
 
@@ -863,9 +866,11 @@
     ctx.textAlign = 'left';
   }
 
-  // Repaint when the graticule, coverage overlay, or ruler is toggled on/off.
+  // Repaint when the graticule (or its coordinate system), coverage overlay, or
+  // ruler is toggled/changed.
   $effect(() => {
     void showGraticule;
+    void gridSystem;
     void showCoverage;
     void rulerMode;
     scheduleRender();

@@ -23,6 +23,9 @@
  */
 
 import { skyToCanvas, canvasToSky, type ViewParams } from './projection.js';
+import { fromEquatorial, toEquatorial, type CoordSystem } from './coords.js';
+
+export type { CoordSystem };
 
 /** The view snapshot consumed by every function here — identical to skyToCanvas's. */
 export type GraticuleView = ViewParams;
@@ -50,6 +53,8 @@ export interface GraticuleOptions {
   edgeMarginPx?: number;
   /** consecutive points farther apart than this (px) split the run — kills wrap chords (default 200). */
   maxSegmentPx?: number;
+  /** Coordinate system the grid follows: 'equatorial' (default), 'galactic', 'ecliptic'. */
+  system?: CoordSystem;
 }
 
 export interface CompassRose {
@@ -236,6 +241,12 @@ export function graticuleLines(
   view: GraticuleView,
   opts: GraticuleOptions = {}
 ): GraticuleLine[] {
+  // Non-equatorial grids follow lines of constant galactic/ecliptic lon/lat,
+  // converted to RA/Dec and projected the same way. The equatorial path below is
+  // left exactly as-is (its invariant tests are unchanged).
+  if (opts.system && opts.system !== 'equatorial') {
+    return graticuleLinesInSystem(view, opts.system, opts);
+  }
   const samples = opts.samples ?? 128;
   const maxLines = opts.maxLines ?? 40;
   const edgeMargin = opts.edgeMarginPx ?? 64;
@@ -280,6 +291,119 @@ export function graticuleLines(
   }
 
   return lines;
+}
+
+/** Is the given pole of `system` (lat ±90) inside the visible canvas? */
+function systemPoleVisible(view: GraticuleView, system: CoordSystem, lat: 90 | -90): boolean {
+  const eq = toEquatorial(0, lat, system);
+  return inMargin(skyToCanvas(view, eq.lon, eq.lat), view, 0);
+}
+
+/** Visible lon/lat window in `system` — the generic analogue of visibleWindow. */
+function visibleWindowInSystem(view: GraticuleView, system: CoordSystem): {
+  latMin: number;
+  latMax: number;
+  lonHalf: number;
+  centerLon: number;
+} {
+  const { canvasWidth: w, canvasHeight: h } = view;
+  const center = fromEquatorial(view.ra, view.dec, system);
+  let latMin = Infinity;
+  let latMax = -Infinity;
+  let lonHalf = 0;
+  const N = 6;
+  for (let i = 0; i <= N; i++) {
+    for (let j = 0; j <= N; j++) {
+      const [ra, dec] = canvasToSky(view, (i / N) * w, (j / N) * h);
+      const s = fromEquatorial(ra, dec, system);
+      if (s.lat < latMin) latMin = s.lat;
+      if (s.lat > latMax) latMax = s.lat;
+      const dl = Math.abs(wrapDeltaDeg(s.lon - center.lon));
+      if (dl > lonHalf) lonHalf = dl;
+    }
+  }
+  if (systemPoleVisible(view, system, 90)) { latMax = 90; lonHalf = 180; }
+  if (systemPoleVisible(view, system, -90)) { latMin = -90; lonHalf = 180; }
+  return { latMin: clampDec(latMin), latMax: clampDec(latMax), lonHalf, centerLon: center.lon };
+}
+
+/**
+ * Graticule for a non-equatorial system: iso-lat parallels and iso-lon meridians
+ * of `system`, each point converted to RA/Dec and projected through the same
+ * gnomonic skyToCanvas, then split into on-canvas runs. `kind:'ra'` = meridian
+ * (constant lon), `kind:'dec'` = parallel (constant lat).
+ */
+function graticuleLinesInSystem(
+  view: GraticuleView,
+  system: CoordSystem,
+  opts: GraticuleOptions
+): GraticuleLine[] {
+  const samples = opts.samples ?? 128;
+  const maxLines = opts.maxLines ?? 40;
+  const edgeMargin = opts.edgeMarginPx ?? 64;
+  const maxSegmentPx = opts.maxSegmentPx ?? 200;
+  const baseSpacing = opts.spacingDeg ?? gridSpacingForFov(view.fov);
+
+  const win = visibleWindowInSystem(view, system);
+  const lines: GraticuleLine[] = [];
+  const project = (lon: number, lat: number): [number, number] => {
+    const eq = toEquatorial(lon, lat, system);
+    return skyToCanvas(view, eq.lon, eq.lat);
+  };
+
+  // Parallels: constant lat, swept over the visible lon window.
+  const latHalf = (win.latMax - win.latMin) / 2 + baseSpacing;
+  const latCenter = (win.latMax + win.latMin) / 2;
+  const parallels = isoValues(latCenter, latHalf, baseSpacing, maxLines, [-90, 90]);
+  const lonSweep = Math.min(180, win.lonHalf + baseSpacing * 2);
+  for (const latVal of parallels.values) {
+    const raw: [number, number][] = [];
+    for (let i = 0; i <= samples; i++) {
+      const lon = win.centerLon - lonSweep + (2 * lonSweep * i) / samples;
+      raw.push(project(lon, latVal));
+    }
+    for (const run of splitRuns(raw, view, edgeMargin, maxSegmentPx)) {
+      lines.push({ kind: 'dec', value: latVal, points: run });
+    }
+  }
+
+  // Meridians: constant lon, swept over the visible lat window.
+  const lonHalf = win.lonHalf + baseSpacing;
+  const meridians = isoValues(win.centerLon, lonHalf, baseSpacing, maxLines);
+  const latLo = clampDec(win.latMin - baseSpacing);
+  const latHi = clampDec(win.latMax + baseSpacing);
+  for (const lonRaw of meridians.values) {
+    const lonVal = ((lonRaw % 360) + 360) % 360;
+    const raw: [number, number][] = [];
+    for (let i = 0; i <= samples; i++) {
+      const lat = clampDec(latLo + ((latHi - latLo) * i) / samples);
+      raw.push(project(lonVal, lat));
+    }
+    for (const run of splitRuns(raw, view, edgeMargin, maxSegmentPx)) {
+      lines.push({ kind: 'ra', value: lonVal, points: run });
+    }
+  }
+
+  return lines;
+}
+
+/**
+ * Label for a grid isoline. Equatorial uses the h:m / °:′ formatters; galactic and
+ * ecliptic use plain degrees with the conventional axis letters (l/b, λ/β).
+ */
+export function formatGridLabel(
+  kind: 'ra' | 'dec',
+  value: number,
+  system: CoordSystem = 'equatorial'
+): string {
+  if (system === 'equatorial') return kind === 'ra' ? formatRa(value) : formatDec(value);
+  const deg =
+    kind === 'dec'
+      ? `${value >= 0 ? '+' : ''}${value.toFixed(0)}°`
+      : `${Math.round(((value % 360) + 360) % 360)}°`;
+  const letter =
+    system === 'galactic' ? (kind === 'ra' ? 'l' : 'b') : kind === 'ra' ? 'λ' : 'β';
+  return `${letter} ${deg}`;
 }
 
 /**

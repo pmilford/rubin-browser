@@ -15,7 +15,7 @@ Status: `TODO` · `WIP` (in progress) · `DONE` · `BLOCKED` (needs a decision �
 | 102 | MOC / DP1 footprint coverage layer (shade where data exists) | DONE | ImageViewer.renderCoverage() projects footprint.ts discs on the main canvas; ⊙ DP1 coverage toggle; Playwright paint/clear outcome test |
 | 103 | Simbad "what's here?" (right-click) + name resolve | DONE | right-click → onSkyContext → objectsNear → SimbadPanel; public (no auth), works without a token; presentational + page.route Playwright tests |
 | 104 | Click-to-copy coordinates (sexagesimal ⟷ decimal) | DONE | StatusBar: click RA/Dec to copy, format toggle, copy-pair (decimal); 4 tests |
-| 105 | Grid coordinate-system toggle (equatorial ↔ galactic ↔ ecliptic) | WIP | module `src/utils/coords.ts` building; feeds `graticule.ts` |
+| 105 | Grid coordinate-system toggle (equatorial ↔ galactic ↔ ecliptic) | DONE | graticuleLines generalized (equatorial path unchanged) via coords.ts; formatGridLabel (l/b, λ/β); System selector; iso-line + label unit tests + Playwright repaint test |
 | 106 | PNG screenshot export of the current view | DONE | ImageViewer.exportPng() composites stacked canvases → toBlob download; ⤓ PNG button; Playwright download-outcome test |
 | 107 | Magnifier loupe + whole-sky locator inset | DONE | loupe canvas magnifies pixels under the cursor (locator inset already existed as .fov-minimap); 🔍 Loupe toggle; Playwright tracks-cursor outcome test |
 | 108 | Offline image-diff display (epoch A vs B → transients) | DONE | DiffPanel: A/B/diff (diverging) canvases + transient list over the tested offlineIntensityFrame→differenceImages(median)→detectTransients pipeline; ⧉ Diff toggle (offline only); ground-truth unit test + presentational + Playwright wiring test |

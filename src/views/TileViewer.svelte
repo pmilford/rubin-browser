@@ -229,11 +229,13 @@
       : 'Cross-section: off';
   }
 
-  // Curved RA/Dec coordinate graticule + compass + scale bar overlay.
+  // Curved coordinate graticule + compass + scale bar overlay, in a selectable
+  // coordinate system.
   let showGraticule = $state(false);
+  let gridSystem = $state<'equatorial' | 'galactic' | 'ecliptic'>('equatorial');
   function toggleGraticule() {
     showGraticule = !showGraticule;
-    statusMessage = showGraticule ? 'Coordinate grid: on' : 'Coordinate grid: off';
+    statusMessage = showGraticule ? `Coordinate grid: on (${gridSystem})` : 'Coordinate grid: off';
   }
 
   // Rubin DP1 footprint coverage overlay — shade the 7 fields so it's obvious
@@ -665,6 +667,7 @@
       {crossSectionMode}
       {surfaceMode}
       {showGraticule}
+      {gridSystem}
       {showCoverage}
       {showMagnifier}
       {rulerMode}
@@ -820,6 +823,21 @@
         >
           ⊞ Grid
         </button>
+
+        {#if showGraticule}
+          <label class="rubin-filter" aria-label="Grid coordinate system">
+            <span class="layer-label">System</span>
+            <select
+              bind:value={gridSystem}
+              aria-label="Grid coordinate system select"
+              onchange={() => { statusMessage = `Coordinate grid: ${gridSystem}`; }}
+            >
+              <option value="equatorial">Equatorial (RA/Dec)</option>
+              <option value="galactic">Galactic (l/b)</option>
+              <option value="ecliptic">Ecliptic (λ/β)</option>
+            </select>
+          </label>
+        {/if}
 
         <button
           class="xsection-toggle"
