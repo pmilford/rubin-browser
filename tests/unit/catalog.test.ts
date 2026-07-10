@@ -4,6 +4,7 @@ import {
   OBJECT_TYPES,
   lookupObject,
   nearestObject,
+  identifyAt,
   getObjectsByType,
   type ObjectType,
 } from '../../src/data/objects.js';
@@ -92,5 +93,37 @@ describe('nearestObject', () => {
       angularSeparation(ra, dec, near.object.ra, near.object.dec),
       6
     );
+  });
+});
+
+describe('identifyAt (click-to-identify, thresholded)', () => {
+  const m42 = ALL_OBJECTS.find((o) => o.id === 'M-42')!;
+
+  it('matches a KNOWN object at its own coords (not the first element)', () => {
+    const r = identifyAt(m42.ra, m42.dec, 0.5);
+    expect(r.match).not.toBeNull();
+    expect(r.match!.object.id).toBe('M-42');
+    expect(r.match!.separationDeg).toBeCloseTo(0, 5);
+  });
+
+  it('matches when the click is offset but within the radius, with the true separation', () => {
+    // Canopus is isolated (no near neighbour), so a small offset stays on it.
+    const canopus = ALL_OBJECTS.find((o) => o.id === 'HR-2326')!;
+    const r = identifyAt(canopus.ra, canopus.dec + 0.1, 0.5);
+    expect(r.match?.object.id).toBe('HR-2326');
+    expect(r.match!.separationDeg).toBeCloseTo(0.1, 2);
+  });
+
+  it('returns NO match in empty sky but still reports the (far) nearest', () => {
+    // Robust: derive a radius strictly smaller than the true nearest separation,
+    // so this can never flake regardless of catalog contents.
+    const nearest = nearestObject(200, -30)!;
+    const r = identifyAt(200, -30, nearest.separationDeg / 2);
+    // A broken "always return the nearest" implementation fails here.
+    expect(r.match).toBeNull();
+    // ...but the honest "nearest is N away" hint is still available.
+    expect(r.nearest).not.toBeNull();
+    expect(r.nearest!.object.id).toBe(nearest.object.id);
+    expect(r.nearest!.separationDeg).toBeGreaterThan(r.matchRadiusDeg);
   });
 });

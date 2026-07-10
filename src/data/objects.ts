@@ -178,3 +178,39 @@ export function nearestObject(ra: number, dec: number): NearestObjectResult | nu
     positionAngleDeg: positionAngle(ra, dec, best.ra, best.dec),
   };
 }
+
+/** Result of a click-identify: the matched object (within threshold) or an honest
+ *  no-match, always carrying the clicked coordinates. */
+export interface IdentifyResult {
+  /** Nearest object IF within the match radius; null when nothing is close. */
+  match: NearestObjectResult | null;
+  /** The nearest object regardless of distance (for the "nearest is N away" hint). */
+  nearest: NearestObjectResult | null;
+  /** Match radius (deg) used for this identification. */
+  matchRadiusDeg: number;
+}
+
+/**
+ * Identify the object at a clicked sky position. Unlike {@link nearestObject},
+ * this THRESHOLDS the result: the bundled catalog is bright objects only, so over
+ * most of the sky the nearest cataloged object is degrees away and reporting it as
+ * "here" is misleading. `match` is non-null only when the nearest object is within
+ * `matchRadiusDeg` (default scales with the zoomed field of view, floored at 1′),
+ * so an empty-sky click honestly returns no match. `nearest` is always the true
+ * nearest (for a "nearest catalogued object is N.N° away" hint).
+ */
+export function identifyAt(ra: number, dec: number, matchRadiusDeg = 0.5): IdentifyResult {
+  const nearest = nearestObject(ra, dec);
+  const match = nearest && nearest.separationDeg <= matchRadiusDeg ? nearest : null;
+  return { match, nearest, matchRadiusDeg };
+}
+
+/** A click-identify result plus the clicked sky point + constellation, for the panel. */
+export interface IdentifyInfo extends IdentifyResult {
+  /** Clicked RA (deg). */
+  ra: number;
+  /** Clicked Dec (deg). */
+  dec: number;
+  /** Constellation the clicked point falls in. */
+  constellation: string;
+}

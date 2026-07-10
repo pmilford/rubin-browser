@@ -41,7 +41,7 @@
   import type { Band } from '../data/syntheticSky.js';
   import { constellationFor } from '../utils/constellation.js';
   import { cardinalDirection, formatSeparation } from '../utils/skyGeom.js';
-  import { nearestObject } from '../data/objects.js';
+  import { nearestObject, identifyAt, type IdentifyInfo } from '../data/objects.js';
   import { sampleProfile, type LineProfile } from '../utils/crossSection.js';
   import type { ViewerState, ScalingFunction, ColorMapName, InterpolationMethod } from '../types/image.js';
 
@@ -71,6 +71,7 @@
     onViewerStateChange,
     onBaseResolved,
     onProfileChange,
+    onIdentify,
   }: {
     /** Explicit base URL override (mainly for tests). When empty, `baseMode` + token drive resolution. */
     hipsBaseUrl?: string;
@@ -113,6 +114,8 @@
     onBaseResolved?: (label: string) => void;
     /** Fired with the sampled line profile whenever the cross-section changes. */
     onProfileChange?: (profile: LineProfile | null) => void;
+    /** Fired when the user CLICKS (not drags) to identify the object at a sky point. */
+    onIdentify?: (info: IdentifyInfo) => void;
   } = $props();
 
   const DEFAULT_FORMAT = 'jpg';
@@ -1178,12 +1181,18 @@
     xsectionCanvasEl?.releasePointerCapture?.(e.pointerId);
   }
 
-  function onPointerUp() {
+  // A pointer-up within this many px of the pointer-down is a CLICK (identify),
+  // not a pan. A larger movement recenters as before.
+  const CLICK_MOVE_PX = 4;
+  let pendingIdentifyTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function onPointerUp(e: PointerEvent) {
     if (!isDragging) return;
     isDragging = false;
 
-    // Finalize: recenter on current view position
-    if (panOffsetX !== 0 || panOffsetY !== 0) {
+    // Finalize a PAN: recenter on current view position.
+    const wasPan = panOffsetX !== 0 || panOffsetY !== 0;
+    if (wasPan) {
       const [newRa, newDec] = canvasToSky(currentView(), canvasWidth / 2, canvasHeight / 2);
       ra = newRa;
       dec = newDec;
@@ -1193,6 +1202,31 @@
 
     loadTiles();
     emitState();
+
+    // A CLICK (negligible movement, no pan) → identify the object here. Deferred
+    // briefly so a double-click (navigate) can cancel it (see onDblClick).
+    const moved = Math.hypot(e.clientX - dragStartX, e.clientY - dragStartY);
+    if (!wasPan && moved < CLICK_MOVE_PX && !crossSectionMode && onIdentify) {
+      const rect = canvasEl.getBoundingClientRect();
+      const px = e.clientX - rect.left;
+      const py = e.clientY - rect.top;
+      if (pendingIdentifyTimer) clearTimeout(pendingIdentifyTimer);
+      pendingIdentifyTimer = setTimeout(() => {
+        pendingIdentifyTimer = null;
+        doIdentify(px, py);
+      }, 220);
+    }
+  }
+
+  /** Identify the object at a canvas pixel and emit it to the parent's info panel. */
+  function doIdentify(px: number, py: number) {
+    const [r, d] = canvasToSky(currentView(), px, py);
+    if (!Number.isFinite(r) || !Number.isFinite(d)) return;
+    // Match radius scales with the zoomed field so a click "hits" what's visibly
+    // under it, floored at 1′ and capped at 1° (the catalog is bright objects only).
+    const matchRadius = Math.max(1 / 60, Math.min(fov * 0.25, 1));
+    const res = identifyAt(r, d, matchRadius);
+    onIdentify?.({ ...res, ra: r, dec: d, constellation: constellationFor(r, d).name });
   }
 
   /**
@@ -1222,6 +1256,8 @@
   }
 
   function onDblClick(e: MouseEvent) {
+    // A double-click NAVIGATES; cancel the pending single-click identify.
+    if (pendingIdentifyTimer) { clearTimeout(pendingIdentifyTimer); pendingIdentifyTimer = null; }
     const rect = canvasEl.getBoundingClientRect();
     const px = e.clientX - rect.left;
     const py = e.clientY - rect.top;

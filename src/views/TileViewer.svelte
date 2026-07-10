@@ -9,7 +9,9 @@
   import ObjectBrowser from '../components/ObjectBrowser.svelte';
   import CrossSectionPlot from '../components/CrossSectionPlot.svelte';
   import OfflineLayerControls from '../components/OfflineLayerControls.svelte';
+  import ObjectInfoPanel from '../components/ObjectInfoPanel.svelte';
   import { OFFLINE_EPOCHS, OFFLINE_BANDS, brightestOfflineVariable } from '../data/offlineDataset.js';
+  import type { IdentifyInfo } from '../data/objects.js';
   import type { Band } from '../data/syntheticSky.js';
   import type { LineProfile } from '../utils/crossSection.js';
   import type { ScalingFunction, ColorMapName, InterpolationMethod, ViewerState, Epoch } from '../types/image.js';
@@ -92,6 +94,15 @@
 
   function toggleAlertType(t: number) {
     alertTypeMask = alertTypeMask ^ (1 << t);
+  }
+
+  // Click-to-identify object info panel
+  let identifyInfo = $state<IdentifyInfo | null>(null);
+  function handleIdentify(info: IdentifyInfo) {
+    identifyInfo = info;
+    statusMessage = info.match
+      ? `Identified: ${info.match.object.name} (${info.match.object.type}, mag ${info.match.object.magnitude.toFixed(1)})`
+      : `No catalogued object within ${(info.matchRadiusDeg * 60).toFixed(0)}′ of the click`;
   }
 
   // Cross-section / line-profile tool
@@ -400,6 +411,7 @@
       onViewerStateChange={handleViewerStateChange}
       onBaseResolved={(label) => { resolvedBaseLabel = label; }}
       onProfileChange={(p) => { crossSectionProfile = p; }}
+      onIdentify={handleIdentify}
     />
 
     {#if uiVisible}
@@ -496,6 +508,12 @@
     {#if crossSectionMode && uiVisible}
       <div class="xsection-overlay">
         <CrossSectionPlot profile={crossSectionProfile} onClose={toggleCrossSection} />
+      </div>
+    {/if}
+
+    {#if identifyInfo && uiVisible}
+      <div class="identify-overlay">
+        <ObjectInfoPanel info={identifyInfo} onClose={() => { identifyInfo = null; }} />
       </div>
     {/if}
 
@@ -646,6 +664,13 @@
     top: 44px;
     right: 12px;
     z-index: 16;
+  }
+
+  .identify-overlay {
+    position: absolute;
+    top: 44px;
+    right: 12px;
+    z-index: 17;
   }
 
   .alert-toggle.on {
