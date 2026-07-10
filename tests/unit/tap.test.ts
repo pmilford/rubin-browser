@@ -22,11 +22,15 @@ describe('TAP Client', () => {
         catalog: 'Object',
       });
 
-      expect(adql).toContain('FROM dp02_dc2_catalogs.Object');
+      expect(adql).toContain('FROM dp1.Object');
+      // DP0.2 namespace against the /api/dp1 endpoint was the long-standing bug.
+      expect(adql).not.toContain('dp02_dc2_catalogs');
       expect(adql).toContain('62');
       expect(adql).toContain('-37');
       expect(adql).toContain('CIRCLE');
       expect(adql).toContain('CONTAINS');
+      // No `dist` column exists in DP1 — the phantom ORDER BY was removed.
+      expect(adql).not.toContain('ORDER BY dist');
     });
 
     it('converts arcsec to degrees', () => {

@@ -13,11 +13,20 @@
     curve = null as LightCurvePoint[] | null,
     currentIndex = 0,
     band = 'r',
+    title = 'Light curve',
+    status = null as string | null,
+    footNote = 'ground-truth synthetic intensity (counts) at the view centre · not real observations',
+    onRefresh,
     onClose,
   }: {
     curve?: LightCurvePoint[] | null;
     currentIndex?: number;
     band?: string;
+    title?: string;
+    /** Loading / error / info message shown when there is no curve. */
+    status?: string | null;
+    footNote?: string;
+    onRefresh?: () => void;
     onClose?: () => void;
   } = $props();
 
@@ -43,14 +52,17 @@
 
 <div class="lc-plot" role="region" aria-label="Light curve">
   <div class="header">
-    <span class="title">Light curve · {band}</span>
+    <span class="title">{title} · {band}</span>
+    {#if onRefresh}
+      <button class="close-btn" aria-label="Refresh light curve" title="Fetch at the current centre" onclick={onRefresh}>↻</button>
+    {/if}
     {#if onClose}
       <button class="close-btn" aria-label="Close light curve" onclick={onClose}>×</button>
     {/if}
   </div>
 
   {#if !hasData}
-    <div class="no-data">no time axis (offline cube only)</div>
+    <div class="no-data" aria-label="Light curve status">{status ?? 'no time axis (offline cube only)'}</div>
   {:else}
     <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} class="plot-svg" aria-label="Intensity vs time">
       <rect x="0" y="0" width={W} height={H} fill="rgba(8,10,22,0.95)" />
@@ -73,7 +85,7 @@
       <span class="ax">MJD {mjdRange[1].toFixed(0)}</span>
     </div>
   {/if}
-  <div class="foot">ground-truth synthetic intensity (counts) at the view centre · not real observations</div>
+  <div class="foot">{footNote}</div>
 </div>
 
 <style>

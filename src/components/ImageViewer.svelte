@@ -26,9 +26,12 @@
   import {
     queryViewport,
     typeVisible,
+    nearestAlert,
+    timeWindowPredicate,
     ALERT_TYPE_COLORS,
     type AlertSet,
     type AlertIndex,
+    type AlertHit,
   } from '../data/alerts.js';
   import {
     resolveActiveBaseUrl,
@@ -67,6 +70,7 @@
     alertIndex = null as AlertIndex | null,
     showAlerts = false,
     alertTypeMask = 0x1f,
+    alertTimeWindow = null as { min: number; max: number } | null,
     crossSectionMode = false,
     surfaceMode = false,
     offlineBand = 'r' as Band,
@@ -76,6 +80,7 @@
     onProfileChange,
     onSurfaceChange,
     onIdentify,
+    onAlertHover,
   }: {
     /** Explicit base URL override (mainly for tests). When empty, `baseMode` + token drive resolution. */
     hipsBaseUrl?: string;
@@ -108,6 +113,8 @@
     showAlerts?: boolean;
     /** Bitmask of visible AlertTypes. */
     alertTypeMask?: number;
+    /** Only render / hit-test alerts whose time (MJD) is in this window (null = all). */
+    alertTimeWindow?: { min: number; max: number } | null;
     /** When true, the viewer is in cross-section mode: dragging draws/edits a
      *  line profile instead of panning the sky. */
     crossSectionMode?: boolean;
@@ -126,6 +133,8 @@
     onSurfaceChange?: (grid: number[][] | null) => void;
     /** Fired when the user CLICKS (not drags) to identify the object at a sky point. */
     onIdentify?: (info: IdentifyInfo) => void;
+    /** Fired on hover over the alert overlay with the nearest alert (or null). */
+    onAlertHover?: (hit: AlertHit | null) => void;
   } = $props();
 
   const DEFAULT_FORMAT = 'jpg';
@@ -394,9 +403,13 @@
     const pType: number[] = [];
     let overLimit = false;
 
+    const inWindow = alertTimeWindow
+      ? timeWindowPredicate(alerts, alertTimeWindow.min, alertTimeWindow.max)
+      : null;
     queryViewport(alertIndex, alerts, raMin, raMax, decMin, decMax, (i) => {
       const t = aType[i]!;
       if (!typeVisible(alertTypeMask, t)) return;
+      if (inWindow && !inWindow(i)) return; // outside the selected time window
       const [sx, sy] = skyToCanvas(view, aRa[i]!, aDec[i]!);
       if (Number.isNaN(sx) || sx < 0 || sy < 0 || sx >= canvasWidth || sy >= canvasHeight) return;
       const gx = (sx / ALERT_DENSITY_CELL) | 0;
@@ -1217,6 +1230,16 @@
         cachedNearestName = null;
         cachedNearestDetail = null;
       }
+      // Alert hit-testing: report the nearest visible alert under the cursor (within
+      // a ~12px tolerance) so the parent can show an inspector tooltip.
+      if (onAlertHover && showAlerts && alerts && alertIndex && Number.isFinite(cRa) && Number.isFinite(cDec)) {
+        const tolDeg = Math.max(1 / 3600, (12 * fov) / canvasWidth);
+        let hit = nearestAlert(alertIndex, alerts, cRa, cDec, tolDeg, alertTypeMask);
+        if (hit && alertTimeWindow && (hit.timeMjd < alertTimeWindow.min || hit.timeMjd > alertTimeWindow.max)) {
+          hit = null; // hidden by the time window
+        }
+        onAlertHover(hit);
+      }
     }
     cursorReadout = {
       ra: cRa,
@@ -1232,6 +1255,7 @@
 
   function onPointerLeave() {
     cursorReadout = null;
+    onAlertHover?.(null);
   }
 
   function onPointerMove(e: PointerEvent) {
@@ -1700,6 +1724,7 @@
     void alertIndex;
     void showAlerts;
     void alertTypeMask;
+    void alertTimeWindow;
     void crossSectionMode;
     void xsP0;
     void xsP1;

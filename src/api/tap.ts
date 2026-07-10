@@ -121,9 +121,14 @@ export async function queryAsync(
 /** Build a cone search ADQL query */
 export function buildConeSearch(params: ConeSearchParams): string {
   const { ra, dec, radius, catalog, maxRecords = 1000 } = params;
-  const table = `dp02_dc2_catalogs.${catalog}`;
+  // DP1 catalog namespace (was `dp02_dc2_catalogs.*`, i.e. DP0.2 — the wrong data
+  // release for the /api/dp1 endpoint this client targets).
+  const table = `dp1.${catalog}`;
   const radiusDeg = radius / 3600; // arcsec to degrees
 
+  // NB: `dp1.*` cone tables expose `coord_ra`/`coord_dec` for Object/Source/
+  // ForcedSource; DiaObject/DiaSource use `ra`/`dec` (adjust the projection when
+  // wiring those). No `dist` column exists in DP1, so we do not ORDER BY it.
   return `
     SELECT TOP ${maxRecords} *
     FROM ${table}
@@ -131,7 +136,6 @@ export function buildConeSearch(params: ConeSearchParams): string {
       POINT('ICRS', coord_ra, coord_dec),
       CIRCLE('ICRS', ${ra}, ${dec}, ${radiusDeg})
     ) = 1
-    ORDER BY dist
   `.trim();
 }
 

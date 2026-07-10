@@ -22,16 +22,21 @@
   import { DEFAULT_MOCK_EPOCHS, type SurveyInfo } from '../constants.js';
   import type { FilterBand } from '../constants.js';
   import { getToken, isAuthenticated } from '../api/auth.js';
+  import { fetchLightCurve, toLightCurvePoints } from '../api/lightcurve.js';
+  import type { LightCurvePoint } from '../data/offlineDataset.js';
   import { lookupObject, type AstroObject } from '../data/objects.js';
   import {
     generateSyntheticAlerts,
     buildAlertIndex,
     allTypesMask,
     typeVisible,
+    alertTimeRange,
+    alertsInWindow,
     ALERT_TYPE_NAMES,
     ALERT_TYPE_COLORS,
     type AlertSet,
     type AlertIndex,
+    type AlertHit,
   } from '../data/alerts.js';
 
   let scaling: ScalingFunction = $state('linear');
@@ -83,12 +88,34 @@
   let alertIndex: AlertIndex | null = $state(null);
   let alertTypeMask = $state(allTypesMask());
   const ALERT_SYNTHETIC_COUNT = 200000;
+  // Alert time-window filter (MJD). Bounds come from the loaded set; the window
+  // starts full-open. Null until alerts load.
+  let alertMjdBounds = $state<[number, number] | null>(null);
+  let alertWindowMin = $state(0);
+  let alertWindowMax = $state(0);
+  const alertTimeWindow = $derived(
+    alertMjdBounds && (alertWindowMin > alertMjdBounds[0] || alertWindowMax < alertMjdBounds[1])
+      ? { min: alertWindowMin, max: alertWindowMax }
+      : null
+  );
+  const alertWindowCount = $derived(
+    alerts && alertTimeWindow ? alertsInWindow(alerts, alertTimeWindow.min, alertTimeWindow.max).count : (alerts?.count ?? 0)
+  );
+  // Nearest alert under the cursor (for the hover inspector).
+  let alertHover = $state<AlertHit | null>(null);
 
   function toggleAlerts() {
     showAlerts = !showAlerts;
     if (showAlerts && !alerts) {
       alerts = generateSyntheticAlerts(ALERT_SYNTHETIC_COUNT, 1);
       alertIndex = buildAlertIndex(alerts);
+      const [lo, hi] = alertTimeRange(alerts);
+      // Integer MJD bounds so the range sliders (step 1) accept the endpoints.
+      const loI = Math.floor(lo);
+      const hiI = Math.ceil(hi);
+      alertMjdBounds = [loI, hiI];
+      alertWindowMin = loI;
+      alertWindowMax = hiI;
       statusMessage = `Alerts: ${alerts.count.toLocaleString()} synthetic events loaded`;
     } else {
       statusMessage = showAlerts ? 'Alerts: on' : 'Alerts: off';
@@ -128,20 +155,45 @@
       : '3D surface: off';
   }
 
-  // Light curve (intensity vs time) at the view centre — offline synthetic cube
-  // only, from the KNOWN source light curves (a single Rubin coadd has no time
-  // axis). Recomputes as you pan / change band.
+  // Light curve (intensity vs time). OFFLINE: from the known synthetic light curves
+  // at the view centre (recomputes as you pan). RUBIN: real DP1 forced-photometry
+  // fetched on demand via TAP (auth-gated; DP1 covers only a few small fields, so
+  // most positions legitimately return no epochs).
   let lightCurveMode = $state(false);
-  const lightCurve = $derived(
+  const offlineLc = $derived(
     lightCurveMode && baseLayerId === 'offline'
       ? offlineLightCurve(currentRa, currentDec, offlineBand)
       : null
   );
+  // Rubin light curve is available when a Rubin base is active AND authenticated.
+  const rubinLcAvailable = $derived(rubinActive && authenticated);
+  let rubinLcCurve = $state<LightCurvePoint[] | null>(null);
+  let rubinLcStatus = $state<string | null>(null);
+
+  async function fetchRubinLc() {
+    rubinLcCurve = null;
+    rubinLcStatus = `Fetching DP1 light curve at ${currentRa.toFixed(3)}, ${currentDec.toFixed(3)}…`;
+    try {
+      const parsed = await fetchLightCurve({ ra: currentRa, dec: currentDec, radiusArcsec: 2 });
+      const pts = toLightCurvePoints(parsed, { band: 'r' });
+      if (pts.length === 0) {
+        rubinLcStatus = 'No DP1 epochs here (DP1 covers only a few small fields — try an on-field source).';
+      } else {
+        rubinLcCurve = pts;
+        rubinLcStatus = null;
+        statusMessage = `Rubin light curve: ${pts.length} r-band epochs`;
+      }
+    } catch (e) {
+      rubinLcStatus = e instanceof Error ? e.message : 'Light-curve fetch failed.';
+    }
+  }
+
   function toggleLightCurve() {
     lightCurveMode = !lightCurveMode;
-    statusMessage = lightCurveMode
-      ? 'Light curve: synthetic intensity vs time at the view centre'
-      : 'Light curve: off';
+    if (lightCurveMode && baseLayerId !== 'offline' && rubinLcAvailable) {
+      void fetchRubinLc();
+    }
+    statusMessage = lightCurveMode ? 'Light curve: on' : 'Light curve: off';
   }
 
   // Rubin DP1 multi-filter: switch the active HiPS dataset (gri/ugri/… colour
@@ -440,6 +492,8 @@
       {alertIndex}
       {showAlerts}
       {alertTypeMask}
+      {alertTimeWindow}
+      onAlertHover={(h) => { alertHover = h; }}
       {crossSectionMode}
       {surfaceMode}
       {rubinDataset}
@@ -560,13 +614,15 @@
           ▲ 3D surface
         </button>
 
-        {#if baseLayerId === 'offline'}
+        {#if baseLayerId === 'offline' || rubinLcAvailable}
           <button
             class="xsection-toggle"
             class:on={lightCurveMode}
             aria-pressed={lightCurveMode}
             aria-label="Toggle light curve"
-            title="Synthetic intensity vs time at the view centre (offline cube)"
+            title={baseLayerId === 'offline'
+              ? 'Synthetic intensity vs time at the view centre (offline cube)'
+              : 'Fetch a real DP1 forced-photometry light curve at the view centre (TAP)'}
             onclick={toggleLightCurve}
           >
             ⌇ Light curve
@@ -588,10 +644,43 @@
               </button>
             {/each}
           </span>
+          {#if alertMjdBounds}
+            <span class="alert-time" aria-label="Alert time window">
+              <span class="layer-label">Time</span>
+              <input
+                type="range" min={alertMjdBounds[0]} max={alertMjdBounds[1]} step="1"
+                bind:value={alertWindowMin}
+                oninput={() => { if (alertWindowMin > alertWindowMax) alertWindowMax = alertWindowMin; }}
+                aria-label="Alert window start (MJD)"
+              />
+              <input
+                type="range" min={alertMjdBounds[0]} max={alertMjdBounds[1]} step="1"
+                bind:value={alertWindowMax}
+                oninput={() => { if (alertWindowMax < alertWindowMin) alertWindowMin = alertWindowMax; }}
+                aria-label="Alert window end (MJD)"
+              />
+              <span class="alert-time-readout" aria-label="Alert window count">
+                MJD {alertWindowMin.toFixed(0)}–{alertWindowMax.toFixed(0)} · {alertWindowCount.toLocaleString()}
+              </span>
+            </span>
+          {/if}
         {/if}
       </div>
     {/if}
-    {#if uiVisible && (identifyInfo || crossSectionMode || surfaceMode || (lightCurveMode && baseLayerId === 'offline'))}
+
+    {#if uiVisible && showAlerts && alertHover}
+      <div class="alert-inspector" aria-label="Alert inspector">
+        <span class="ai-type" style={`color:${ALERT_TYPE_COLORS[alertHover.type]}`}>
+          ● {ALERT_TYPE_NAMES[alertHover.type]}
+        </span>
+        <span class="ai-row">#{alertHover.id ?? alertHover.index}</span>
+        <span class="ai-row">mag {alertHover.magnitude.toFixed(2)}</span>
+        <span class="ai-row">MJD {alertHover.timeMjd.toFixed(2)}</span>
+        <span class="ai-row">RA {alertHover.ra.toFixed(4)}, Dec {alertHover.dec >= 0 ? '+' : ''}{alertHover.dec.toFixed(4)}</span>
+        <span class="ai-note">synthetic demo event</span>
+      </div>
+    {/if}
+    {#if uiVisible && (identifyInfo || crossSectionMode || surfaceMode || lightCurveMode)}
       <!-- Right-side stack: the object-ID popup sits ABOVE the analysis plots so
            they never overlap. -->
       <div class="right-stack">
@@ -605,7 +694,17 @@
           <SurfacePlot grid={surfaceGrid} onClose={toggleSurface} />
         {/if}
         {#if lightCurveMode && baseLayerId === 'offline'}
-          <LightCurvePlot curve={lightCurve} currentIndex={offlineEpochIndex} band={offlineBand} onClose={toggleLightCurve} />
+          <LightCurvePlot curve={offlineLc} currentIndex={offlineEpochIndex} band={offlineBand} onClose={toggleLightCurve} />
+        {:else if lightCurveMode && rubinLcAvailable}
+          <LightCurvePlot
+            curve={rubinLcCurve}
+            band="r"
+            title="Rubin light curve"
+            status={rubinLcStatus}
+            footNote="DP1 forced photometry (r-band) via TAP · requires RSP token + DP1 rights"
+            onRefresh={fetchRubinLc}
+            onClose={toggleLightCurve}
+          />
         {/if}
       </div>
     {/if}
@@ -789,6 +888,54 @@
     align-items: center;
     gap: 4px;
     flex-wrap: wrap;
+  }
+
+  .alert-time {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    background: rgba(10, 10, 30, 0.8);
+    border: 1px solid rgba(255, 180, 60, 0.35);
+    border-radius: 6px;
+    padding: 2px 8px;
+    color: #fc8;
+  }
+  .alert-time input[type='range'] {
+    width: 70px;
+    accent-color: #fc8;
+  }
+  .alert-time-readout {
+    color: #fda;
+    font-size: 10px;
+    white-space: nowrap;
+  }
+
+  .alert-inspector {
+    position: absolute;
+    left: 8px;
+    bottom: 8px;
+    z-index: 18;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    background: rgba(12, 10, 20, 0.95);
+    border: 1px solid rgba(255, 180, 60, 0.5);
+    border-radius: 6px;
+    padding: 6px 10px;
+    color: #eda;
+    font-size: 11px;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+  }
+  .alert-inspector .ai-type {
+    font-weight: 700;
+  }
+  .alert-inspector .ai-row {
+    color: #ccb;
+  }
+  .alert-inspector .ai-note {
+    color: #987;
+    font-size: 9px;
+    margin-top: 2px;
   }
 
   .type-chip {

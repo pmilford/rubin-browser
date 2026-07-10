@@ -102,12 +102,21 @@ asserts the plotted path's y-RANGE > threshold (not merely that a path exists),
 endpoint-drag changes the path `d`, log toggle changes curve shape, and pan is
 verified suspended (center RA/Dec unchanged after a drag in mode).
 
-## 4. Rubin time-series image browsing
+## 4. Rubin time-series image browsing  ✅ light-curve path done
 
 Answer "how do I look at a time series of Rubin images?" — a real path to
 multi-epoch Rubin imagery (visits/coadds over time) rather than the current MOCK
-epochs in `src/constants.ts`. Ties into the blink/epoch UI that already exists as
-a mock, and into items 1–2 (multi-epoch difference analysis).
+epochs in `src/constants.ts`.
+
+> STATUS (2026-07-10): a real DP1 **light-curve** path is done — `src/api/
+> lightcurve.ts` (`buildLightCurveAdql`/`fetchLightCurve`/`toLightCurvePoints`)
+> cone-searches `dp1.ForcedSource JOIN dp1.Visit` (per-visit forced photometry,
+> MJD from `v.expMidptMJD`, flux in nJy) and feeds `LightCurvePlot`; wired into a
+> "⌇ Light curve" toggle shown when a Rubin base is active AND authenticated,
+> fetch-on-demand (refresh button, not on pan), honest loading/error/"no epochs
+> here" states. Also fixed `tap.ts` DP0.2→DP1 (`dp1.Object`, removed phantom
+> `dist`). REMAINING: actual multi-epoch IMAGE cutouts over time (visit images via
+> SODA, ties to #7 FITS) rather than just the light curve; and image-differencing.
 
 ## 5. Zoom / fetch performance
 
@@ -138,26 +147,34 @@ Driven by a deterministic synthetic generator (200k events) with a toggle,
 per-type filter legend, and count. Verified to full-sky at 200k.
 
 Remaining for this item:
+- **Hover/click** ✅ DONE — `nearestAlert()` (spatial-index hit-test) + a hover
+  inspector tooltip (id/type/mag/MJD/RA-Dec).
+- **Time filtering** ✅ DONE — `AlertSet` gained a `time` (MJD) column;
+  `alertTimeRange`/`timeWindowPredicate`/`alertsInWindow` + a dual-handle MJD
+  range slider that filters the rendered overlay and shows the windowed count.
 - **Real data source**: adapter from the actual Rubin alert stream / DIA-source
   TAP tables into the `AlertSet` shape (auth-gated; pluggable behind the current
-  synthetic generator). Time-windowed / streaming loads.
-- **Hover/click**: hit-test to show an event's ID, type, magnitude, and time.
-- **Overlay with catalogs**: unify with the survey/catalog overlay controls.
+  synthetic generator). Time-windowed / streaming loads. STILL OPEN.
+- **Overlay with catalogs**: unify with the survey/catalog overlay controls. OPEN.
 - Longer term: **locally reproduce the simpler detections** (image differencing
-  on multi-epoch cubes — depends on items 1, 2, 4).
-- **Time filtering**: alerts need a time-window control (slider / range) to show
-  only events in a chosen interval — essential once real time-stamped events land
-  and for the multi-epoch analysis.
+  on multi-epoch cubes — depends on items 1, 2, 4). OPEN.
 
-## 7. Higher bit-depth / less-compressed imagery
+## 7. Higher bit-depth / less-compressed imagery  ✅ FITS reader done
 
 JPEG HiPS tiles are fine for quick browsing but are 8-bit and already stretched/
 clipped (e.g. M31's core is saturated to white at the source — no stretch can
-recover it). Add less-compressed / higher-bit-depth options: PNG HiPS where
-available, and a FITS path (Rubin SODA `read:image` cutouts / FITS HiPS) that
-keeps linear float pixels so real stretch, un-saturated cores, and calibrated
-value readouts work. Let the user choose fidelity vs. speed. Overlaps with the
-FITS-gated items (flux-accurate stretch, Lupton gri color, real value readout).
+recover it). Add less-compressed / higher-bit-depth options: PNG HiPS (Rubin DP1
+is already PNG now) and a FITS path that keeps linear float pixels.
+
+> STATUS (2026-07-10): a dependency-free **FITS reader** is done — `src/utils/
+> fits.ts` (`readFits` parses the primary HDU, BITPIX 8/16/32/-32/-64 big-endian,
+> applies BSCALE/BZERO → Float64, BLANK/NaN handling; `minMax`, `percentileClip`;
+> 19 adversarial ground-truth tests). REMAINING (the wiring): a **SODA cutout
+> client** (`src/api/soda.ts`, auth-gated `read:image`) to fetch a FITS
+> ArrayBuffer, then `readFits → percentileClip → scaling.ts → colormap.ts →
+> canvas` and calibrated `BUNIT` value readout; plus the **TAN/CD-matrix WCS**
+> (fits.ts passes CRVAL/CRPIX/CDELT/CD/CTYPE through but doesn't transform yet)
+> next to projection.ts. Overlaps with flux-accurate stretch / Lupton gri colour.
 
 ## 8. Cross-platform (PC / Mac / iOS / Android)
 

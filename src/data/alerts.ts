@@ -14,6 +14,8 @@
  * should produce. This also seeds backlog item #1 (known-truth data source).
  */
 
+import { angularSeparation } from '../utils/skyGeom.js';
+
 export enum AlertType {
   Asteroid = 0,
   VariableStar = 1,
@@ -33,8 +35,16 @@ export interface AlertSet {
   dec: Float32Array; // degrees, [-90,90]
   type: Uint8Array; // AlertType
   mag: Float32Array; // brightness magnitude (smaller = brighter)
+  time: Float32Array; // detection epoch, Modified Julian Date (MJD)
   id: Uint32Array;
 }
+
+/**
+ * Synthetic detection epochs span this MJD window. MJD ~60000 is 2023-02-25;
+ * ~one Rubin observing year of events keeps the time slider meaningful.
+ */
+export const ALERT_MJD_BASE = 60000;
+export const ALERT_MJD_SPAN = 365;
 
 /** Deterministic PRNG (mulberry32) — seeded so tests and renders are stable. */
 function mulberry32(seed: number): () => number {
@@ -60,6 +70,7 @@ export function generateSyntheticAlerts(count: number, seed = 1): AlertSet {
   const dec = new Float32Array(count);
   const type = new Uint8Array(count);
   const mag = new Float32Array(count);
+  const time = new Float32Array(count);
   const id = new Uint32Array(count);
 
   const ECLIPTIC_TILT = 23.44;
@@ -108,7 +119,16 @@ export function generateSyntheticAlerts(count: number, seed = 1): AlertSet {
     i++;
   }
 
-  return { count, ra, dec, type, mag, id };
+  // Fill detection epochs from an independent PRNG stream so the spatial layout
+  // (ra/dec/type/mag) is byte-identical with or without this pass — no visual
+  // change to the overlay, only an added time coordinate. Uniform over the
+  // survey window so a time-slider sub-window selects a proper subset.
+  const trand = mulberry32((seed ^ 0x9e3779b9) >>> 0);
+  for (let k = 0; k < count; k++) {
+    time[k] = ALERT_MJD_BASE + trand() * ALERT_MJD_SPAN;
+  }
+
+  return { count, ra, dec, type, mag, time, id };
 }
 
 /**
@@ -204,4 +224,154 @@ export function allTypesMask(): number {
 }
 export function typeVisible(mask: number, t: number): boolean {
   return (mask & (1 << t)) !== 0;
+}
+
+/**
+ * A single alert resolved by hit-testing — everything the tooltip/inspector
+ * needs, plus the great-circle distance from the query point. `separationDeg`
+ * is a real spherical distance (see skyGeom.angularSeparation), NOT a box metric.
+ */
+export interface AlertHit {
+  index: number; // row into the AlertSet columnar arrays
+  id: number; // alerts.id[index]
+  ra: number; // degrees
+  dec: number; // degrees
+  type: AlertType;
+  magnitude: number;
+  timeMjd: number;
+  separationDeg: number; // angular distance from the query point
+}
+
+const DEG2RAD = Math.PI / 180;
+
+/**
+ * Nearest VISIBLE alert within `maxRadiusDeg` of (ra,dec), or null if none.
+ *
+ * Backs hover/click identification. Uses the spatial index: it visits only the
+ * grid cells overlapping a bounding box around the cursor (RA half-width scaled
+ * by 1/cos(dec) so the box actually covers the disc at high declination), then
+ * refines each candidate with a true great-circle separation. Cost is
+ * O(candidates in the neighborhood), never O(count).
+ *
+ * `typeMask` (default: all types) hides events whose AlertType bit is clear —
+ * a hidden-type alert is never returned even if it is the closest on the sky.
+ */
+export function nearestAlert(
+  index: AlertIndex,
+  alerts: AlertSet,
+  ra: number,
+  dec: number,
+  maxRadiusDeg: number,
+  typeMask: number = allTypesMask()
+): AlertHit | null {
+  if (!(maxRadiusDeg > 0) || alerts.count === 0) return null;
+
+  const decMin = Math.max(-90, dec - maxRadiusDeg);
+  const decMax = Math.min(90, dec + maxRadiusDeg);
+
+  // Convert the angular radius into an RA span at this declination. Near the
+  // poles (or for a very large radius) the box degenerates to the whole RA
+  // circle, so query the full [0,360) range in that case.
+  const cosDec = Math.cos(dec * DEG2RAD);
+  const raHalf = cosDec > 1e-9 ? maxRadiusDeg / cosDec : Infinity;
+
+  let raMin: number;
+  let raMax: number;
+  if (!Number.isFinite(raHalf) || raHalf >= 180) {
+    raMin = 0;
+    raMax = 360;
+  } else {
+    raMin = ((((ra - raHalf) % 360) + 360) % 360);
+    raMax = ((((ra + raHalf) % 360) + 360) % 360);
+  }
+
+  const { ra: aRa, dec: aDec, type: aType } = alerts;
+  let best: AlertHit | null = null;
+  let bestSep = maxRadiusDeg;
+
+  queryViewport(index, alerts, raMin, raMax, decMin, decMax, (i) => {
+    const t = aType[i]!;
+    if (!typeVisible(typeMask, t)) return;
+    const sep = angularSeparation(ra, dec, aRa[i]!, aDec[i]!);
+    if (sep <= bestSep && (best === null || sep < bestSep)) {
+      bestSep = sep;
+      best = {
+        index: i,
+        id: alerts.id[i]!,
+        ra: aRa[i]!,
+        dec: aDec[i]!,
+        type: t,
+        magnitude: alerts.mag[i]!,
+        timeMjd: alerts.time[i]!,
+        separationDeg: sep,
+      };
+    }
+  });
+
+  return best;
+}
+
+/**
+ * Full [minMjd, maxMjd] span of detection epochs — the endpoints for a time
+ * slider. O(count); call once when the set loads, not per frame.
+ */
+export function alertTimeRange(alerts: AlertSet): [number, number] {
+  if (alerts.count === 0) return [0, 0];
+  const t = alerts.time;
+  let lo = t[0]!;
+  let hi = t[0]!;
+  for (let i = 1; i < alerts.count; i++) {
+    const v = t[i]!;
+    if (v < lo) lo = v;
+    if (v > hi) hi = v;
+  }
+  return [lo, hi];
+}
+
+/**
+ * The renderer's time-window filter. Returns an O(1) predicate `keep(i)` that is
+ * true when event `i`'s epoch is within [tMin, tMax] (inclusive). Pass it into
+ * the `queryViewport` callback so time filtering stays O(candidates):
+ *
+ *   const keep = timeWindowPredicate(alerts, tMin, tMax);
+ *   queryViewport(index, alerts, ...bounds, (i) => { if (keep(i)) draw(i); });
+ *
+ * This is the intended consumption path — no per-frame allocation, no O(count)
+ * scan, no mask array to rebuild when the slider moves.
+ */
+export function timeWindowPredicate(
+  alerts: AlertSet,
+  tMin: number,
+  tMax: number
+): (i: number) => boolean {
+  const t = alerts.time;
+  return (i: number) => {
+    const v = t[i]!;
+    return v >= tMin && v <= tMax;
+  };
+}
+
+/**
+ * Summary count of alerts whose epoch lies in [tMin, tMax] (inclusive) — for a
+ * UI badge ("N of M events in window"). O(count); this is a whole-set summary,
+ * NOT the render path (the renderer uses `timeWindowPredicate` + the index).
+ * Pass `buildMask = true` to also get a per-alert Uint8Array (1 = in window).
+ */
+export function alertsInWindow(
+  alerts: AlertSet,
+  tMin: number,
+  tMax: number,
+  buildMask = false
+): { count: number; mask?: Uint8Array } {
+  const t = alerts.time;
+  const mask = buildMask ? new Uint8Array(alerts.count) : undefined;
+  let count = 0;
+  for (let i = 0; i < alerts.count; i++) {
+    const v = t[i]!;
+    if (v >= tMin && v <= tMax) {
+      count++;
+      if (mask) mask[i] = 1;
+    }
+  }
+  return mask ? { count, mask } : { count };
 }
