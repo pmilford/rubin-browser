@@ -10,7 +10,9 @@
   import CrossSectionPlot from '../components/CrossSectionPlot.svelte';
   import OfflineLayerControls from '../components/OfflineLayerControls.svelte';
   import ObjectInfoPanel from '../components/ObjectInfoPanel.svelte';
-  import { OFFLINE_EPOCHS, OFFLINE_BANDS, brightestOfflineVariable } from '../data/offlineDataset.js';
+  import SurfacePlot from '../components/SurfacePlot.svelte';
+  import { OFFLINE_EPOCHS, OFFLINE_BANDS, brightestOfflineVariable, offlineLightCurve } from '../data/offlineDataset.js';
+  import LightCurvePlot from '../components/LightCurvePlot.svelte';
   import { RUBIN_DATASETS } from '../utils/baseLayer.js';
   import type { IdentifyInfo } from '../data/objects.js';
   import type { Band } from '../data/syntheticSky.js';
@@ -114,6 +116,32 @@
     statusMessage = crossSectionMode
       ? 'Cross-section: drag a line across the image to profile intensity'
       : 'Cross-section: off';
+  }
+
+  // 3D surface ("mountain") plot of the central region's intensity.
+  let surfaceMode = $state(false);
+  let surfaceGrid = $state<number[][] | null>(null);
+  function toggleSurface() {
+    surfaceMode = !surfaceMode;
+    statusMessage = surfaceMode
+      ? '3D surface: central-region intensity as a relief (displayed luminance)'
+      : '3D surface: off';
+  }
+
+  // Light curve (intensity vs time) at the view centre — offline synthetic cube
+  // only, from the KNOWN source light curves (a single Rubin coadd has no time
+  // axis). Recomputes as you pan / change band.
+  let lightCurveMode = $state(false);
+  const lightCurve = $derived(
+    lightCurveMode && baseLayerId === 'offline'
+      ? offlineLightCurve(currentRa, currentDec, offlineBand)
+      : null
+  );
+  function toggleLightCurve() {
+    lightCurveMode = !lightCurveMode;
+    statusMessage = lightCurveMode
+      ? 'Light curve: synthetic intensity vs time at the view centre'
+      : 'Light curve: off';
   }
 
   // Rubin DP1 multi-filter: switch the active HiPS dataset (gri/ugri/… colour
@@ -413,6 +441,7 @@
       {showAlerts}
       {alertTypeMask}
       {crossSectionMode}
+      {surfaceMode}
       {rubinDataset}
       {offlineBand}
       {offlineMjd}
@@ -422,6 +451,7 @@
       onViewerStateChange={handleViewerStateChange}
       onBaseResolved={(label) => { resolvedBaseLabel = label; }}
       onProfileChange={(p) => { crossSectionProfile = p; }}
+      onSurfaceChange={(g) => { surfaceGrid = g; }}
       onIdentify={handleIdentify}
     />
 
@@ -519,6 +549,30 @@
           ╱ Cross-section
         </button>
 
+        <button
+          class="xsection-toggle"
+          class:on={surfaceMode}
+          aria-pressed={surfaceMode}
+          aria-label="Toggle 3D surface plot"
+          title="Show the central region's intensity as a 3D relief / mountain plot"
+          onclick={toggleSurface}
+        >
+          ▲ 3D surface
+        </button>
+
+        {#if baseLayerId === 'offline'}
+          <button
+            class="xsection-toggle"
+            class:on={lightCurveMode}
+            aria-pressed={lightCurveMode}
+            aria-label="Toggle light curve"
+            title="Synthetic intensity vs time at the view centre (offline cube)"
+            onclick={toggleLightCurve}
+          >
+            ⌇ Light curve
+          </button>
+        {/if}
+
         {#if showAlerts}
           <span class="alert-legend" aria-label="Alert type filter">
             {#each ALERT_TYPE_NAMES as name, t (t)}
@@ -537,15 +591,21 @@
         {/if}
       </div>
     {/if}
-    {#if uiVisible && (identifyInfo || crossSectionMode)}
-      <!-- Right-side stack: the object-ID popup sits ABOVE the cross-section plot
-           so they never overlap. -->
+    {#if uiVisible && (identifyInfo || crossSectionMode || surfaceMode || (lightCurveMode && baseLayerId === 'offline'))}
+      <!-- Right-side stack: the object-ID popup sits ABOVE the analysis plots so
+           they never overlap. -->
       <div class="right-stack">
         {#if identifyInfo}
           <ObjectInfoPanel info={identifyInfo} onClose={() => { identifyInfo = null; }} />
         {/if}
         {#if crossSectionMode}
           <CrossSectionPlot profile={crossSectionProfile} onClose={toggleCrossSection} />
+        {/if}
+        {#if surfaceMode}
+          <SurfacePlot grid={surfaceGrid} onClose={toggleSurface} />
+        {/if}
+        {#if lightCurveMode && baseLayerId === 'offline'}
+          <LightCurvePlot curve={lightCurve} currentIndex={offlineEpochIndex} band={offlineBand} onClose={toggleLightCurve} />
         {/if}
       </div>
     {/if}

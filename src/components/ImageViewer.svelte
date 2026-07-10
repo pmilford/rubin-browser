@@ -68,11 +68,13 @@
     showAlerts = false,
     alertTypeMask = 0x1f,
     crossSectionMode = false,
+    surfaceMode = false,
     offlineBand = 'r' as Band,
     offlineMjd = OFFLINE_MJD,
     onViewerStateChange,
     onBaseResolved,
     onProfileChange,
+    onSurfaceChange,
     onIdentify,
   }: {
     /** Explicit base URL override (mainly for tests). When empty, `baseMode` + token drive resolution. */
@@ -118,6 +120,10 @@
     onBaseResolved?: (label: string) => void;
     /** Fired with the sampled line profile whenever the cross-section changes. */
     onProfileChange?: (profile: LineProfile | null) => void;
+    /** When true, sample a region grid for the 3D surface plot. */
+    surfaceMode?: boolean;
+    /** Fired with the sampled NxN luminance grid for the 3D surface plot. */
+    onSurfaceChange?: (grid: number[][] | null) => void;
     /** Fired when the user CLICKS (not drags) to identify the object at a sky point. */
     onIdentify?: (info: IdentifyInfo) => void;
   } = $props();
@@ -547,6 +553,36 @@
     const [x1, y1] = skyToCanvas(view, xsP1.ra, xsP1.dec);
     const profile = sampleProfile(getPixel, x0, y0, x1, y1, xsP0.ra, xsP0.dec, xsP1.ra, xsP1.dec, XS_SAMPLES);
     onProfileChange?.(profile);
+  }
+
+  const SURFACE_N = 28; // grid resolution of the 3D surface region
+
+  /** Sample an N×N luminance grid over the central region for the 3D surface plot,
+   *  from the same honest pre-colormap scratch raster the cross-section uses. */
+  function sampleSurfaceGrid() {
+    if (!surfaceMode) { onSurfaceChange?.(null); return; }
+    if (!ensureScratch() || !xsScratchData) { onSurfaceChange?.(null); return; }
+    const data = xsScratchData;
+    const W = canvasWidth;
+    const H = canvasHeight;
+    // Central square box, ~60% of the smaller dimension.
+    const box = Math.floor(Math.min(W, H) * 0.6);
+    const x0 = Math.floor((W - box) / 2);
+    const y0 = Math.floor((H - box) / 2);
+    const grid: number[][] = [];
+    for (let r = 0; r < SURFACE_N; r++) {
+      const row: number[] = [];
+      const py = Math.min(H - 1, y0 + Math.round((r / (SURFACE_N - 1)) * (box - 1)));
+      for (let c = 0; c < SURFACE_N; c++) {
+        const px = Math.min(W - 1, x0 + Math.round((c / (SURFACE_N - 1)) * (box - 1)));
+        const i = (py * W + px) * 4;
+        const rr = data[i]!, gg = data[i + 1]!, bb = data[i + 2]!;
+        // Gaps (pure black / no tile) → 0 height, not a fake value.
+        row.push(rr === 0 && gg === 0 && bb === 0 ? 0 : (0.299 * rr + 0.587 * gg + 0.114 * bb) / 255);
+      }
+      grid.push(row);
+    }
+    onSurfaceChange?.(grid);
   }
 
   function render() {
@@ -1643,6 +1679,21 @@
     void offlineBand; // offline epoch/band change repaints tiles → re-sample
     void offlineMjd;
     sampleCurrentProfile();
+  });
+
+  // Re-sample the 3D surface region on the same triggers.
+  $effect(() => {
+    void surfaceMode;
+    void ra;
+    void dec;
+    void fov;
+    void zoomLevel;
+    void contentVersion;
+    void canvasWidth;
+    void canvasHeight;
+    void offlineBand;
+    void offlineMjd;
+    sampleSurfaceGrid();
   });
 
   // Reset the auto-fallback latch whenever the user changes the base selection or

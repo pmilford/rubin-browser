@@ -21,6 +21,8 @@ import {
 import {
   offlineSky,
   offlineTileRGBA,
+  offlineLightCurve,
+  brightestOfflineVariable,
   OFFLINE_EPOCHS,
   OFFLINE_BANDS,
   OFFLINE_MJD,
@@ -182,6 +184,35 @@ describe('band drives SIGNAL in the correct direction (ground truth)', () => {
     const rLast = offlineTileRGBA(ORDER, pix, 'r', OFFLINE_EPOCHS[OFFLINE_EPOCHS.length - 1]!);
     expect(Array.from(r0)).not.toEqual(Array.from(g0));
     expect(Array.from(r0)).not.toEqual(Array.from(rLast));
+  });
+});
+
+describe('offlineLightCurve — time series matches the known light curve', () => {
+  it('peaks at the brightest transient\'s peak epoch and is dim at its faint epoch', () => {
+    const band = 'r' as const;
+    const t = brightestOfflineVariable(band);
+    const curve = offlineLightCurve(t.ra, t.dec, band);
+    expect(curve.length).toBe(OFFLINE_EPOCHS.length);
+    expect(curve.map((p) => p.mjd)).toEqual([...OFFLINE_EPOCHS]);
+
+    // The maximum-intensity epoch is the transient's bright epoch (ground truth).
+    let maxIdx = 0;
+    for (let i = 1; i < curve.length; i++) if (curve[i]!.intensity > curve[maxIdx]!.intensity) maxIdx = i;
+    expect(maxIdx).toBe(t.brightEpochIndex);
+    // And the bright epoch is far brighter than the faint one.
+    expect(curve[t.brightEpochIndex]!.intensity).toBeGreaterThan(curve[t.faintEpochIndex]!.intensity * 2);
+  });
+
+  it('is essentially flat far from any variable source', () => {
+    // A point at the pole is unlikely to sit under a transient; its curve should
+    // vary little relative to the brightest transient's swing.
+    const curve = offlineLightCurve(0, 89.9, 'r');
+    const vals = curve.map((p) => p.intensity);
+    const spread = Math.max(...vals) - Math.min(...vals);
+    const t = brightestOfflineVariable('r');
+    const bright = offlineLightCurve(t.ra, t.dec, 'r').map((p) => p.intensity);
+    const brightSwing = Math.max(...bright) - Math.min(...bright);
+    expect(spread).toBeLessThan(brightSwing);
   });
 });
 

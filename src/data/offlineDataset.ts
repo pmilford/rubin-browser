@@ -13,6 +13,7 @@ import {
   generateSyntheticSky,
   renderSyntheticTile,
   magAt,
+  intensityAt,
   BANDS,
   type Band,
   type SyntheticSky,
@@ -77,6 +78,24 @@ export function offlineTileRGBA(
   mjd: number = OFFLINE_MJD
 ): Uint8ClampedArray {
   return renderSyntheticTile(offlineSky(), order, pixelIndex, band, mjd, OFFLINE_TILE_SIZE, OFFLINE_NOISE_SIGMA);
+}
+
+/** One time-series sample: the ground-truth intensity at a sky point at an epoch. */
+export interface LightCurvePoint {
+  mjd: number;
+  /** Summed PSF intensity (detector counts) at the point — ground truth, no noise. */
+  intensity: number;
+}
+
+/**
+ * The light curve (intensity vs epoch) at a sky point in a band, sampled over the
+ * offline epoch axis from the synthetic sky's KNOWN source light curves. This is
+ * the closed-form ground truth (no noise), so a transient/supernova under the
+ * point shows its actual rise-and-fade. Pure.
+ */
+export function offlineLightCurve(ra: number, dec: number, band: Band = 'r'): LightCurvePoint[] {
+  const sky = offlineSky();
+  return OFFLINE_EPOCHS.map((mjd) => ({ mjd, intensity: intensityAt(sky, ra, dec, band, mjd) }));
 }
 
 /**
