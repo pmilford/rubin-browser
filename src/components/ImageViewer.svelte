@@ -38,6 +38,7 @@
     type BaseMode,
   } from '../utils/baseLayer.js';
   import { offlineTileRGBA, OFFLINE_TILE_SIZE, OFFLINE_MJD } from '../data/offlineDataset.js';
+  import { touchLru, evictLru } from '../utils/tileCache.js';
   import type { Band } from '../data/syntheticSky.js';
   import { constellationFor } from '../utils/constellation.js';
   import { cardinalDirection, formatSeparation } from '../utils/skyGeom.js';
@@ -120,6 +121,11 @@
 
   const DEFAULT_FORMAT = 'jpg';
   const DEFAULT_MAX_ORDER = 3;
+  // LRU cap on the tile cache. Chosen well above the largest visible set (a few
+  // hundred at the lowest order) AND above a full offline blink at one band
+  // (OFFLINE_EPOCHS × visible tiles ≈ 12 × ~60), so scrubbing the demo cube stays
+  // instant while long browsing sessions / epochs×bands growth stay bounded.
+  const MAX_TILE_CACHE = 1500;
   const TILE_SIZE = 512;
   const MAX_ZOOM = 18;
   const MIN_ZOOM = 0;
@@ -635,6 +641,7 @@
         if (drawnAncestors.has(aKey)) break; // already painted this ancestor
         if (isLoaded(aKey)) {
           drawnAncestors.add(aKey);
+          touchLru(tileCache, aKey);
           drawTile(context, tileCache.get(aKey)!, { order: ancestorOrder, pixelIndex: ancestorPix }, view);
           break;
         }
@@ -648,6 +655,7 @@
       if (drawn.has(cacheKey)) continue;
       drawn.add(cacheKey);
       if (isLoaded(cacheKey)) {
+        touchLru(tileCache, cacheKey);
         drawTile(context, tileCache.get(cacheKey)!, tile, view);
       }
     }
@@ -659,12 +667,20 @@
         if (drawn.has(cacheKey)) continue;
         drawn.add(cacheKey);
         if (isLoaded(cacheKey)) {
+          touchLru(tileCache, cacheKey);
           context.globalAlpha = overlay.opacity / 100;
           drawTile(context, tileCache.get(cacheKey)!, tile, view);
           context.globalAlpha = 1.0;
         }
       }
     }
+
+    // LRU cap: after painting, evict the least-recently-DRAWN tiles beyond the cap
+    // — but never a tile visible in THIS frame (drawn ∪ ancestors), so the cap can
+    // never drop a tile the current view needs. Bounds the offline epochs×bands×
+    // tiles growth and long browsing sessions.
+    for (const a of drawnAncestors) drawn.add(a);
+    evictLru(tileCache, MAX_TILE_CACHE, drawn);
   }
 
   /**
