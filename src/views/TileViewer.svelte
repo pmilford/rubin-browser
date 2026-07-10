@@ -206,6 +206,16 @@
     statusMessage = showGraticule ? 'Coordinate grid: on' : 'Coordinate grid: off';
   }
 
+  // Rubin DP1 footprint coverage overlay — shade the 7 fields so it's obvious
+  // WHERE Rubin data exists (a view off every field falls back to DSS/black).
+  let showCoverage = $state(false);
+  function toggleCoverage() {
+    showCoverage = !showCoverage;
+    statusMessage = showCoverage
+      ? 'DP1 coverage: showing the 7 Rubin fields (~15 deg² total) — data exists only inside these'
+      : 'DP1 coverage: off';
+  }
+
   // Distance ruler: drag between two sky points → great-circle separation + PA.
   let rulerMode = $state(false);
   let rulerReadout = $state<string | null>(null);
@@ -593,6 +603,7 @@
       {crossSectionMode}
       {surfaceMode}
       {showGraticule}
+      {showCoverage}
       {rulerMode}
       onRulerChange={handleRulerChange}
       {rubinDataset}
@@ -744,6 +755,17 @@
           onclick={toggleGraticule}
         >
           ⊞ Grid
+        </button>
+
+        <button
+          class="xsection-toggle"
+          class:on={showCoverage}
+          aria-pressed={showCoverage}
+          aria-label="Toggle DP1 coverage"
+          title="Shade the 7 Rubin DP1 fields — data exists only inside these (~15 deg² total); elsewhere the viewer shows DSS"
+          onclick={toggleCoverage}
+        >
+          ⊙ DP1 coverage
         </button>
 
         <button

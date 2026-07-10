@@ -43,6 +43,7 @@
     type BaseMode,
   } from '../utils/baseLayer.js';
   import { offlineTileRGBA, OFFLINE_TILE_SIZE, OFFLINE_MJD } from '../data/offlineDataset.js';
+  import { dp1CoverageCircles, coverageCirclePoints } from '../data/footprint.js';
   import { touchLru, evictLru } from '../utils/tileCache.js';
   import type { Band } from '../data/syntheticSky.js';
   import { constellationFor } from '../utils/constellation.js';
@@ -88,6 +89,7 @@
     crossSectionMode = false,
     surfaceMode = false,
     showGraticule = false,
+    showCoverage = false,
     rulerMode = false,
     onRulerChange,
     offlineBand = 'r' as Band,
@@ -137,6 +139,8 @@
     crossSectionMode?: boolean;
     /** When true, draw the curved RA/Dec coordinate graticule + compass + scale bar. */
     showGraticule?: boolean;
+    /** When true, shade the Rubin DP1 field footprints (where data actually exists). */
+    showCoverage?: boolean;
     /** When true, dragging measures a great-circle distance instead of panning. */
     rulerMode?: boolean;
     /** Fired with the current ruler measurement (or null when cleared). */
@@ -669,9 +673,54 @@
     }
 
     renderGraticule();
+    renderCoverage();
     renderAlerts();
     renderCrossSection();
     renderRuler();
+  }
+
+  /**
+   * Shade the Rubin DP1 field footprints (see src/data/footprint.ts) on the main
+   * canvas so it is obvious WHERE Rubin data exists — DP1 is only ~7 small fields,
+   * and a view off every field legitimately shows public DSS or black. Each field
+   * is a small great-circle disc: its boundary points are projected through the
+   * same gnomonic skyToCanvas() the tiles use, so the outline tracks pan/zoom.
+   * Fields on the far hemisphere (can't project) are skipped.
+   */
+  function renderCoverage() {
+    if (!ctx || !showCoverage) return;
+    const view = currentView();
+    ctx.save();
+    ctx.lineWidth = 1.5;
+    for (const circle of dp1CoverageCircles()) {
+      // Skip fields more than 90° from the view centre — the tangent-plane
+      // projection can't represent the far hemisphere and would draw garbage.
+      if (angularSeparation(view.ra, view.dec, circle.ra, circle.dec) > 90) continue;
+
+      const pts = coverageCirclePoints(circle, 72);
+      ctx.beginPath();
+      let started = false;
+      for (const p of pts) {
+        const [x, y] = skyToCanvas(view, p.ra, p.dec);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) { started = false; continue; }
+        if (!started) { ctx.moveTo(x, y); started = true; } else { ctx.lineTo(x, y); }
+      }
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(120,255,180,0.10)';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(120,255,180,0.75)';
+      ctx.stroke();
+
+      const [cx, cy] = skyToCanvas(view, circle.ra, circle.dec);
+      if (Number.isFinite(cx) && Number.isFinite(cy)) {
+        ctx.fillStyle = 'rgba(190,255,215,0.92)';
+        ctx.font = 'bold 11px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText(circle.name, cx, cy);
+        ctx.textAlign = 'left';
+      }
+    }
+    ctx.restore();
   }
 
   /**
@@ -808,9 +857,10 @@
     ctx.textAlign = 'left';
   }
 
-  // Repaint when the graticule or ruler is toggled on/off.
+  // Repaint when the graticule, coverage overlay, or ruler is toggled on/off.
   $effect(() => {
     void showGraticule;
+    void showCoverage;
     void rulerMode;
     scheduleRender();
   });

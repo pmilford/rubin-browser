@@ -12,7 +12,7 @@ Status: `TODO` · `WIP` (in progress) · `DONE` · `BLOCKED` (needs a decision �
 |----|------|--------|-------|
 | 100 | Plain-language glossary — hover tooltips + "?" panel | DONE | glossary section + filter in HelpModal; title= tooltips on DP1/Filter labels; module `glossary.ts` (44 terms) + HelpModal glossary tests |
 | 101 | Catalog overlay + linked table (Gaia / Rubin Object via TAP) | WIP | modules `src/api/gaia.ts` DONE, `src/data/catalog.ts` building |
-| 102 | MOC / DP1 footprint coverage layer (shade where data exists) | WIP | module `src/data/footprint.ts` building |
+| 102 | MOC / DP1 footprint coverage layer (shade where data exists) | DONE | ImageViewer.renderCoverage() projects footprint.ts discs on the main canvas; ⊙ DP1 coverage toggle; Playwright paint/clear outcome test |
 | 103 | Simbad "what's here?" (right-click) + name resolve | WIP | module `src/api/simbad.ts` building |
 | 104 | Click-to-copy coordinates (sexagesimal ⟷ decimal) | DONE | StatusBar: click RA/Dec to copy, format toggle, copy-pair (decimal); 4 tests |
 | 105 | Grid coordinate-system toggle (equatorial ↔ galactic ↔ ecliptic) | WIP | module `src/utils/coords.ts` building; feeds `graticule.ts` |
