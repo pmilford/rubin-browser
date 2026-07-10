@@ -382,16 +382,21 @@ describe('TileViewer', () => {
       expect(screen.getByText('Survey Overlays')).toBeTruthy();
     });
 
-    it('shows time series section in side panel', async () => {
+    // The old side-panel "Time Series" and "Blink" sections were driven by MOCK
+    // epochs that never changed the imagery — a dead placeholder. They were
+    // removed; real multi-epoch browsing is the OFFLINE cube (OfflineLayerControls)
+    // and the Rubin DP1 light curve. Assert the mock sections are GONE so they
+    // can't silently return.
+    it('does NOT show the mock time-series section (superseded by the offline cube)', async () => {
       render(TileViewer);
       await fireEvent.click(screen.getByLabelText('Toggle controls panel'));
-      expect(screen.getByText('Time Series')).toBeTruthy();
+      expect(screen.queryByText('Time Series')).toBeNull();
     });
 
-    it('shows blink section in side panel', async () => {
+    it('does NOT show the mock blink section (superseded by the offline cube)', async () => {
       render(TileViewer);
       await fireEvent.click(screen.getByLabelText('Toggle controls panel'));
-      expect(screen.getByText('Blink')).toBeTruthy();
+      expect(screen.queryByText('Blink')).toBeNull();
     });
 
   });

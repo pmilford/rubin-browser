@@ -17,9 +17,8 @@
   import type { IdentifyInfo } from '../data/objects.js';
   import type { Band } from '../data/syntheticSky.js';
   import type { LineProfile } from '../utils/crossSection.js';
-  import type { ScalingFunction, ColorMapName, InterpolationMethod, ViewerState, Epoch } from '../types/image.js';
-  import { mjdToIso } from '../types/image.js';
-  import { DEFAULT_MOCK_EPOCHS, SURVEY_OVERLAYS, type SurveyInfo } from '../constants.js';
+  import type { ScalingFunction, ColorMapName, InterpolationMethod, ViewerState } from '../types/image.js';
+  import { SURVEY_OVERLAYS, type SurveyInfo } from '../constants.js';
   import type { FilterBand } from '../constants.js';
   import { onMount } from 'svelte';
   import { readStateFromUrl, applyStateToUrl } from '../utils/urlState.js';
@@ -301,23 +300,11 @@
     baseLayerId === 'rubin' || (baseLayerId === 'auto' && resolvedBaseLabel.startsWith('Rubin'))
   );
 
-  // Time series state
-  const mockEpochs: Epoch[] = DEFAULT_MOCK_EPOCHS.map(e => ({
-    mjd: e.mjd,
-    isoDate: mjdToIso(e.mjd),
-    filter: e.filter,
-  }));
-  let currentEpochIndex = $state(0);
-
-  // Blink state
-  let blinkPlaying = $state(false);
-  let blinkRate = $state(1.0);
-  const blinkTargets = $derived(mockEpochs.map((e, i) => ({
-    id: `epoch-${i}`,
-    label: `Epoch ${i + 1} (${e.filter ?? '?'})`
-  })));
-  let blinkIndex = $state(0);
-  let isPlaying = $state(false);
+  // NOTE: the old SidePanel epoch/blink controls were driven by MOCK epochs
+  // (constants.DEFAULT_MOCK_EPOCHS) that never changed the imagery — a dead
+  // placeholder. Real multi-epoch browsing lives in the OFFLINE cube
+  // (OfflineLayerControls) and the Rubin DP1 light curve, so those mock controls
+  // are removed rather than wired to fake data.
 
   let imageViewerRef: ImageViewer | undefined = $state();
   let rspToken = $state(getToken() || '');
@@ -407,11 +394,6 @@
     }
   });
 
-  function handleEpochChange(index: number, epoch: Epoch) {
-    currentEpochIndex = index;
-    statusMessage = `Epoch ${index + 1}: MJD ${epoch.mjd.toFixed(2)} (${epoch.filter ?? '—'})`;
-  }
-
   function handleFilterChange(filter: FilterBand | null) {
     activeFilter = filter;
     statusMessage = filter ? `Filter: ${filter}` : 'Filter: none';
@@ -448,14 +430,6 @@
     statusMessage = `${entry?.survey.name ?? surveyId} opacity: ${opacity}%`;
   }
 
-  function handleBlinkTargetChange(index: number) {
-    blinkIndex = index;
-    currentEpochIndex = index;
-    const epoch = mockEpochs[index];
-    if (epoch) {
-      statusMessage = `Blink: Epoch ${index + 1} (${epoch.filter ?? '—'})`;
-    }
-  }
 
   function togglePanel() {
     panelOpen = !panelOpen;
@@ -579,32 +553,20 @@
     {whitePoint}
     {contrast}
     {bias}
-    epochs={mockEpochs}
-    {currentEpochIndex}
-    {isPlaying}
     {activeFilter}
     {compositeMode}
     {compositeChannels}
     {surveyOverlays}
-    {blinkTargets}
-    {blinkIndex}
-    {blinkPlaying}
-    {blinkRate}
     onScalingChange={(s) => { scaling = s; statusMessage = `Scaling: ${s}`; }}
     onColorMapChange={(c) => { colorMap = c; statusMessage = `Color map: ${c}`; }}
     onInterpolationChange={(i) => { interpolation = i; statusMessage = `Interpolation: ${i}`; }}
     onInvertChange={(v) => { invert = v; statusMessage = `Invert: ${v ? 'ON' : 'OFF'}`; }}
     onStretchChange={handleStretchChange}
-    onEpochChange={handleEpochChange}
-    onPlayStateChange={(p) => { isPlaying = p; }}
     onFilterChange={handleFilterChange}
     onCompositeChange={handleCompositeChange}
     onOverlayAdd={handleOverlayAdd}
     onOverlayRemove={handleOverlayRemove}
     onOpacityChange={handleOpacityChange}
-    onBlinkTargetChange={handleBlinkTargetChange}
-    onBlinkPlayStateChange={(p) => { blinkPlaying = p; }}
-    onBlinkRateChange={(r) => { blinkRate = r; }}
     onClose={() => { panelOpen = false; }}
   />
 
