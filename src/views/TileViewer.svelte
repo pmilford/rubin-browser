@@ -26,6 +26,7 @@
   import { DP1_FIELDS } from '../data/dp1Fields.js';
   import { getToken, isAuthenticated } from '../api/auth.js';
   import { fetchLightCurve, toLightCurvePoints } from '../api/lightcurve.js';
+  import { fetchDiaAlerts } from '../api/diaSource.js';
   import type { LightCurvePoint } from '../data/offlineDataset.js';
   import { lookupObject, type AstroObject } from '../data/objects.js';
   import {
@@ -88,9 +89,12 @@
     { id: 'rubin', name: 'Rubin color_gri', url: 'https://data.lsst.cloud/api/hips/v2/dp1/deep_coadd/color_gri' },
     { id: 'offline', name: 'Offline demo (synthetic)', url: '' },
   ];
-  // Alert / DIA overlay. Synthetic data is generated lazily on first enable
-  // (stand-in for the real, auth-gated Rubin alert stream).
+  // Alert / DIA overlay. Two sources over the SAME AlertSet shape (so the overlay
+  // renderer, hit-test, and time slider are identical): a synthetic demo set
+  // (generated lazily) and the real, auth-gated Rubin DP1 DIASource table.
   let showAlerts = $state(false);
+  let alertSource = $state<'synthetic' | 'live'>('synthetic');
+  let alertLoading = $state(false);
   let alerts: AlertSet | null = $state(null);
   let alertIndex: AlertIndex | null = $state(null);
   let alertTypeMask = $state(allTypesMask());
@@ -111,22 +115,64 @@
   // Nearest alert under the cursor (for the hover inspector).
   let alertHover = $state<AlertHit | null>(null);
 
+  /** Adopt an AlertSet: rebuild the spatial index and (integer) MJD window bounds. */
+  function applyAlertSet(set: AlertSet) {
+    alerts = set;
+    alertIndex = buildAlertIndex(set);
+    const [lo, hi] = alertTimeRange(set);
+    // Integer MJD bounds so the range sliders (step 1) accept the endpoints.
+    const loI = Math.floor(lo);
+    const hiI = Math.ceil(hi);
+    alertMjdBounds = set.count > 0 ? [loI, hiI] : null;
+    alertWindowMin = loI;
+    alertWindowMax = hiI;
+  }
+
+  function loadSyntheticAlerts() {
+    applyAlertSet(generateSyntheticAlerts(ALERT_SYNTHETIC_COUNT, 1));
+    statusMessage = `Alerts: ${alerts!.count.toLocaleString()} synthetic events loaded`;
+  }
+
+  /** Fetch real Rubin DP1 DIASources near the view centre (auth-gated, honest). */
+  async function loadDiaAlerts() {
+    if (!authenticated) {
+      statusMessage = 'Live DIA needs an RSP token — sign in, or use the synthetic demo.';
+      return;
+    }
+    alertLoading = true;
+    statusMessage = `Fetching Rubin DIASources near ${currentRa.toFixed(2)}, ${currentDec.toFixed(2)}…`;
+    try {
+      // ~1° radius ≈ a DP1 field; DP1 has no DIA outside its few small fields.
+      const set = await fetchDiaAlerts({ ra: currentRa, dec: currentDec, radiusDeg: 1.0 });
+      applyAlertSet(set);
+      statusMessage =
+        set.count > 0
+          ? `Live DIA: ${set.count.toLocaleString()} DIASources near the view centre`
+          : 'No DIA sources in this field (DP1 covers only a few small fields — try a DP1 field).';
+    } catch (e) {
+      statusMessage = e instanceof Error ? e.message : 'DIA fetch failed.';
+    } finally {
+      alertLoading = false;
+    }
+  }
+
+  function loadAlerts() {
+    if (alertSource === 'live') void loadDiaAlerts();
+    else loadSyntheticAlerts();
+  }
+
   function toggleAlerts() {
     showAlerts = !showAlerts;
-    if (showAlerts && !alerts) {
-      alerts = generateSyntheticAlerts(ALERT_SYNTHETIC_COUNT, 1);
-      alertIndex = buildAlertIndex(alerts);
-      const [lo, hi] = alertTimeRange(alerts);
-      // Integer MJD bounds so the range sliders (step 1) accept the endpoints.
-      const loI = Math.floor(lo);
-      const hiI = Math.ceil(hi);
-      alertMjdBounds = [loI, hiI];
-      alertWindowMin = loI;
-      alertWindowMax = hiI;
-      statusMessage = `Alerts: ${alerts.count.toLocaleString()} synthetic events loaded`;
-    } else {
-      statusMessage = showAlerts ? 'Alerts: on' : 'Alerts: off';
-    }
+    if (showAlerts && !alerts) loadAlerts();
+    else statusMessage = showAlerts ? 'Alerts: on' : 'Alerts: off';
+  }
+
+  /** Switch alert source → drop the current set and (re)load from the new source. */
+  function handleAlertSourceChange() {
+    alerts = null;
+    alertIndex = null;
+    alertMjdBounds = null;
+    if (showAlerts) loadAlerts();
   }
 
   function toggleAlertType(t: number) {
@@ -693,10 +739,12 @@
           class:on={showAlerts}
           aria-pressed={showAlerts}
           aria-label="Toggle alert overlay"
-          title="Synthetic demo events — NOT real Rubin alerts (no live alert-stream connection yet)"
+          title={alertSource === 'live'
+            ? 'Real Rubin DP1 DIASources near the view centre (auth-gated)'
+            : 'Synthetic demo events — NOT real Rubin alerts'}
           onclick={toggleAlerts}
         >
-          ◈ Alerts (demo{#if alerts && showAlerts}, {alerts.count.toLocaleString()}{/if})
+          ◈ Alerts{#if alerts && showAlerts} ({alertSource === 'live' ? 'DIA' : 'demo'}, {alerts.count.toLocaleString()}){/if}
         </button>
 
         <button
@@ -759,6 +807,22 @@
         {/if}
 
         {#if showAlerts}
+          <label class="alert-source" aria-label="Alert source select">
+            <span class="layer-label">Source</span>
+            <select bind:value={alertSource} onchange={handleAlertSourceChange} aria-label="Alert source">
+              <option value="synthetic">Synthetic demo</option>
+              <option value="live">Live DIA (Rubin)</option>
+            </select>
+            {#if alertSource === 'live'}
+              <button
+                class="dia-refresh"
+                aria-label="Refresh DIA at view centre"
+                title="Fetch DIASources at the current view centre"
+                onclick={loadDiaAlerts}
+                disabled={alertLoading}
+              >↻</button>
+            {/if}
+          </label>
           <span class="alert-legend" aria-label="Alert type filter">
             {#each ALERT_TYPE_NAMES as name, t (t)}
               <button
