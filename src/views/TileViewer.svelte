@@ -244,6 +244,13 @@
       : 'DP1 coverage: off';
   }
 
+  // Magnifier loupe of the pixels under the cursor.
+  let showMagnifier = $state(false);
+  function toggleMagnifier() {
+    showMagnifier = !showMagnifier;
+    statusMessage = showMagnifier ? 'Magnifier: on — move the cursor over the image' : 'Magnifier: off';
+  }
+
   // Distance ruler: drag between two sky points → great-circle separation + PA.
   let rulerMode = $state(false);
   let rulerReadout = $state<string | null>(null);
@@ -632,6 +639,7 @@
       {surfaceMode}
       {showGraticule}
       {showCoverage}
+      {showMagnifier}
       {rulerMode}
       onRulerChange={handleRulerChange}
       {rubinDataset}
@@ -806,6 +814,17 @@
           onclick={toggleRuler}
         >
           📏 Ruler{#if rulerReadout} · {rulerReadout}{/if}
+        </button>
+
+        <button
+          class="xsection-toggle"
+          class:on={showMagnifier}
+          aria-pressed={showMagnifier}
+          aria-label="Toggle magnifier"
+          title="Magnifier loupe: a zoomed view of the pixels under the cursor"
+          onclick={toggleMagnifier}
+        >
+          🔍 Loupe
         </button>
 
         <button

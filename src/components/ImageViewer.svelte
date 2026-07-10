@@ -90,6 +90,7 @@
     surfaceMode = false,
     showGraticule = false,
     showCoverage = false,
+    showMagnifier = false,
     rulerMode = false,
     onRulerChange,
     offlineBand = 'r' as Band,
@@ -142,6 +143,8 @@
     showGraticule?: boolean;
     /** When true, shade the Rubin DP1 field footprints (where data actually exists). */
     showCoverage?: boolean;
+    /** When true, show a magnifier loupe of the pixels under the cursor. */
+    showMagnifier?: boolean;
     /** When true, dragging measures a great-circle distance instead of panning. */
     rulerMode?: boolean;
     /** Fired with the current ruler measurement (or null when cleared). */
@@ -1541,11 +1544,60 @@
 
   function onPointerLeave() {
     cursorReadout = null;
+    magnifierVisible = false;
     onAlertHover?.(null);
+  }
+
+  // --- Magnifier loupe ---
+  let magnifierCanvasEl: HTMLCanvasElement | undefined = $state();
+  let magnifierCtx: CanvasRenderingContext2D | null = null;
+  let magnifierVisible = $state(false);
+  const MAGNIFIER_SIZE = 132; // loupe canvas px (square)
+  const MAGNIFIER_ZOOM = 5; // magnification factor
+
+  // Grab the loupe 2D context once its canvas mounts (only when showMagnifier).
+  $effect(() => {
+    if (magnifierCanvasEl && !magnifierCtx) {
+      magnifierCtx = magnifierCanvasEl.getContext('2d');
+    }
+  });
+
+  /**
+   * Paint the magnifier loupe: copy a small region of the MAIN canvas centred on
+   * the cursor, upscaled (nearest-neighbour) into the loupe, with a crosshair.
+   * drawImage of a cross-origin-tainted canvas still DISPLAYS (only readback
+   * throws), so the loupe works even when a survey taints the tile canvas.
+   */
+  function updateMagnifier(px: number, py: number) {
+    if (!magnifierCtx || !canvasEl) return;
+    const src = MAGNIFIER_SIZE / MAGNIFIER_ZOOM;
+    magnifierCtx.imageSmoothingEnabled = false;
+    magnifierCtx.fillStyle = '#000';
+    magnifierCtx.fillRect(0, 0, MAGNIFIER_SIZE, MAGNIFIER_SIZE);
+    try {
+      magnifierCtx.drawImage(
+        canvasEl, px - src / 2, py - src / 2, src, src, 0, 0, MAGNIFIER_SIZE, MAGNIFIER_SIZE
+      );
+    } catch {
+      /* tainted-canvas readback can't happen here (drawImage only), but guard anyway */
+    }
+    const c = MAGNIFIER_SIZE / 2;
+    magnifierCtx.strokeStyle = 'rgba(255,90,90,0.9)';
+    magnifierCtx.lineWidth = 1;
+    magnifierCtx.beginPath();
+    magnifierCtx.moveTo(c, c - 8); magnifierCtx.lineTo(c, c + 8);
+    magnifierCtx.moveTo(c - 8, c); magnifierCtx.lineTo(c + 8, c);
+    magnifierCtx.stroke();
   }
 
   function onPointerMove(e: PointerEvent) {
     updateCursorReadout(e);
+
+    if (showMagnifier && magnifierCtx) {
+      const rect = canvasEl.getBoundingClientRect();
+      updateMagnifier(e.clientX - rect.left, e.clientY - rect.top);
+      magnifierVisible = true;
+    }
 
     if (!isDragging) return;
     const dx = e.clientX - dragStartX;
@@ -2546,6 +2598,19 @@
     onpointercancel={onRulerPointerUp}
   ></canvas>
 
+  <!-- Magnifier loupe: a zoomed copy of the pixels under the cursor. Only mounted
+       when enabled; non-interactive so it never steals pointer events. -->
+  {#if showMagnifier}
+    <canvas
+      bind:this={magnifierCanvasEl}
+      width={MAGNIFIER_SIZE}
+      height={MAGNIFIER_SIZE}
+      class="magnifier-canvas"
+      class:visible={magnifierVisible}
+      aria-label="Magnifier loupe"
+    ></canvas>
+  {/if}
+
   {#if cursorReadout}
     <PixelReadout
       ra={cursorReadout.ra}
@@ -2681,6 +2746,25 @@
 
   .hips-canvas:active {
     cursor: grabbing;
+  }
+
+  .magnifier-canvas {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    width: 132px;
+    height: 132px;
+    border: 2px solid rgba(120, 200, 255, 0.7);
+    border-radius: 50%;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.6);
+    pointer-events: none;
+    z-index: 9;
+    opacity: 0;
+    transition: opacity 0.12s;
+    background: #000;
+  }
+  .magnifier-canvas.visible {
+    opacity: 1;
   }
 
   .fov-minimap {
