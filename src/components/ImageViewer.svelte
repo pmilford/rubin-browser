@@ -210,6 +210,14 @@
   // Tile cache: tileKey(order,pixelIndex) -> HTMLImageElement
   const tileCache = new Map<string, HTMLImageElement>();
 
+  // Allsky backdrop: a full-sky set of low-order tiles, prefetched once per base
+  // and PINNED (never LRU-evicted) so the ancestor-preview pass always has a
+  // coarse image to paint — no black flash when jumping to an unvisited region or
+  // on first load. Drawn (subdivided) by the existing Pass-1 machinery.
+  const ALLSKY_ORDER = 1; // nside 2 → 48 tiles cover the whole sky
+  const pinnedTiles = new Set<string>();
+  let allskySig = '';
+
   // Whether the active base is the OFFLINE synthetic layer. When offline, base
   // tile-cache keys are namespaced by (band, mjd) so different epochs/bands never
   // collide AND already-synthesized epochs stay cached for instant blinking.
@@ -722,6 +730,7 @@
     // never drop a tile the current view needs. Bounds the offline epochs×bands×
     // tiles growth and long browsing sessions.
     for (const a of drawnAncestors) drawn.add(a);
+    for (const p of pinnedTiles) drawn.add(p); // never evict the allsky backdrop
     evictLru(tileCache, MAX_TILE_CACHE, drawn);
   }
 
@@ -1030,6 +1039,59 @@
       loadOverlayTiles();
     }
   }
+
+  /**
+   * Prefetch the full-sky ALLSKY_ORDER backdrop once per base (and per offline
+   * band/mjd). Pins the keys so they survive LRU eviction, giving the ancestor
+   * preview a guaranteed coarse image everywhere. A missing backdrop tile is
+   * silently skipped — it must NEVER trip the auto-fallback (it's just a backdrop).
+   */
+  function prefetchAllsky() {
+    const baseUrl = resolvedBaseUrl;
+    if (!baseUrl) return;
+    // Offline tiles synthesize locally with no network, so there is no black flash
+    // to hide; prefetching a full-sky order-1 set for offline is pure cost (48
+    // synths per band/epoch change, which would jank blinking) with no benefit —
+    // and order-1 offline tiles show no sources anyway. Backdrop is network-only.
+    if (isOfflineUrl(baseUrl)) { allskySig = ''; pinnedTiles.clear(); return; }
+    const sig = `${baseUrl}|${layerSignature}`;
+    if (sig === allskySig) return;
+    allskySig = sig;
+    pinnedTiles.clear(); // previous base pins are no longer protected
+
+    const isRub = isRubinUrl(baseUrl);
+    const useA = !!rspToken && isRub;
+    const auth = useA ? getAuthHeader() : {};
+    const fmt = resolveFormat();
+    const npix = nside2npix(order2nside(ALLSKY_ORDER));
+
+    for (let pix = 0; pix < npix; pix++) {
+      const key = tileKey(ALLSKY_ORDER, pix);
+      pinnedTiles.add(key);
+      if (tileCache.has(key)) continue;
+
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => { tileCache.set(key, img); contentVersion++; scheduleRender(); };
+      img.onerror = () => { /* backdrop tile missing → skip silently, no fallback */ };
+
+      if (useA) {
+        fetch(buildUrl(ALLSKY_ORDER, pix, fmt, baseUrl), { headers: auth })
+          .then((r) => (r.ok ? r.blob() : Promise.reject(new Error('allsky'))))
+          .then((b) => { img.src = URL.createObjectURL(b); })
+          .catch(() => { /* skip */ });
+      } else {
+        img.src = buildUrl(ALLSKY_ORDER, pix, fmt, baseUrl);
+      }
+    }
+  }
+
+  // Prefetch the allsky backdrop whenever the base (or offline band/epoch) changes.
+  $effect(() => {
+    void resolvedBaseUrl;
+    void layerSignature;
+    prefetchAllsky();
+  });
 
   // --- RAF Debounce ---
 

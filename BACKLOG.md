@@ -120,12 +120,13 @@ for superseded views, an allsky/low-res preview layer, and caching/prefetch.
 > STATUS: ancestor-preview + fetch coalescing + post-processing memo DONE; the
 > wide-FOV ancestor warp is fixed via quad subdivision (B-b); an **LRU cap**
 > (`src/utils/tileCache.ts`, MAX_TILE_CACHE=1500, evict least-recently-DRAWN,
-> never a visible tile) now bounds the cache. STILL OPEN: a proper **allsky /
-> low-order persistent backdrop** (prefetch order ≤3 tiles, pinned, drawn
-> subdivided beneath the sharp pass; synthesize for offline) — now a perf/UX
-> nicety rather than a correctness fix since subdivision fixed the warp. Also:
-> off-thread decode (`createImageBitmap`) and replacing offline `toDataURL` with
-> `createImageBitmap` are the next profiling targets.
+> never a visible tile) bounds the cache; and an **allsky backdrop** (prefetch the
+> 48 order-1 full-sky tiles, PINNED against eviction, drawn subdivided by the
+> ancestor pass) prevents black flashes on jumps to unvisited regions — NETWORK
+> bases only (offline synth needs no backdrop and it would jank blinking). STILL
+> OPEN: off-thread decode (`createImageBitmap`) and replacing offline `toDataURL`
+> with `createImageBitmap`; a higher-res allsky (order 2/3) if order-1 is too
+> coarse; request cancellation for superseded views.
 
 ## 6. Rubin alert / DIA event overlay
 
