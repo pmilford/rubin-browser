@@ -1,7 +1,7 @@
 <script lang="ts">
   import { getAuthHeader } from '../api/auth.js';
   import { toRequestUrl } from '../api/rspProxy.js';
-  import { parseHipsProperties, radecToThetaPhi, thetaPhiToRadec } from '../api/hips.js';
+  import { parseHipsProperties, radecToThetaPhi, thetaPhiToRadec, getTileCenter } from '../api/hips.js';
   import {
     skyToCanvas,
     canvasToSky,
@@ -1276,6 +1276,16 @@
     const order = zoomToOrder(zoomLevel);
     const fmt = resolveFormat();
     const visibleTiles = getVisibleTiles(ra, dec, fov, order);
+
+    // Load CENTRE-OUT: fetch the tiles nearest the view centre first so a field
+    // fills from the middle (and looks centred immediately) instead of the
+    // enumeration order (~top-left first), which on a sparse, slow-streaming Rubin
+    // field looked off-centre / empty while loading. getTileCenter is memoised.
+    visibleTiles.sort((a, b) => {
+      const ca = getTileCenter(a.pixelIndex, a.order);
+      const cb = getTileCenter(b.pixelIndex, b.order);
+      return angularSeparation(ra, dec, ca.ra, ca.dec) - angularSeparation(ra, dec, cb.ra, cb.dec);
+    });
 
     // Capture the base context for THIS batch. resolvedBaseUrl is a $derived that
     // can flip mid-batch (once autoFellBack latches), so every async callback in

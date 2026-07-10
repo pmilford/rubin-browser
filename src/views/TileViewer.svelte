@@ -404,6 +404,8 @@
   const offlineMjd = $derived(OFFLINE_EPOCHS[offlineEpochIndex] ?? OFFLINE_EPOCHS[0] ?? 60000);
 
   let baseLayerId = $state<'auto' | 'dss' | 'rubin' | 'offline'>(seed.base ?? 'auto');
+  // Name of the DP1 field most recently jumped to (shown as a chip).
+  let currentFieldName = $state<string | null>(null);
   const baseLayer = $derived(BASE_LAYERS.find((b) => b.id === baseLayerId) ?? BASE_LAYERS[0]);
   // The label of the base survey ImageViewer ACTUALLY resolved (reflects a silent
   // Auto→DSS2 fallback), reported via onBaseResolved. Not the nominal selection.
@@ -474,6 +476,7 @@
     // If the user is on DSS/offline, switch to Auto so an authenticated session
     // resolves to Rubin over the field (Auto → Rubin when a token is present).
     if (baseLayerId === 'dss' || baseLayerId === 'offline') baseLayerId = 'auto';
+    currentFieldName = f.name;
     handleSearch(f.ra, f.dec);
     statusMessage = authenticated
       ? `DP1 field: ${f.name} — RA ${f.ra}°, Dec ${f.dec}°`
@@ -761,6 +764,9 @@
             {/each}
           </select>
         </label>
+        {#if currentFieldName}
+          <span class="field-chip" aria-label="Current field">◉ {currentFieldName}</span>
+        {/if}
         {#if baseLayerId === 'offline'}
           <OfflineLayerControls
             epochs={OFFLINE_EPOCHS}
@@ -1183,6 +1189,14 @@
   .base-resolved {
     color: #789;
     font-size: 10px;
+  }
+
+  .field-chip {
+    background: rgba(30, 40, 60, 0.85);
+    border: 1px solid rgba(120, 200, 255, 0.45);
+    border-radius: 6px;
+    padding: 3px 8px;
+    color: #bdf;
   }
 
   .layer-base select {
