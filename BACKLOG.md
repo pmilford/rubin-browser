@@ -186,3 +186,67 @@ SAMP/table interop, region files (DS9 regions), colour-composite band mixing,
 contour plots, PM/proper-motion & time animation, keyboard-driven navigation,
 and sharing/permalink of a view. Output: a prioritized list of additions with
 rationale, folded back into this backlog.
+
+## 10. Smart object-type identification from the IMAGE under the cursor
+
+Requested 2026-07-10. Today's click-to-identify (`objects.ts::identifyAt` +
+`ObjectInfoPanel`) is a CATALOG LOOKUP — nearest bundled object by position. This
+item is the opposite: INFER the object's class + properties FROM THE PIXELS under
+the cursor, so it works where the catalog is silent, especially on real Rubin
+multi-band (ugrizy) data. Must work on luminance-only imagery AND, better, on
+multi-band colour from any survey (Rubin gri/per-band, PanSTARRS, DSS).
+
+Process (explicit user ask): **research → PRD → design-review → implement with
+robust, MEASURED testing.** This is exactly the class where a placeholder
+classifier ("always galaxy") passes naive tests, so accuracy must be measured
+against ground truth, not asserted to exist.
+
+### Target outputs
+- **Star vs galaxy vs cluster vs nebula** (coarse class) under the cursor.
+- **Galaxy morphology / Hubble type** (elliptical / spiral / irregular; barred?).
+- **Cluster kind** (open vs globular) + a crude **age** proxy.
+- **Stellar** temperature / spectral-type proxy from colour.
+- Each with a **confidence** and the **features it used**, clearly labelled
+  "inferred from image" vs "catalog" — never a fabricated certainty.
+
+### Candidate algorithms to research (from most to least classical)
+- **Star–galaxy separation**: morphological — compactness vs the local PSF
+  (FWHM, concentration, `spread_model`-style), SExtractor `CLASS_STAR`; Rubin's
+  own pipeline uses i-band `extendedness`. ML: a small CNN on a cutout.
+- **Galaxy morphology**: non-parametric **CAS** (concentration / asymmetry /
+  clumpiness), **Gini–M20**, **Sérsic index** fit (n≈4 elliptical, n≈1 disk);
+  or a CNN (Galaxy Zoo / Zoobot-style) for Hubble type.
+- **Open vs globular cluster**: spatial **density/King profile** + symmetry
+  (globulars compact, round, centrally concentrated; open clusters loose,
+  irregular) + the **colour–magnitude diagram** shape when member stars resolve.
+- **Age**: for a resolved population, **isochrone fitting to the CMD**
+  (main-sequence turnoff) — needs multi-band photometry of individual stars;
+  for a single unresolved source, **broadband colour** (g−r, r−i) as a coarse
+  proxy (bluer = younger/hotter). SED fitting where multi-band available.
+- **Stellar temp / type**: colour-index → effective temperature relations.
+- Luminance-only fallback: morphology (extent, profile, symmetry) is the only
+  signal; be explicit that colour-derived class/age is unavailable without bands.
+
+### Data + honesty
+- Real colour now available via the **Rubin per-band DP1 datasets** (multi-filter
+  switch, `RUBIN_DATASETS`) and public multi-band surveys — feed the classifier
+  cutouts across bands.
+- Cross-check / label against **SIMBAD** or the **Rubin Object table (TAP,
+  `extendedness`, `*_psfMag`)** for ground-truth types (blocked on the DP0.2→DP1
+  `tap.ts` namespace, see the code smell). Show provenance + confidence.
+
+### Robust testing strategy (the load-bearing part)
+- **Synthetic ground truth**: extend `syntheticSky.ts` sources to carry a TRUE
+  `class` (star / galaxy-by-type / open / globular / nebula) and render class-
+  appropriate morphology (a PSF-like star vs an extended Sérsic galaxy vs a
+  clustered point-set), so the classifier's output can be scored against the
+  KNOWN class per pixel — report an **accuracy / confusion matrix**, not "it ran".
+  Adversarial: an "always galaxy" model must FAIL (measured accuracy ≈ prior).
+- **Real-object holdout**: a labelled set of catalog objects with SIMBAD types;
+  assert star-vs-galaxy and coarse-type accuracy above a stated threshold with a
+  confusion matrix, and that confidence correlates with correctness.
+- **Invariance checks**: classification stable under the display stretch/colormap
+  (must sample pre-colormap / calibrated pixels, like the cross-section does),
+  and degrades gracefully (lower confidence) on luminance-only input.
+- Wire the result into the existing `ObjectInfoPanel` as an "image-inferred"
+  section distinct from the catalog match.
