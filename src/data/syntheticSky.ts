@@ -331,20 +331,26 @@ export function intensityAt(
 }
 
 /**
- * Rasterize one HiPS tile in OFFLINE mode to a tileSize×tileSize RGBA buffer.
+ * Rasterize one HiPS tile in OFFLINE mode to a tileSize×tileSize buffer of
+ * LINEAR intensity (detector counts, Float64), unclamped — the raw signal an
+ * image-differencing pipeline needs (see src/utils/imageDiff.ts). This is the
+ * single source of truth for the offline raster; {@link renderSyntheticTile}
+ * merely clamps+packs this frame into 8-bit grayscale RGBA for display.
  *
  * Each pixel's sky position is computed EXACTLY from `pixcoord2vec_nest` with the
  * same in-tile fractional convention the live renderer uses (col→nw, row→ne), so
  * sources land where the real HiPS tile would place them. Every source within the
  * tile (plus a PSF margin) is painted as a Gaussian scaled by its epoch flux; the
- * contributions are summed, then per-pixel zero-mean Gaussian noise (Box–Muller
- * from a PRNG keyed by order/pix/band/mjd/pixel) is added. Values are clamped to
- * 0..255 and written as grayscale RGBA (opaque).
+ * contributions are summed onto the sky background, then per-pixel zero-mean
+ * Gaussian noise (Box–Muller from a PRNG keyed by order/pix/band/mjd/pixel) is
+ * added when `noiseSigma > 0`. Values are NOT clamped — negative excursions and
+ * bright cores are preserved so a difference of two epochs is quantitatively
+ * correct.
  *
- * Cost is O(tilePixels · sourcesInTile); sources are pre-filtered to the tile's
- * angular footprint so the second factor is small in practice.
+ * Row-major (row·tileSize + col), length tileSize². Cost is
+ * O(tilePixels · sourcesInTile); sources are pre-filtered to the tile footprint.
  */
-export function renderSyntheticTile(
+export function renderSyntheticIntensityFrame(
   sky: SyntheticSky,
   order: number,
   pixelIndex: number,
@@ -352,9 +358,9 @@ export function renderSyntheticTile(
   mjd: number,
   tileSize: number,
   noiseSigma: number
-): Uint8ClampedArray {
+): Float64Array {
   const nside = order2nside(order);
-  const out = new Uint8ClampedArray(tileSize * tileSize * 4);
+  const out = new Float64Array(tileSize * tileSize);
 
   // Tile footprint: center vector + angular radius, expanded by the widest PSF.
   const centerVec = pixcoord2vec_nest(nside, pixelIndex, 0.5, 0.5);
@@ -403,14 +409,42 @@ export function renderSyntheticTile(
         value += g * noiseSigma;
       }
 
-      const g8 = value < 0 ? 0 : value > 255 ? 255 : value;
-      const o = (row * tileSize + col) * 4;
-      out[o] = g8;
-      out[o + 1] = g8;
-      out[o + 2] = g8;
-      out[o + 3] = 255;
+      out[row * tileSize + col] = value;
     }
   }
 
+  return out;
+}
+
+/**
+ * Rasterize one HiPS tile in OFFLINE mode to a tileSize×tileSize RGBA buffer.
+ *
+ * A thin display wrapper over {@link renderSyntheticIntensityFrame}: clamps each
+ * linear-intensity pixel to 0..255 and writes it as opaque grayscale RGBA. The
+ * two share the exact same pixel/noise computation, so the displayed tile is the
+ * clamped image of the frame that differencing operates on.
+ */
+export function renderSyntheticTile(
+  sky: SyntheticSky,
+  order: number,
+  pixelIndex: number,
+  band: Band,
+  mjd: number,
+  tileSize: number,
+  noiseSigma: number
+): Uint8ClampedArray {
+  const frame = renderSyntheticIntensityFrame(
+    sky, order, pixelIndex, band, mjd, tileSize, noiseSigma
+  );
+  const out = new Uint8ClampedArray(tileSize * tileSize * 4);
+  for (let i = 0; i < frame.length; i++) {
+    const value = frame[i]!;
+    const g8 = value < 0 ? 0 : value > 255 ? 255 : value;
+    const o = i * 4;
+    out[o] = g8;
+    out[o + 1] = g8;
+    out[o + 2] = g8;
+    out[o + 3] = 255;
+  }
   return out;
 }

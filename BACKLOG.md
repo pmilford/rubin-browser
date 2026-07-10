@@ -327,3 +327,47 @@ Accurate scope (don't overpromise):
 - Cross-links: feeds #9 (live TAP catalog overlay) and #10 (image classification
   ground-truth labels). New client `src/api/gaia.ts` (ADQL cone + parser), pure +
   tested; overlay wiring reuses `AlertSet`/index or a parallel catalog layer.
+
+## 13. Feature-parity additions vs mature viewers (the #9 comparison, done 2026-07-10)
+
+The #9 review was finally run against Aladin Lite v3, JS9, DS9, Firefly (the
+actual Rubin RSP viewer), ESASky, WorldWide Telescope, and the Legacy Survey
+viewer. We already match or lead on: canvas HiPS render + pan/zoom/keyboard,
+permalink, DS9-style stretch/colormap/histogram, curved graticule + compass +
+scale bar, distance ruler, click-identify + info panel, a strong DIA/alert
+overlay (200k, LOD, time window, hover), cross-section, Rubin light curves, an
+offline synthetic multi-epoch/band blink cube, and the FITS/SODA/WCS/diff modules.
+The real gaps (present in ≥3 of the mature tools, absent here) become this list.
+
+### High-priority additions (impact × leverage existing architecture)
+1. **MOC / footprint coverage layer** — shade DP1's 7 fields + any dataset
+   footprint so the user SEES where data exists (directly fixes the recurring
+   "authenticated but no Rubin data" confusion). Reuses HEALPix + overlay canvas.
+   `src/data/footprint.ts` (pure geometry). **[implementing now — big #1]**
+2. **RGB band-mixing composite** — assign Rubin ugrizy (or any survey's bands) to
+   R/G/B with per-channel stretch (Lupton). The scientifically distinctive Rubin
+   capability; pairs with the FITS cutout path (#7/#1). Needs FITS pixels + a
+   composite render path. **[deferred]**
+3. **DS9 region files** — draw/import/export circles·ellipses·polygons + labels;
+   the single most standard interop feature we lack. Reuses the ruler/cross-section
+   overlay-canvas pattern. **[deferred]**
+4. **Real catalog overlay via TAP + linked table** — generalise the DIA overlay to
+   arbitrary cone-search catalogs (Rubin Object, Gaia via `src/api/gaia.ts`) with a
+   selection-linked table panel (row ⇄ marker). `src/data/catalog.ts` (columnar
+   CatalogSet + spatial index, mirrors `alerts.ts`). **[implementing now — big #4]**
+5. **Aperture / radial-profile photometry** — click a source → radial profile,
+   curve-of-growth, aperture flux (calibrated once FITS lands). DS9/JS9 analysis
+   parity; reuses cross-section sampling. **[deferred]**
+
+### Simple valuable additions (small, high value/effort ratio) — ALL implementing now
+1. **Simbad "what's here?"** — right-click → public Simbad resolver / cone lookup
+   (no auth). Also improves name search beyond the bundled catalog.
+   `src/api/simbad.ts` (pure client).
+2. **Click-to-copy coordinates** — sexagesimal ⟷ decimal readout, click to copy
+   RA/Dec. Trivial, universally wanted.
+3. **Grid coordinate-system toggle** — equatorial ↔ galactic ↔ ecliptic on the
+   existing graticule. `src/utils/coords.ts` (pure transforms) feeding `graticule.ts`.
+4. **PNG screenshot export** — compose the visible canvases → `toBlob` download of
+   the current view. Trivial.
+5. **Magnifier loupe + whole-sky locator inset** — a small zoomed inset around the
+   cursor + a whole-sky "you are here" locator. Reuses the render path.

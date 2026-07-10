@@ -158,3 +158,202 @@ describe('identifyAt (click-to-identify, thresholded)', () => {
     expect(r.nearest!.separationDeg).toBeGreaterThan(r.matchRadiusDeg);
   });
 });
+
+/* -------------------------------------------------------------------------- */
+/* Generic catalog-overlay data layer (src/data/catalog.ts)                   */
+/*                                                                            */
+/* These suites cover the NEW columnar CatalogSet + uniform-grid index used   */
+/* by the ImageViewer overlay and the linked table. They are unrelated to the */
+/* ALL_OBJECTS integrity tests above (which cover src/data/objects.ts).       */
+/* -------------------------------------------------------------------------- */
+import {
+  gaiaToCatalogSet,
+  buildCatalogIndex,
+  catalogInViewport,
+  nearestInCatalog,
+  CATALOG_NO_DATA,
+  type CatalogSet,
+} from '../../src/data/catalog.js';
+import type { GaiaCatalog } from '../../src/api/gaia.js';
+
+/** Build a GaiaCatalog from parallel plain arrays (NaN where a field is null). */
+function makeGaia(rows: {
+  sourceId: string;
+  ra: number;
+  dec: number;
+  gMag?: number;
+  bpRp?: number;
+  pmRa?: number;
+  pmDec?: number;
+  parallax?: number;
+  radialVelocity?: number;
+  teff?: number;
+}[]): GaiaCatalog {
+  const n = rows.length;
+  const f = (pick: (r: (typeof rows)[number]) => number | undefined): Float32Array => {
+    const a = new Float32Array(n);
+    for (let i = 0; i < n; i++) a[i] = pick(rows[i]!) ?? NaN;
+    return a;
+  };
+  return {
+    count: n,
+    sourceId: rows.map((r) => r.sourceId),
+    ra: f((r) => r.ra),
+    dec: f((r) => r.dec),
+    gMag: f((r) => r.gMag),
+    bpRp: f((r) => r.bpRp),
+    pmRa: f((r) => r.pmRa),
+    pmDec: f((r) => r.pmDec),
+    parallax: f((r) => r.parallax),
+    radialVelocity: f((r) => r.radialVelocity),
+    teff: f((r) => r.teff),
+  };
+}
+
+/** Minimal CatalogSet from (label, ra, dec) triples — index/query tests. */
+function makeSet(rows: [string, number, number][]): CatalogSet {
+  const n = rows.length;
+  const ra = new Float32Array(n);
+  const dec = new Float32Array(n);
+  const label: string[] = [];
+  const records: Record<string, string | number>[] = [];
+  rows.forEach(([l, r, d], i) => {
+    ra[i] = r;
+    dec[i] = d;
+    label.push(l);
+    records.push({ Label: l });
+  });
+  return { count: n, ra, dec, label, records };
+}
+
+describe('gaiaToCatalogSet (adapter)', () => {
+  const gaia = makeGaia([
+    { sourceId: '4611686018427387904', ra: 62.1, dec: -37.4, gMag: 18.2, bpRp: 1.3, pmRa: -2.5, pmDec: 4.1, parallax: 0.8 },
+    { sourceId: '999', ra: 150.0, dec: 10.0, gMag: 20.5, bpRp: NaN, pmRa: NaN, pmDec: NaN, parallax: NaN },
+  ]);
+  const set = gaiaToCatalogSet(gaia);
+
+  it('preserves the source count', () => {
+    expect(set.count).toBe(2);
+    expect(set.ra.length).toBe(2);
+    expect(set.records.length).toBe(2);
+    expect(set.label.length).toBe(2);
+  });
+
+  it('maps a known source ra/dec and label (source id) correctly', () => {
+    expect(set.ra[0]).toBeCloseTo(62.1, 4);
+    expect(set.dec[0]).toBeCloseTo(-37.4, 4);
+    expect(set.label[0]).toBe('4611686018427387904');
+    expect(set.records[0]!['Source ID']).toBe('4611686018427387904');
+    // A present numeric field stays numeric (not stringified).
+    expect(set.records[0]!['G (mag)']).toBeCloseTo(18.2, 4);
+  });
+
+  it('renders a NaN field as the dash, never NaN', () => {
+    const bpRp = set.records[1]!['BP−RP'];
+    expect(bpRp).toBe(CATALOG_NO_DATA);
+    expect(Number.isNaN(bpRp as number)).toBe(false);
+    // Adversarial: no record value may be a NaN number anywhere.
+    for (const rec of set.records) {
+      for (const v of Object.values(rec)) {
+        expect(typeof v === 'number' && Number.isNaN(v)).toBe(false);
+      }
+    }
+  });
+
+  it('stamps provenance Catalog = "Gaia DR3" on every row', () => {
+    for (const rec of set.records) expect(rec.Catalog).toBe('Gaia DR3');
+  });
+});
+
+describe('buildCatalogIndex + catalogInViewport (culling)', () => {
+  it('returns sources inside a small bbox and culls ones outside it', () => {
+    const set = makeSet([
+      ['in-a', 100.0, 20.0],
+      ['in-b', 100.4, 20.3],
+      ['out-far', 200.0, -40.0],
+    ]);
+    const index = buildCatalogIndex(set);
+    const hits = catalogInViewport(index, 99.5, 100.5, 19.5, 20.5).map((i) => set.label[i]);
+    expect(hits.sort()).toEqual(['in-a', 'in-b']);
+    expect(hits).not.toContain('out-far');
+  });
+
+  it('ADVERSARIAL: a source JUST outside the bbox does not appear', () => {
+    // Two sources straddle the eastern RA edge (100.5): one just inside, one just
+    // outside. A bucket-only (unfiltered) impl would wrongly include the outsider.
+    const set = makeSet([
+      ['inside', 100.49, 20.0],
+      ['outside', 100.51, 20.0],
+      ['dec-outside', 100.0, 20.51],
+    ]);
+    const index = buildCatalogIndex(set);
+    const hits = catalogInViewport(index, 99.5, 100.5, 19.5, 20.5).map((i) => set.label[i]);
+    expect(hits).toEqual(['inside']);
+    expect(hits).not.toContain('outside');
+    expect(hits).not.toContain('dec-outside');
+  });
+});
+
+describe('nearestInCatalog', () => {
+  it('returns the CLOSEST source, not the first in the array', () => {
+    // The first array element is far; a nearer one sits later. A "return first
+    // candidate" bug would return 'first-far'.
+    const set = makeSet([
+      ['first-far', 50.2, 10.0], // ~0.2 deg away
+      ['closest', 50.02, 10.0], // ~0.02 deg away
+      ['also-far', 49.7, 10.0],
+    ]);
+    const index = buildCatalogIndex(set);
+    const near = nearestInCatalog(index, 50.0, 10.0, 1.0);
+    expect(near).not.toBeNull();
+    expect(set.label[near!.index]).toBe('closest');
+    expect(near!.separationDeg).toBeLessThan(0.05);
+  });
+
+  it('returns null when nothing is within maxRadiusDeg', () => {
+    const set = makeSet([
+      ['a', 10.0, 10.0],
+      ['b', 200.0, -30.0],
+    ]);
+    const index = buildCatalogIndex(set);
+    // Query empty sky with a radius far smaller than the nearest source.
+    expect(nearestInCatalog(index, 100.0, 0.0, 0.5)).toBeNull();
+  });
+
+  it('reports a true great-circle separation (shrinks with cos(dec), not flat)', () => {
+    // At Dec +80°, a source 10° away in RA is only ~1.7° on the sky.
+    const set = makeSet([['hi-dec', 10.0, 80.0]]);
+    const index = buildCatalogIndex(set);
+    const near = nearestInCatalog(index, 0.0, 80.0, 5.0);
+    expect(near).not.toBeNull();
+    expect(near!.separationDeg).toBeCloseTo(angularSeparation(0, 80, 10, 80), 4);
+    expect(near!.separationDeg).toBeLessThan(2); // a flat sqrt(Δα²+Δδ²) would give ~10
+  });
+});
+
+describe('catalogInViewport RA-wrap at 0°/360° (mirrors alerts.ts queryViewport)', () => {
+  it('a viewport straddling RA 0/360 (raMin > raMax) includes 359.9 and 0.1, excludes 180', () => {
+    const set = makeSet([
+      ['near-360', 359.9, 5.0],
+      ['near-0', 0.1, 5.0],
+      ['opposite', 180.0, 5.0],
+    ]);
+    const index = buildCatalogIndex(set);
+    // Straddle: raMin=359 wraps to raMax=1.
+    const hits = catalogInViewport(index, 359.0, 1.0, 4.0, 6.0).map((i) => set.label[i]);
+    expect(hits.sort()).toEqual(['near-0', 'near-360']);
+    expect(hits).not.toContain('opposite');
+  });
+
+  it('nearestInCatalog resolves across the 0/360 seam', () => {
+    // Query at RA 0.05 should find the source at 359.95 (~0.1 deg away), even
+    // though their numeric RA difference is ~359.9.
+    const set = makeSet([['seam', 359.95, 0.0]]);
+    const index = buildCatalogIndex(set);
+    const near = nearestInCatalog(index, 0.05, 0.0, 1.0);
+    expect(near).not.toBeNull();
+    expect(set.label[near!.index]).toBe('seam');
+    expect(near!.separationDeg).toBeCloseTo(0.1, 3);
+  });
+});

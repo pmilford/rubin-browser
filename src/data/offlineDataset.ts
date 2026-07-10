@@ -12,6 +12,7 @@
 import {
   generateSyntheticSky,
   renderSyntheticTile,
+  renderSyntheticIntensityFrame,
   magAt,
   intensityAt,
   BANDS,
@@ -78,6 +79,26 @@ export function offlineTileRGBA(
   mjd: number = OFFLINE_MJD
 ): Uint8ClampedArray {
   return renderSyntheticTile(offlineSky(), order, pixelIndex, band, mjd, OFFLINE_TILE_SIZE, OFFLINE_NOISE_SIGMA);
+}
+
+/**
+ * LINEAR-intensity raster (Float64, OFFLINE_TILE_SIZE², row-major) for one HEALPix
+ * tile of the offline sky at a band + epoch — the same pixels {@link offlineTileRGBA}
+ * displays, but as raw unclamped detector counts. This is what image differencing
+ * (`src/utils/imageDiff.ts`) consumes: two of these at epochs A and B are subtracted
+ * to isolate transients/variables. `noiseSigma` defaults to 0 so a difference of two
+ * epochs is clean ground truth (pass a positive value for a realistic noisy frame).
+ */
+export function offlineIntensityFrame(
+  order: number,
+  pixelIndex: number,
+  band: Band = 'r',
+  mjd: number = OFFLINE_MJD,
+  noiseSigma = 0
+): Float64Array {
+  return renderSyntheticIntensityFrame(
+    offlineSky(), order, pixelIndex, band, mjd, OFFLINE_TILE_SIZE, noiseSigma
+  );
 }
 
 /** One time-series sample: the ground-truth intensity at a sky point at an epoch. */
