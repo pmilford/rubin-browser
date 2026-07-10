@@ -5,7 +5,13 @@ gaps (DP0.2/DP1 namespace mismatch, wiring the mock filter/epoch controls, real
 TAP catalog search, the per-tile brightness seam) are tracked in code comments
 and the project CLAUDE.md.
 
-## 1. Synthetic multi-time / multi-tile / multi-wavelength data source
+> STATUS (2026-07-09): #1 generator DONE (`src/data/syntheticSky.ts`), #3
+> cross-section DONE (MVP single trace), #5 zoom perf DONE (ancestor preview +
+> memoization + fetch coalescing; LRU cap + allsky preview still open), and an
+> in-app **Offline demo** base layer now renders the generator's tiles with no
+> network (`src/data/offlineDataset.ts`). Remaining sub-items noted inline below.
+
+## 1. Synthetic multi-time / multi-tile / multi-wavelength data source  ✅ generator done
 
 Build a deterministic, generated data source with **known** source positions,
 intensities, and noise — a controllable ground truth instead of live DSS/Rubin
