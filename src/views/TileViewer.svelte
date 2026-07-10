@@ -147,6 +147,7 @@
   let crossSectionProfile = $state<LineProfile | null>(null);
   function toggleCrossSection() {
     crossSectionMode = !crossSectionMode;
+    if (crossSectionMode) rulerMode = false; // both tools steal the pointer
     statusMessage = crossSectionMode
       ? 'Cross-section: drag a line across the image to profile intensity'
       : 'Cross-section: off';
@@ -157,6 +158,22 @@
   function toggleGraticule() {
     showGraticule = !showGraticule;
     statusMessage = showGraticule ? 'Coordinate grid: on' : 'Coordinate grid: off';
+  }
+
+  // Distance ruler: drag between two sky points → great-circle separation + PA.
+  let rulerMode = $state(false);
+  let rulerReadout = $state<string | null>(null);
+  function toggleRuler() {
+    rulerMode = !rulerMode;
+    if (rulerMode) crossSectionMode = false; // both tools steal the pointer
+    if (!rulerMode) rulerReadout = null;
+    statusMessage = rulerMode
+      ? 'Ruler: drag between two points to measure great-circle distance'
+      : 'Ruler: off';
+  }
+  function handleRulerChange(m: { separationDeg: number; paDeg: number; text: string } | null) {
+    rulerReadout = m?.text ?? null;
+    if (m) statusMessage = `Distance: ${m.text}`;
   }
 
   // 3D surface ("mountain") plot of the central region's intensity.
@@ -567,6 +584,8 @@
       {crossSectionMode}
       {surfaceMode}
       {showGraticule}
+      {rulerMode}
+      onRulerChange={handleRulerChange}
       {rubinDataset}
       {offlineBand}
       {offlineMjd}
@@ -711,6 +730,17 @@
           onclick={toggleGraticule}
         >
           ⊞ Grid
+        </button>
+
+        <button
+          class="xsection-toggle"
+          class:on={rulerMode}
+          aria-pressed={rulerMode}
+          aria-label="Toggle distance ruler"
+          title="Drag between two points to measure the great-circle separation and position angle"
+          onclick={toggleRuler}
+        >
+          📏 Ruler{#if rulerReadout} · {rulerReadout}{/if}
         </button>
 
         {#if baseLayerId === 'offline' || rubinLcAvailable}

@@ -44,7 +44,12 @@
   import { touchLru, evictLru } from '../utils/tileCache.js';
   import type { Band } from '../data/syntheticSky.js';
   import { constellationFor } from '../utils/constellation.js';
-  import { cardinalDirection, formatSeparation } from '../utils/skyGeom.js';
+  import {
+    cardinalDirection,
+    formatSeparation,
+    angularSeparation,
+    positionAngle,
+  } from '../utils/skyGeom.js';
   import {
     graticuleLines,
     compassRose,
@@ -81,6 +86,8 @@
     crossSectionMode = false,
     surfaceMode = false,
     showGraticule = false,
+    rulerMode = false,
+    onRulerChange,
     offlineBand = 'r' as Band,
     offlineMjd = OFFLINE_MJD,
     onViewerStateChange,
@@ -128,6 +135,10 @@
     crossSectionMode?: boolean;
     /** When true, draw the curved RA/Dec coordinate graticule + compass + scale bar. */
     showGraticule?: boolean;
+    /** When true, dragging measures a great-circle distance instead of panning. */
+    rulerMode?: boolean;
+    /** Fired with the current ruler measurement (or null when cleared). */
+    onRulerChange?: (m: { separationDeg: number; paDeg: number; text: string } | null) => void;
     /** OFFLINE mode only: wavelength band to synthesize (g/r/i/z/y). */
     offlineBand?: Band;
     /** OFFLINE mode only: epoch (MJD) to synthesize — drives light curves + noise. */
@@ -192,6 +203,13 @@
   let xsP0 = $state<{ ra: number; dec: number } | null>(null);
   let xsP1 = $state<{ ra: number; dec: number } | null>(null);
   let xsDragHandle: 0 | 1 | null = null;
+  // Distance-ruler tool: two sky endpoints, reprojected each render; the readout
+  // is the great-circle separation (skyGeom), not a flat pixel distance.
+  let rulerCanvasEl: HTMLCanvasElement | undefined;
+  let rulerCtx: CanvasRenderingContext2D | null = null;
+  let rulerP0 = $state<{ ra: number; dec: number } | null>(null);
+  let rulerP1 = $state<{ ra: number; dec: number } | null>(null);
+  let rulerDragHandle: 0 | 1 | null = null;
   // Private scratch canvas for honest PRE-colormap luminance sampling: base tiles
   // are drawn to it raw (no scaling/colormap/invert), so the profile reflects the
   // displayed image intensity, never the post-processed/colormapped pixels.
@@ -637,6 +655,57 @@
     renderGraticule();
     renderAlerts();
     renderCrossSection();
+    renderRuler();
+  }
+
+  /**
+   * Draw the distance ruler on its interactive overlay: a line pinned to the sky
+   * (pan-translated) between two endpoints, grabbable handles, and a midpoint
+   * label showing the GREAT-CIRCLE separation + position angle (via skyGeom — not
+   * a flat pixel distance, which is wrong away from the equator).
+   */
+  function renderRuler() {
+    if (!rulerCtx || !rulerCanvasEl) return;
+    rulerCtx.clearRect(0, 0, canvasWidth, canvasHeight);
+    if (!rulerMode || !rulerP0 || !rulerP1) return;
+    const view = currentView();
+    const [x0, y0] = skyToCanvas(view, rulerP0.ra, rulerP0.dec);
+    const [x1, y1] = skyToCanvas(view, rulerP1.ra, rulerP1.dec);
+    if ([x0, y0, x1, y1].some((n) => Number.isNaN(n))) return;
+
+    rulerCtx.save();
+    rulerCtx.translate(panOffsetX, panOffsetY);
+    rulerCtx.strokeStyle = 'rgba(255,210,120,0.95)';
+    rulerCtx.lineWidth = 1.5;
+    rulerCtx.setLineDash([6, 3]);
+    rulerCtx.beginPath();
+    rulerCtx.moveTo(x0, y0);
+    rulerCtx.lineTo(x1, y1);
+    rulerCtx.stroke();
+    rulerCtx.setLineDash([]);
+    for (const [x, y] of [[x0, y0], [x1, y1]] as const) {
+      rulerCtx.beginPath();
+      rulerCtx.arc(x, y, 5, 0, Math.PI * 2);
+      rulerCtx.fillStyle = 'rgba(30,25,10,0.9)';
+      rulerCtx.fill();
+      rulerCtx.strokeStyle = '#fc6';
+      rulerCtx.lineWidth = 2;
+      rulerCtx.stroke();
+    }
+    rulerCtx.restore();
+
+    // Midpoint label (screen-anchored so it stays legible), great-circle readout.
+    const sep = angularSeparation(rulerP0.ra, rulerP0.dec, rulerP1.ra, rulerP1.dec);
+    const pa = positionAngle(rulerP0.ra, rulerP0.dec, rulerP1.ra, rulerP1.dec);
+    const text = `${formatSeparation(sep)} · PA ${pa.toFixed(0)}° (${cardinalDirection(pa)})`;
+    const mx = (x0 + x1) / 2 + panOffsetX;
+    const my = (y0 + y1) / 2 + panOffsetY;
+    rulerCtx.font = '11px monospace';
+    const tw = rulerCtx.measureText(text).width;
+    rulerCtx.fillStyle = 'rgba(10,12,24,0.8)';
+    rulerCtx.fillRect(mx + 8, my - 20, tw + 8, 16);
+    rulerCtx.fillStyle = '#fd8';
+    rulerCtx.fillText(text, mx + 12, my - 8);
   }
 
   /** A short screen-space compass ray (screen +y points down, so the angle from
@@ -723,9 +792,10 @@
     ctx.textAlign = 'left';
   }
 
-  // Repaint when the graticule is toggled on/off.
+  // Repaint when the graticule or ruler is toggled on/off.
   $effect(() => {
     void showGraticule;
+    void rulerMode;
     scheduleRender();
   });
 
@@ -1426,6 +1496,69 @@
     xsectionCanvasEl?.releasePointerCapture?.(e.pointerId);
   }
 
+  /** Which ruler endpoint (0/1) is within grab range of a screen point, else null. */
+  function rulerHandleAt(px: number, py: number): 0 | 1 | null {
+    if (!rulerP0 || !rulerP1) return null;
+    const view = currentView();
+    const ends = [rulerP0, rulerP1] as const;
+    for (let i = 0; i < 2; i++) {
+      const [x, y] = skyToCanvas(view, ends[i]!.ra, ends[i]!.dec);
+      if (Math.hypot(px - (x + panOffsetX), py - (y + panOffsetY)) <= 10) return i as 0 | 1;
+    }
+    return null;
+  }
+
+  function onRulerPointerDown(e: PointerEvent) {
+    if (!rulerMode || !rulerCanvasEl || e.button !== 0) return;
+    e.stopPropagation();
+    const rect = rulerCanvasEl.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    const py = e.clientY - rect.top;
+    const handle = rulerHandleAt(px, py);
+    if (handle === null) {
+      const [r, d] = canvasToSky(currentView(), px, py);
+      if (!Number.isFinite(r) || !Number.isFinite(d)) return;
+      rulerP0 = { ra: r, dec: d };
+      rulerP1 = { ra: r, dec: d };
+      rulerDragHandle = 1;
+    } else {
+      rulerDragHandle = handle;
+    }
+    rulerCanvasEl.setPointerCapture(e.pointerId);
+    scheduleRender();
+  }
+
+  function onRulerPointerMove(e: PointerEvent) {
+    if (rulerDragHandle === null || !rulerCanvasEl) return;
+    const rect = rulerCanvasEl.getBoundingClientRect();
+    const [r, d] = canvasToSky(currentView(), e.clientX - rect.left, e.clientY - rect.top);
+    if (!Number.isFinite(r) || !Number.isFinite(d)) return;
+    if (rulerDragHandle === 0) rulerP0 = { ra: r, dec: d };
+    else rulerP1 = { ra: r, dec: d };
+    scheduleRender();
+  }
+
+  function onRulerPointerUp(e: PointerEvent) {
+    if (rulerDragHandle === null) return;
+    rulerDragHandle = null;
+    rulerCanvasEl?.releasePointerCapture?.(e.pointerId);
+  }
+
+  // Report the current ruler measurement (great-circle separation + PA) to the parent.
+  $effect(() => {
+    if (!rulerMode || !rulerP0 || !rulerP1) {
+      onRulerChange?.(null);
+      return;
+    }
+    const sep = angularSeparation(rulerP0.ra, rulerP0.dec, rulerP1.ra, rulerP1.dec);
+    const pa = positionAngle(rulerP0.ra, rulerP0.dec, rulerP1.ra, rulerP1.dec);
+    onRulerChange?.({
+      separationDeg: sep,
+      paDeg: pa,
+      text: `${formatSeparation(sep)} · PA ${pa.toFixed(0)}° (${cardinalDirection(pa)})`,
+    });
+  });
+
   // A pointer-up within this many px of the pointer-down is a CLICK (identify),
   // not a pan. A larger movement recenters as before.
   const CLICK_MOVE_PX = 4;
@@ -1809,6 +1942,7 @@
     ctx = canvasEl.getContext('2d', { willReadFrequently: true });
     if (alertCanvasEl) alertCtx = alertCanvasEl.getContext('2d');
     if (xsectionCanvasEl) xsectionCtx = xsectionCanvasEl.getContext('2d');
+    if (rulerCanvasEl) rulerCtx = rulerCanvasEl.getContext('2d');
     resizeToContainer();
 
     const ro = new ResizeObserver(() => resizeToContainer());
@@ -2073,6 +2207,12 @@
         xsectionCanvasEl.style.width = w + 'px';
         xsectionCanvasEl.style.height = h + 'px';
       }
+      if (rulerCanvasEl) {
+        rulerCanvasEl.width = w;
+        rulerCanvasEl.height = h;
+        rulerCanvasEl.style.width = w + 'px';
+        rulerCanvasEl.style.height = h + 'px';
+      }
       // Safety: ensure FOV is sane after resize
       fov = zoomToFov(zoomLevel);
       // Resize the post-processing offscreen ONLY when the size actually changed:
@@ -2220,6 +2360,19 @@
     onpointercancel={onXsPointerUp}
   ></canvas>
 
+  <!-- Distance-ruler overlay: interactive ONLY in mode, steals the drag so
+       measuring never pans the sky. -->
+  <canvas
+    bind:this={rulerCanvasEl}
+    class="ruler-canvas"
+    class:active={rulerMode}
+    aria-hidden="true"
+    onpointerdown={onRulerPointerDown}
+    onpointermove={onRulerPointerMove}
+    onpointerup={onRulerPointerUp}
+    onpointercancel={onRulerPointerUp}
+  ></canvas>
+
   {#if cursorReadout}
     <PixelReadout
       ra={cursorReadout.ra}
@@ -2336,6 +2489,19 @@
   }
 
   .xsection-canvas.active {
+    pointer-events: auto;
+    cursor: crosshair;
+  }
+
+  .ruler-canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    pointer-events: none;
+    z-index: 7;
+  }
+
+  .ruler-canvas.active {
     pointer-events: auto;
     cursor: crosshair;
   }
