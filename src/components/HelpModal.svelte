@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { GLOSSARY } from '../data/glossary.js';
+
   let {
     open = false,
     onClose,
@@ -10,6 +12,20 @@
   function handleKeydown(e: KeyboardEvent) {
     if (e.key === 'Escape') onClose?.();
   }
+
+  // Plain-language glossary of the Rubin/astronomy jargon in the UI, sorted by
+  // term. Single source of truth is src/data/glossary.ts (unit-tested for
+  // coverage + accuracy); the same map also drives the hover tooltips on the
+  // controls (title= attributes in TileViewer).
+  let glossaryFilter = $state('');
+  const glossaryEntries = $derived(
+    Object.values(GLOSSARY)
+      .filter((e) => {
+        const q = glossaryFilter.trim().toLowerCase();
+        return !q || e.term.toLowerCase().includes(q) || e.short.toLowerCase().includes(q);
+      })
+      .sort((a, b) => a.term.localeCompare(b.term))
+  );
 
   interface HelpEntry {
     label: string;
@@ -66,6 +82,27 @@
               <dt>{entry.label}</dt>
               <dd>{entry.description}</dd>
             </div>
+          {/each}
+        </dl>
+      </section>
+
+      <section>
+        <h3>Glossary</h3>
+        <input
+          class="glossary-filter"
+          type="search"
+          placeholder="Filter terms (e.g. DP1, HiPS, WCS)…"
+          bind:value={glossaryFilter}
+          aria-label="Filter glossary"
+        />
+        <dl aria-label="Glossary terms">
+          {#each glossaryEntries as entry (entry.term)}
+            <div class="help-row">
+              <dt>{entry.term}</dt>
+              <dd>{entry.short}</dd>
+            </div>
+          {:else}
+            <div class="help-row"><dd>No terms match “{glossaryFilter}”.</dd></div>
           {/each}
         </dl>
       </section>
@@ -132,6 +169,19 @@
 
   dl {
     margin: 0;
+  }
+
+  .glossary-filter {
+    width: 100%;
+    box-sizing: border-box;
+    margin: 0 0 8px;
+    padding: 6px 8px;
+    background: #12121f;
+    border: 1px solid #345;
+    border-radius: 4px;
+    color: #cef;
+    font-size: 13px;
+    font-family: inherit;
   }
 
   .help-row {

@@ -10,7 +10,7 @@ Status: `TODO` · `WIP` (in progress) · `DONE` · `BLOCKED` (needs a decision �
 
 | ID | Item | Status | Notes |
 |----|------|--------|-------|
-| 100 | Plain-language glossary — hover tooltips + "?" panel | WIP | module `src/data/glossary.ts` DONE (44 terms, 90 tests) |
+| 100 | Plain-language glossary — hover tooltips + "?" panel | DONE | glossary section + filter in HelpModal; title= tooltips on DP1/Filter labels; module `glossary.ts` (44 terms) + HelpModal glossary tests |
 | 101 | Catalog overlay + linked table (Gaia / Rubin Object via TAP) | WIP | modules `src/api/gaia.ts` DONE, `src/data/catalog.ts` building |
 | 102 | MOC / DP1 footprint coverage layer (shade where data exists) | WIP | module `src/data/footprint.ts` building |
 | 103 | Simbad "what's here?" (right-click) + name resolve | WIP | module `src/api/simbad.ts` building |

@@ -23,6 +23,7 @@
   import { onMount } from 'svelte';
   import { readStateFromUrl, applyStateToUrl } from '../utils/urlState.js';
   import { DP1_FIELDS } from '../data/dp1Fields.js';
+  import { GLOSSARY } from '../data/glossary.js';
   import { getToken, isAuthenticated } from '../api/auth.js';
   import { fetchLightCurve, toLightCurvePoints } from '../api/lightcurve.js';
   import { fetchDiaAlerts } from '../api/diaSource.js';
@@ -622,7 +623,7 @@
           {/if}
         </label>
         <label class="layer-dp1">
-          <span class="layer-label">DP1</span>
+          <span class="layer-label" title={GLOSSARY['dp1'].short}>DP1</span>
           <select
             class="dp1-jump"
             aria-label="Jump to DP1 field"
@@ -667,7 +668,10 @@
         {/if}
         {#if rubinActive}
           <label class="rubin-filter" aria-label="Rubin filter">
-            <span class="layer-label">Filter</span>
+            <span
+              class="layer-label"
+              title={`${GLOSSARY['coadd'].short} — ${GLOSSARY['color-composite'].short}`}
+            >Filter</span>
             <select
               bind:value={rubinDataset}
               aria-label="Rubin DP1 dataset"
