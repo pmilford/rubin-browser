@@ -7,6 +7,8 @@
     zoomToFov,
     fovToOrder,
     tileImageCornerVectors,
+    tileSubdivision,
+    tileSubQuads,
     type ViewParams,
   } from '../utils/projection.js';
   import {
@@ -714,14 +716,40 @@
     const w = img.naturalWidth || TILE_SIZE;
     const h = img.naturalHeight || TILE_SIZE;
 
-    // Image-space corners matching screen[] order: N=(0,0) E=(w,0) S=(w,h) W=(0,h)
-    const imgUV: [number, number][] = [[0, 0], [w, 0], [w, h], [0, h]];
+    // Subdivide only when the tile projects large on screen (a low-order ancestor
+    // preview): a single affine map over a wide gnomonic quad warps the interior
+    // "by a lot" vs the sharp small tiles on top. Small tiles → n=1 (unchanged,
+    // zero cost). The test corner-override seam always uses the single-quad path.
+    const n = cornerOverride ? 1 : tileSubdivision(screen);
 
-    // Split quad [0,1,2,3] into triangles (0,1,2) and (0,2,3).
-    const [p0, p1, p2, p3] = screen;
-    const [t0, t1, t2, t3] = imgUV;
-    drawTexturedTriangle(context, img, p0!, p1!, p2!, t0!, t1!, t2!);
-    drawTexturedTriangle(context, img, p0!, p2!, p3!, t0!, t2!, t3!);
+    if (n === 1) {
+      // Image-space corners matching screen[] order: N=(0,0) E=(w,0) S=(w,h) W=(0,h)
+      const imgUV: [number, number][] = [[0, 0], [w, 0], [w, h], [0, h]];
+      const [p0, p1, p2, p3] = screen;
+      const [t0, t1, t2, t3] = imgUV;
+      drawTexturedTriangle(context, img, p0!, p1!, p2!, t0!, t1!, t2!);
+      drawTexturedTriangle(context, img, p0!, p2!, p3!, t0!, t2!, t3!);
+      return;
+    }
+
+    // Piecewise-affine: project each sub-quad's own HEALPix corners so the interior
+    // follows the true gnomonic projection, and texture the matching image sub-rect.
+    for (const sub of tileSubQuads(n)) {
+      const vecs = tileImageCornerVectors(nside, tile.pixelIndex, sub.hpx);
+      const scr: [number, number][] = [];
+      let ok = true;
+      for (const v of vecs) {
+        const { theta, phi } = vec2ang(v);
+        const { ra: sRa, dec: sDec } = thetaPhiToRadec(theta, phi);
+        const [sx, sy] = skyToCanvas(view, sRa, sDec);
+        if (isNaN(sx) || isNaN(sy)) { ok = false; break; }
+        scr.push([sx, sy]);
+      }
+      if (!ok) continue;
+      const uv = sub.uv.map(([u, v]) => [u * w, v * h] as [number, number]);
+      drawTexturedTriangle(context, img, scr[0]!, scr[1]!, scr[2]!, uv[0]!, uv[1]!, uv[2]!);
+      drawTexturedTriangle(context, img, scr[0]!, scr[2]!, scr[3]!, uv[0]!, uv[2]!, uv[3]!);
+    }
   }
 
   /**

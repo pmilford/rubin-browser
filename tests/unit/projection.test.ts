@@ -16,10 +16,12 @@ import {
   zoomToFov,
   fovToOrder,
   tileImageCornerVectors,
+  tileSubdivision,
+  tileSubQuads,
   TILE_RASTER_CORNERS,
   type ViewParams,
 } from '../../src/utils/projection.js';
-import { order2nside, corners_nest, vec2ang, type V3 } from '@hscmap/healpix';
+import { order2nside, corners_nest, vec2ang, pixcoord2vec_nest, type V3 } from '@hscmap/healpix';
 import { thetaPhiToRadec } from '../../src/api/hips.js';
 
 const view = (over: Partial<ViewParams> = {}): ViewParams => ({
@@ -31,6 +33,99 @@ const view = (over: Partial<ViewParams> = {}): ViewParams => ({
   panOffsetX: 0,
   panOffsetY: 0,
   ...over,
+});
+
+describe('tile subdivision fixes wide-FOV ancestor-preview misregistration (B-b)', () => {
+  // Faithfully model the renderer's per-triangle affine texture map: a quad with
+  // screen corners [TL,TR,BR,BL] and image-UV [(0,0),(1,0),(1,1),(0,1)] is split
+  // into tris (0,1,2) and (0,2,3); a UV point is mapped by the affine of its tri.
+  const affineFill = (
+    sc: [number, number][],
+    u: number,
+    v: number
+  ): [number, number] => {
+    let A: [number, number], B: [number, number], C: [number, number];
+    let a: [number, number], b: [number, number], c: [number, number];
+    if (v <= u) { A = sc[0]!; B = sc[1]!; C = sc[2]!; a = [0, 0]; b = [1, 0]; c = [1, 1]; }
+    else { A = sc[0]!; B = sc[2]!; C = sc[3]!; a = [0, 0]; b = [1, 1]; c = [0, 1]; }
+    const det = (b[1] - c[1]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[1] - c[1]);
+    const l1 = ((b[1] - c[1]) * (u - c[0]) + (c[0] - b[0]) * (v - c[1])) / det;
+    const l2 = ((c[1] - a[1]) * (u - c[0]) + (a[0] - c[0]) * (v - c[1])) / det;
+    const l3 = 1 - l1 - l2;
+    return [l1 * A[0] + l2 * B[0] + l3 * C[0], l1 * A[1] + l2 * B[1] + l3 * C[1]];
+  };
+
+  const project = (v: ViewParams, vec: V3): [number, number] => {
+    const { theta, phi } = vec2ang(vec);
+    const { ra, dec } = thetaPhiToRadec(theta, phi);
+    return skyToCanvas(v, ra, dec);
+  };
+
+  // Max interior registration error (px) between the piecewise-affine mesh of n×n
+  // sub-quads and the TRUE gnomonic projection, over a grid of interior points.
+  const maxInteriorError = (v: ViewParams, nside: number, pix: number, n: number): number => {
+    const quads = tileSubQuads(n).map((q) => ({
+      uv: q.uv,
+      sc: tileImageCornerVectors(nside, pix, q.hpx).map((vec) => project(v, vec)) as [number, number][],
+    }));
+    let maxErr = 0;
+    for (let su = 1; su < 10; su++) {
+      for (let sv = 1; sv < 10; sv++) {
+        const u = su / 10, vv = sv / 10;
+        // truth: the tile's own HEALPix point at image-uv (u,vv) → sky → screen.
+        // The renderer's raster convention maps image-uv (u,v) → HEALPix frac (v,u).
+        const truth = project(v, pixcoord2vec_nest(nside, pix, vv, u));
+        // find containing sub-quad and its local uv
+        const i = Math.min(n - 1, Math.floor(u * n));
+        const j = Math.min(n - 1, Math.floor(vv * n));
+        const q = quads[j * n + i]!;
+        const lu = u * n - i, lv = vv * n - j;
+        const est = affineFill(q.sc, lu, lv);
+        const err = Math.hypot(est[0] - truth[0], est[1] - truth[1]);
+        if (err > maxErr) maxErr = err;
+      }
+    }
+    return maxErr;
+  };
+
+  it('a large low-order ancestor tile warps badly at n=1 and subdivision fixes it', () => {
+    // Order-2 tile (nside 4, ~15° across) previewed under a 30° FOV whose tangent
+    // point is OFFSET from the tile — the real ancestor-preview case where the tile
+    // extends far from the tangent and gnomonic non-affinity is worst (~10–45° band).
+    const nside = order2nside(2);
+    const pix = 40;
+    const c = pixcoord2vec_nest(nside, pix, 0.5, 0.5);
+    const { theta, phi } = vec2ang(c);
+    const { ra, dec } = thetaPhiToRadec(theta, phi);
+    const v = view({ ra: ra + 10, dec: dec + 6, fov: 30 });
+
+    const sc = tileImageCornerVectors(nside, pix).map((vec) => project(v, vec)) as [number, number][];
+    expect(tileSubdivision(sc)).toBeGreaterThan(1); // a wide tile must be subdivided
+
+    const err1 = maxInteriorError(v, nside, pix, 1);
+    const err2 = maxInteriorError(v, nside, pix, 2);
+    const err8 = maxInteriorError(v, nside, pix, 8);
+
+    // The single 2-triangle map misplaces interior features by many pixels — the bug.
+    expect(err1).toBeGreaterThan(10);
+    // Subdivision reduces the error monotonically and drives it sub-pixel. A
+    // reverted (un-subdivided) renderer stays at err1 and fails err8's bound.
+    expect(err2).toBeLessThan(err1);
+    expect(err8).toBeLessThan(err1 / 8);
+    expect(err8).toBeLessThan(1.5);
+  });
+
+  it('tileSubdivision: small screen quads → n=1 (zero cost), large → subdivided', () => {
+    // A ~150px on-screen tile (typical sharp target tile) is not subdivided.
+    const small: [number, number][] = [[100, 100], [250, 100], [250, 250], [100, 250]];
+    expect(tileSubdivision(small)).toBe(1);
+    // A tile spanning most of the canvas (a low-order preview) is subdivided.
+    const large: [number, number][] = [[-100, -100], [900, -100], [900, 800], [-100, 800]];
+    expect(tileSubdivision(large)).toBeGreaterThan(1);
+    // Degenerate/NaN corners (behind horizon) must not crash or over-subdivide.
+    const nan: [number, number][] = [[NaN, NaN], [0, 0], [10, 10], [0, 10]];
+    expect(tileSubdivision(nan)).toBe(1);
+  });
 });
 
 describe('projection: round-trip invariance', () => {

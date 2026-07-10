@@ -65,6 +65,64 @@ export function tileImageCornerVectors(
   return vecs;
 }
 
+/**
+ * How many sub-quads per side to split a tile into so that each sub-quad's screen
+ * edge is ≲ `maxSidePx`. A tile is texture-mapped with a per-triangle AFFINE
+ * transform, which is exact only where the gnomonic projection is locally linear.
+ * Across a small (target-order) tile the non-linearity is sub-pixel → n=1 (no
+ * cost). Across a large low-order ANCESTOR-PREVIEW tile (tens of degrees) a single
+ * affine map displaces interior features by many pixels — the wide-FOV
+ * misregistration bug — so it must be subdivided into a piecewise-affine grid.
+ */
+export function tileSubdivision(
+  screenCorners: readonly [number, number][],
+  maxSidePx = 220,
+  nMax = 8
+): number {
+  let maxLen = 0;
+  for (let i = 0; i < 4; i++) {
+    const a = screenCorners[i]!;
+    const b = screenCorners[(i + 1) % 4]!;
+    const len = Math.hypot(a[0] - b[0], a[1] - b[1]);
+    if (len > maxLen) maxLen = len;
+  }
+  if (!Number.isFinite(maxLen) || maxLen <= maxSidePx) return 1;
+  return Math.max(1, Math.min(nMax, Math.ceil(maxLen / maxSidePx)));
+}
+
+/**
+ * The n×n sub-quads of a tile, each with its fractional HEALPix corner coords
+ * (`hpx`, to feed `pixcoord2vec_nest`) and its fractional image-UV corners (`uv`,
+ * in [0,1]), both in the same [TL,TR,BR,BL] order `drawTile` uses. The HEALPix
+ * fractions are bilinearly interpolated from the tile's four corner fractions
+ * (default {@link TILE_RASTER_CORNERS}), so the mapping stays authoritative if
+ * that corner convention ever changes. Pure — unit-tested against skyToCanvas.
+ */
+export function tileSubQuads(
+  n: number,
+  cornerFracs: readonly [number, number][] = TILE_RASTER_CORNERS
+): { hpx: [number, number][]; uv: [number, number][] }[] {
+  const c = cornerFracs;
+  // Bilinear over the 4 corners, whose UV positions are TL(0,0) TR(1,0) BR(1,1) BL(0,1).
+  const bil = (u: number, v: number): [number, number] => {
+    const w0 = (1 - u) * (1 - v), w1 = u * (1 - v), w2 = u * v, w3 = (1 - u) * v;
+    return [
+      c[0]![0] * w0 + c[1]![0] * w1 + c[2]![0] * w2 + c[3]![0] * w3,
+      c[0]![1] * w0 + c[1]![1] * w1 + c[2]![1] * w2 + c[3]![1] * w3,
+    ];
+  };
+  const out: { hpx: [number, number][]; uv: [number, number][] }[] = [];
+  for (let j = 0; j < n; j++) {
+    for (let i = 0; i < n; i++) {
+      const u0 = i / n, u1 = (i + 1) / n, v0 = j / n, v1 = (j + 1) / n;
+      const uv: [number, number][] = [[u0, v0], [u1, v0], [u1, v1], [u0, v1]];
+      const hpx = uv.map(([u, v]) => bil(u, v)) as [number, number][];
+      out.push({ hpx, uv });
+    }
+  }
+  return out;
+}
+
 export interface ViewParams {
   /** view-center RA (deg) */
   ra: number;
