@@ -22,6 +22,35 @@ function stubImage(route: Route): Promise<void> {
 }
 const isTile = (url: string): boolean => /Norder\d+.*Npix\d+/.test(url);
 
+/**
+ * Block until `counter` stops increasing for `quietMs` (or `timeoutMs` elapses).
+ * Used to wait for a tile-loading wave to fully drain. The viewer fires all 48
+ * order-1 allsky-backdrop requests at once; the browser's 6-per-host connection
+ * queue then drains them over several seconds, so a request `event` can fire long
+ * after the load was initiated. Recording traffic before the wave quiesces would
+ * attribute those trailing requests to a later user action — a false positive.
+ */
+async function settleRequests(
+  page: Page,
+  counter: () => number,
+  quietMs = 800,
+  timeoutMs = 15000,
+): Promise<void> {
+  const start = Date.now();
+  let last = counter();
+  let lastChange = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    await page.waitForTimeout(100);
+    const now = counter();
+    if (now !== last) {
+      last = now;
+      lastChange = Date.now();
+    } else if (Date.now() - lastChange >= quietMs) {
+      return;
+    }
+  }
+}
+
 async function injectToken(page: Page): Promise<void> {
   // A non-JWT token: present (→ authenticated) but with no parseable expiry.
   await page.addInitScript(() => {
@@ -186,11 +215,26 @@ test.describe('Base auto-fallback', () => {
       return stubImage(route);
     });
 
+    // Count every DSS tile request from page load, so we can tell when the
+    // auto-fallback DSS layer has finished issuing its tiles + 48 allsky-backdrop
+    // requests (see settleRequests). Recording post-selection traffic before that
+    // wave drains would catch trailing DSS requests initiated by the DSS load, not
+    // by the Rubin selection — the historical flake in this test.
+    let dssTileCount = 0;
+    page.on('request', (req) => {
+      const url = req.url();
+      if (isTile(url) && url.includes('alasky.cds.unistra.fr')) dssTileCount++;
+    });
+
     await page.goto('/');
     // Let the initial auto phase settle (it will have fallen back to DSS).
     await expect(page.locator('.info-banner')).toBeVisible({ timeout: 15000 });
+    // Wait for the DSS load wave to fully quiesce so the baseline below is clean.
+    await settleRequests(page, () => dssTileCount);
 
     // Now the user explicitly selects Rubin — from here on, only Rubin tiles.
+    // Any DSS request past this quiesced baseline is genuinely caused by the
+    // selection (which would be the bug this test guards against).
     const postSelectHosts: string[] = [];
     page.on('request', (req) => {
       const url = req.url();
@@ -204,7 +248,9 @@ test.describe('Base auto-fallback', () => {
     await expect(page.locator('.error-overlay')).toContainText('Switch the Base layer', { timeout: 15000 });
 
     // Post-selection tile traffic goes to Rubin, never DSS.
-    await expect.poll(() => postSelectHosts.length, { timeout: 10000 }).toBeGreaterThan(0);
+    await expect
+      .poll(() => postSelectHosts.filter((h) => h === 'rubin').length, { timeout: 10000 })
+      .toBeGreaterThan(0);
     expect(postSelectHosts.includes('dss')).toBe(false);
   });
 });
