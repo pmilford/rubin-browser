@@ -9,7 +9,35 @@ and the project CLAUDE.md.
 > cross-section DONE (MVP single trace), #5 zoom perf DONE (ancestor preview +
 > memoization + fetch coalescing; LRU cap + allsky preview still open), and an
 > in-app **Offline demo** base layer now renders the generator's tiles with no
-> network (`src/data/offlineDataset.ts`). Remaining sub-items noted inline below.
+> network (`src/data/offlineDataset.ts`). The offline layer is now a MULTI-EPOCH +
+> MULTI-BAND browsable cube (`OfflineLayerControls.svelte`): scrub time, switch
+> g/r/i/z/y, blink, "Find a transient". Remaining sub-items noted inline below.
+
+## USER-REPORTED BUGS (2026-07-09, mid-session — triage next)
+
+- **B-a Authenticated but no Rubin data.** Token validates ("authenticated") yet
+  no Rubin tiles render. Suspects: silent Auto→DSS fallback masking the real
+  cause; DP0.2/DP1 namespace or HiPS path; token not reaching the Rubin host; or
+  genuine lack of data rights. Need a VISIBLE diagnosis (which host, which status)
+  rather than a silent degrade. Ties into the failure-mode checklist.
+- **B-b Zoom order-transition misregistration.** Around zoom/FOV ~10–45 the
+  sharp full-resolution redraw lands in a DIFFERENT location than the lower-res
+  (ancestor-preview) tiles "by a lot." Likely the ancestor-preview draws a large
+  low-order parent tile with the same 2-triangle affine texture map used for small
+  tiles; over a large angular extent gnomonic projection is very non-affine, so the
+  upscaled parent is warped/displaced vs. the properly-subdivided child tiles.
+  Fix candidates: subdivide ancestor quads, or only preview parents ≤N orders up.
+  Overlaps with the allsky-preview work (#5).
+- **B-c Cross-section sticky + endpoints don't track zoom.** Toggling the tool
+  off/on retains stale endpoints; endpoints don't move sensibly with zoom so one
+  ends up off-canvas and unadjustable. Re-seed the line to the current viewport on
+  entering the mode, and/or clamp handles into view / add a reset. (Endpoints are
+  stored as RA/Dec and reprojected, so they DO move with the sky — but a zoom-in
+  can push one off-screen with no way to grab it.)
+- **B-d Clicked-object identification.** The object readout on click seems
+  wrong/imprecise and should surface at least type + brightness of the nearest/
+  underlying object, ideally more (fetch richer info — SIMBAD/TAP/catalog lookup)
+  on click. Verify nearestObject hit-testing accuracy first.
 
 ## 1. Synthetic multi-time / multi-tile / multi-wavelength data source  ✅ generator done
 

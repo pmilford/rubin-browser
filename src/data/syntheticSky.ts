@@ -77,6 +77,15 @@ export interface SyntheticSkyConfig {
   epochsMjd: number[];
   /** Bands present in this sky, default all of {@link BANDS}. */
   bands?: Band[];
+  /**
+   * Per-source PSF FWHM range in arcseconds, default [0.7, 1.3] (Rubin seeing).
+   * The offline BROWSING dataset overrides this to a much wider beam so point
+   * sources actually cover a tile pixel (which is 12–80″ across at orders 4–6);
+   * at native seeing a 1″ source point-samples to nothing between pixel centres.
+   * Widening only broadens the blob — the model uses PEAK amplitude, so sources
+   * stay bright — and does not move the centroid, so tiling-geometry tests hold.
+   */
+  fwhmArcsecRange?: [number, number];
 }
 
 export interface SyntheticSky {
@@ -172,6 +181,8 @@ export function generateSyntheticSky(config: SyntheticSkyConfig): SyntheticSky {
   const raRange = config.raRange ?? [0, 360];
   const decRange = config.decRange ?? [-90, 90];
   const bands = config.bands ?? [...BANDS];
+  const fwhmArcsecRange = config.fwhmArcsecRange ?? [0.7, 1.3];
+  const [fwhmMin, fwhmMax] = fwhmArcsecRange;
   const full: Required<SyntheticSkyConfig> = {
     seed: config.seed,
     nSources: config.nSources,
@@ -179,6 +190,7 @@ export function generateSyntheticSky(config: SyntheticSkyConfig): SyntheticSky {
     decRange,
     epochsMjd: [...config.epochsMjd],
     bands: [...bands],
+    fwhmArcsecRange: [fwhmMin, fwhmMax],
   };
 
   const rand = mulberry32(config.seed);
@@ -204,7 +216,7 @@ export function generateSyntheticSky(config: SyntheticSkyConfig): SyntheticSky {
       baseMag[b] = rMag + BAND_COLOR_OFFSET[b] + (rand() - 0.5) * 0.1;
     }
 
-    const fwhmArcsec = 0.7 + rand() * 0.6; // seeing 0.7–1.3"
+    const fwhmArcsec = fwhmMin + rand() * (fwhmMax - fwhmMin); // seeing / beam width
 
     // Variability class: mostly constant, a few variables/transients/SNe.
     const vr = rand();

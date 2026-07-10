@@ -8,6 +8,9 @@
   import TokenDialog from '../components/TokenDialog.svelte';
   import ObjectBrowser from '../components/ObjectBrowser.svelte';
   import CrossSectionPlot from '../components/CrossSectionPlot.svelte';
+  import OfflineLayerControls from '../components/OfflineLayerControls.svelte';
+  import { OFFLINE_EPOCHS, OFFLINE_BANDS, brightestOfflineVariable } from '../data/offlineDataset.js';
+  import type { Band } from '../data/syntheticSky.js';
   import type { LineProfile } from '../utils/crossSection.js';
   import type { ScalingFunction, ColorMapName, InterpolationMethod, ViewerState, Epoch } from '../types/image.js';
   import { mjdToIso } from '../types/image.js';
@@ -100,6 +103,14 @@
       ? 'Cross-section: drag a line across the image to profile intensity'
       : 'Cross-section: off';
   }
+
+  // Offline synthetic cube browsing: independent time (epoch) and wavelength
+  // (band) axes. Only meaningful while the offline base layer is active; drive
+  // ImageViewer to re-synthesize tiles per (band, mjd).
+  let offlineBand = $state<Band>('r');
+  let offlineEpochIndex = $state(0);
+  let offlineBlinkPlaying = $state(false);
+  const offlineMjd = $derived(OFFLINE_EPOCHS[offlineEpochIndex] ?? OFFLINE_EPOCHS[0] ?? 60000);
 
   let baseLayerId = $state<'auto' | 'dss' | 'rubin' | 'offline'>('auto');
   const baseLayer = $derived(BASE_LAYERS.find((b) => b.id === baseLayerId) ?? BASE_LAYERS[0]);
@@ -381,6 +392,8 @@
       {showAlerts}
       {alertTypeMask}
       {crossSectionMode}
+      {offlineBand}
+      {offlineMjd}
       initialRa={62.0}
       initialDec={-37.0}
       initialZoom={3}
@@ -403,6 +416,33 @@
             <span class="base-resolved" aria-label="Resolved base layer">→ {activeBaseName}</span>
           {/if}
         </label>
+        {#if baseLayerId === 'offline'}
+          <OfflineLayerControls
+            epochs={OFFLINE_EPOCHS}
+            bands={OFFLINE_BANDS}
+            epochIndex={offlineEpochIndex}
+            band={offlineBand}
+            playing={offlineBlinkPlaying}
+            onEpochChange={(i) => {
+              offlineEpochIndex = i;
+              statusMessage = `Offline epoch ${i + 1}/${OFFLINE_EPOCHS.length}: MJD ${offlineMjd.toFixed(0)} (${offlineBand})`;
+            }}
+            onBandChange={(b) => {
+              offlineBand = b;
+              statusMessage = `Offline band: ${b} (MJD ${offlineMjd.toFixed(0)})`;
+            }}
+            onPlayStateChange={(p) => { offlineBlinkPlaying = p; }}
+            onFindTransient={() => {
+              const t = brightestOfflineVariable(offlineBand);
+              offlineEpochIndex = t.brightEpochIndex;
+              imageViewerRef?.panTo(t.ra, t.dec);
+              imageViewerRef?.setZoom(7);
+              currentRa = t.ra;
+              currentDec = t.dec;
+              statusMessage = `Jumped to synthetic transient at RA ${t.ra.toFixed(2)}°, Dec ${t.dec.toFixed(2)}° — blink epochs to watch it fade`;
+            }}
+          />
+        {/if}
         {#each surveyOverlays as ov (ov.survey.id)}
           <span class="layer-chip">
             {ov.survey.name}

@@ -35,7 +35,8 @@
     activeBaseLabel,
     type BaseMode,
   } from '../utils/baseLayer.js';
-  import { offlineTileRGBA, OFFLINE_TILE_SIZE } from '../data/offlineDataset.js';
+  import { offlineTileRGBA, OFFLINE_TILE_SIZE, OFFLINE_MJD } from '../data/offlineDataset.js';
+  import type { Band } from '../data/syntheticSky.js';
   import { constellationFor } from '../utils/constellation.js';
   import { cardinalDirection, formatSeparation } from '../utils/skyGeom.js';
   import { nearestObject } from '../data/objects.js';
@@ -63,6 +64,8 @@
     showAlerts = false,
     alertTypeMask = 0x1f,
     crossSectionMode = false,
+    offlineBand = 'r' as Band,
+    offlineMjd = OFFLINE_MJD,
     onViewerStateChange,
     onBaseResolved,
     onProfileChange,
@@ -99,6 +102,10 @@
     /** When true, the viewer is in cross-section mode: dragging draws/edits a
      *  line profile instead of panning the sky. */
     crossSectionMode?: boolean;
+    /** OFFLINE mode only: wavelength band to synthesize (g/r/i/z/y). */
+    offlineBand?: Band;
+    /** OFFLINE mode only: epoch (MJD) to synthesize — drives light curves + noise. */
+    offlineMjd?: number;
     onViewerStateChange?: (state: ViewerState) => void;
     /** Fired with the human label of the actually-resolved base survey (reflects auto-fallback). */
     onBaseResolved?: (label: string) => void;
@@ -177,8 +184,27 @@
   let errorMessage = $state('');
   let errorDismissTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // Tile cache: "order-pixelIndex" -> HTMLImageElement
+  // Tile cache: tileKey(order,pixelIndex) -> HTMLImageElement
   const tileCache = new Map<string, HTMLImageElement>();
+
+  // Whether the active base is the OFFLINE synthetic layer. When offline, base
+  // tile-cache keys are namespaced by (band, mjd) so different epochs/bands never
+  // collide AND already-synthesized epochs stay cached for instant blinking.
+  const offlineActive = $derived(isOfflineUrl(resolvedBaseUrl));
+
+  // Signature of the currently-displayed base layer for render-memo keys. In
+  // offline mode it folds in band+mjd so blinking to an ALREADY-CACHED epoch (no
+  // new tile load → no contentVersion bump) still invalidates the memo and
+  // repaints. Empty for network layers (their identity is already in the cache).
+  const layerSignature = $derived(offlineActive ? `off|${offlineBand}|${offlineMjd}` : '');
+
+  /** Cache key for a BASE tile. Offline tiles are namespaced by band+mjd so the
+   *  same (order,pix) at a different epoch/band is a distinct cache entry. */
+  function tileKey(order: number, pixelIndex: number): string {
+    return offlineActive
+      ? `off|${offlineBand}|${offlineMjd}|${order}-${pixelIndex}`
+      : `${order}-${pixelIndex}`;
+  }
 
   // Bumped whenever a tile finishes loading, so the post-processing memo (below)
   // knows the composited content changed even though ra/dec/fov didn't.
@@ -419,7 +445,7 @@
 
   /** Ensure the scratch grayscale raster is current; false if pixels are unreadable. */
   function ensureScratch(): boolean {
-    const key = `${ra}|${dec}|${fov}|${zoomLevel}|${canvasWidth}x${canvasHeight}|${contentVersion}`;
+    const key = `${ra}|${dec}|${fov}|${zoomLevel}|${canvasWidth}x${canvasHeight}|${layerSignature}|${contentVersion}`;
     if (key === xsScratchKey && xsScratchData) return true;
     if (!xsScratch) {
       xsScratch = document.createElement('canvas');
@@ -532,7 +558,7 @@
     }
     if (!offscreenCtx) return;
 
-    const key = `${ra}|${dec}|${fov}|${zoomLevel}|${canvasWidth}x${canvasHeight}|${scaling}|${colorMap}|${invert}|${blackPoint}|${whitePoint}|${contrast}|${bias}|${contentVersion}`;
+    const key = `${ra}|${dec}|${fov}|${zoomLevel}|${canvasWidth}x${canvasHeight}|${scaling}|${colorMap}|${invert}|${blackPoint}|${whitePoint}|${contrast}|${bias}|${layerSignature}|${contentVersion}`;
     if (key !== ppLastKey) {
       ppLastKey = key;
       // Draw tiles to offscreen (no pan offset — we composite with offset below).
@@ -569,11 +595,11 @@
     // simply overwrites it. Same drawTile machinery → identical orientation.
     const drawnAncestors = new Set<string>();
     for (const tile of visibleTiles) {
-      if (isLoaded(`${tile.order}-${tile.pixelIndex}`)) continue;
+      if (isLoaded(tileKey(tile.order, tile.pixelIndex))) continue;
       for (let k = 1; k <= tile.order; k++) {
         const ancestorOrder = tile.order - k;
         const ancestorPix = tile.pixelIndex >> (2 * k);
-        const aKey = `${ancestorOrder}-${ancestorPix}`;
+        const aKey = tileKey(ancestorOrder, ancestorPix);
         if (drawnAncestors.has(aKey)) break; // already painted this ancestor
         if (isLoaded(aKey)) {
           drawnAncestors.add(aKey);
@@ -586,7 +612,7 @@
     // Pass 2 — sharp target-order tiles on top.
     const drawn = new Set<string>();
     for (const tile of visibleTiles) {
-      const cacheKey = `${tile.order}-${tile.pixelIndex}`;
+      const cacheKey = tileKey(tile.order, tile.pixelIndex);
       if (drawn.has(cacheKey)) continue;
       drawn.add(cacheKey);
       if (isLoaded(cacheKey)) {
@@ -802,7 +828,7 @@
     };
 
     for (const tile of visibleTiles) {
-      const cacheKey = `${tile.order}-${tile.pixelIndex}`;
+      const cacheKey = tileKey(tile.order, tile.pixelIndex);
       if (tileCache.has(cacheKey)) continue;
 
       loadAttempts++;
@@ -829,7 +855,7 @@
       if (offline) {
         // Synthesize the tile locally from the bundled synthetic sky — no network.
         try {
-          const rgba = offlineTileRGBA(tile.order, tile.pixelIndex);
+          const rgba = offlineTileRGBA(tile.order, tile.pixelIndex, offlineBand, offlineMjd);
           const oc = document.createElement('canvas');
           oc.width = OFFLINE_TILE_SIZE;
           oc.height = OFFLINE_TILE_SIZE;
@@ -1476,6 +1502,8 @@
     void contentVersion;
     void canvasWidth;
     void canvasHeight;
+    void offlineBand; // offline epoch/band change repaints tiles → re-sample
+    void offlineMjd;
     sampleCurrentProfile();
   });
 
@@ -1511,6 +1539,22 @@
     for (const key of tileCache.keys()) {
       if (!key.startsWith('overlay-')) tileCache.delete(key);
     }
+    clearError();
+    scheduleRender();
+    loadTiles();
+  });
+
+  // Offline band/epoch change: re-synthesize tiles for the new (band, mjd). We do
+  // NOT clear the cache — offline keys are namespaced by band+mjd (see tileKey),
+  // so previously-visited epochs stay cached and blinking back to them is instant.
+  // Guarded so it never fires for network layers or on the initial mount.
+  let lastOfflineSig = '';
+  $effect(() => {
+    const sig = layerSignature;
+    if (!offlineActive) { lastOfflineSig = ''; return; }
+    if (lastOfflineSig === '') { lastOfflineSig = sig; return; } // first offline frame handled by base-url effect
+    if (sig === lastOfflineSig) return;
+    lastOfflineSig = sig;
     clearError();
     scheduleRender();
     loadTiles();
@@ -1608,10 +1652,16 @@
       }
       // Safety: ensure FOV is sane after resize
       fov = zoomToFov(zoomLevel);
-      // Reset offscreen canvas so it gets recreated at new size
-      if (offscreenCanvas) {
+      // Resize the post-processing offscreen ONLY when the size actually changed:
+      // assigning canvas.width/height clears the bitmap to black even when the
+      // value is unchanged, and since the post-processing composite is memoized on
+      // `ppLastKey`, a cleared-but-not-invalidated offscreen would be re-composited
+      // black on the next render that doesn't otherwise change (e.g. returning to a
+      // cached tile set). So guard the assignment AND invalidate the memo with it.
+      if (offscreenCanvas && (offscreenCanvas.width !== w || offscreenCanvas.height !== h)) {
         offscreenCanvas.width = w;
         offscreenCanvas.height = h;
+        ppLastKey = '';
       }
       scheduleRender();
     }
