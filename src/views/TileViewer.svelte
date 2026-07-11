@@ -23,6 +23,7 @@
   import CatalogTable from '../components/CatalogTable.svelte';
   import ColorMagnitudeDiagram from '../components/ColorMagnitudeDiagram.svelte';
   import { fetchGaiaCone, type GaiaCatalog } from '../api/gaia.js';
+  import { fetchRubinObjects, RUBIN_OBJECT_DEFAULT_RADIUS_DEG } from '../api/rubinObjects.js';
   import { gaiaToCatalogSet, type CatalogSet } from '../data/catalog.js';
   import { lensCatalogSet } from '../data/lenses.js';
   import SurfacePlot from '../components/SurfacePlot.svelte';
@@ -473,6 +474,77 @@
     imageViewerRef?.panTo(ra, dec);
     const rec = lensCatalog.records[i]!;
     statusMessage = `Lens: ${rec['Name']} — ${rec['Type']} · z_lens ${rec['z_lens']} · z_source ${rec['z_source']}`;
+  }
+
+  // Rubin DP1 Object catalog overlay + linked table (feature 128). The token-gated
+  // sibling of the Gaia overlay above: a LIVE cone search of dp1.Object via TAP,
+  // available only when a Rubin base is active AND the session is authenticated
+  // (fetchRubinObjects throws an honest sign-in error otherwise). An INDEPENDENT
+  // layer — it can be shown alongside Gaia/lenses without wiping them. Clicking a
+  // row recenters the view and links the marker.
+  let showRubinObjects = $state(false);
+  let rubinCatalog = $state<CatalogSet | null>(null);
+  let rubinObjStatus = $state<string | null>(null);
+  let rubinObjLoading = $state(false);
+  let selectedRubinIndex = $state(-1);
+
+  async function loadRubinObjects() {
+    rubinObjLoading = true;
+    rubinCatalog = null;
+    selectedRubinIndex = -1;
+    rubinObjStatus = `Querying Rubin DP1 Objects near ${currentRa.toFixed(3)}, ${currentDec.toFixed(3)}…`;
+    try {
+      const set = await fetchRubinObjects({
+        ra: currentRa,
+        dec: currentDec,
+        radiusDeg: RUBIN_OBJECT_DEFAULT_RADIUS_DEG,
+        maxRows: 2000,
+      });
+      rubinCatalog = set;
+      rubinObjStatus =
+        set.count > 0
+          ? null
+          : 'No Rubin DP1 Objects in this cone (DP1 covers only a few small fields — try a DP1 field centre).';
+      statusMessage = `Rubin DP1 Object: ${set.count.toLocaleString()} objects near the view centre`;
+    } catch (e) {
+      rubinObjStatus = e instanceof Error ? e.message : 'Rubin Object query failed.';
+    } finally {
+      rubinObjLoading = false;
+    }
+  }
+
+  function toggleRubinObjects() {
+    showRubinObjects = !showRubinObjects;
+    if (!showRubinObjects) {
+      statusMessage = 'Rubin DP1 Object catalog: off';
+      return;
+    }
+    // Prerequisites: a Rubin base must be active AND the session authenticated.
+    // Surface the missing prerequisite instead of the toggle silently doing
+    // nothing (mirrors the light-curve toggle's explain-the-prerequisite behaviour).
+    if (!rubinActive || !authenticated) {
+      rubinCatalog = null;
+      selectedRubinIndex = -1;
+      const why = !rubinActive
+        ? 'switch the base layer to Rubin (DP1) — the Object catalog is DP1 data'
+        : 'sign in with an RSP token that has DP1 data rights';
+      rubinObjStatus = `No Rubin Object source — ${why}.`;
+      statusMessage = `Rubin DP1 Object: no source — ${why}.`;
+      return;
+    }
+    if (!rubinCatalog) void loadRubinObjects();
+    statusMessage = 'Rubin DP1 Object catalog: on';
+  }
+
+  function handleRubinSelect(i: number) {
+    if (!rubinCatalog || i < 0 || i >= rubinCatalog.count) return;
+    selectedRubinIndex = i;
+    const ra = rubinCatalog.ra[i]!;
+    const dec = rubinCatalog.dec[i]!;
+    currentRa = ra;
+    currentDec = dec;
+    imageViewerRef?.panTo(ra, dec);
+    statusMessage = `Rubin Object ${rubinCatalog.label[i]} at ${ra.toFixed(4)}, ${dec.toFixed(4)}`;
   }
 
   // Magnifier loupe of the pixels under the cursor.
@@ -946,6 +1018,8 @@
       {showPmVectors}
       lensCatalog={showLenses ? lensCatalog : null}
       {selectedLensIndex}
+      rubinCatalog={showRubinObjects ? rubinCatalog : null}
+      {selectedRubinIndex}
       {rulerMode}
       onRulerChange={handleRulerChange}
       {rubinDataset}
@@ -1173,6 +1247,17 @@
 
         <button
           class="xsection-toggle"
+          class:on={showRubinObjects}
+          aria-pressed={showRubinObjects}
+          aria-label="Toggle Rubin Object catalog"
+          title="Overlay live Rubin DP1 dp1.Object sources near the view centre + a linked table (requires a Rubin base + an RSP token with DP1 data rights)"
+          onclick={toggleRubinObjects}
+        >
+          ✚ Rubin Obj (DP1){#if showRubinObjects && rubinCatalog} ({rubinCatalog.count.toLocaleString()}){/if}
+        </button>
+
+        <button
+          class="xsection-toggle"
           class:on={rulerMode}
           aria-pressed={rulerMode}
           aria-label="Toggle distance ruler"
@@ -1331,7 +1416,7 @@
         <span class="ai-note">synthetic demo event</span>
       </div>
     {/if}
-    {#if uiVisible && (identifyInfo || simbadQuery || showCatalog || showLenses || crossSectionMode || surfaceMode || lightCurveMode || cutoutOpen || rgbOpen || (diffMode && baseLayerId === 'offline'))}
+    {#if uiVisible && (identifyInfo || simbadQuery || showCatalog || showLenses || showRubinObjects || crossSectionMode || surfaceMode || lightCurveMode || cutoutOpen || rgbOpen || (diffMode && baseLayerId === 'offline'))}
       <!-- Right-side stack: the object-ID popup sits ABOVE the analysis plots so
            they never overlap. -->
       <div class="right-stack">
@@ -1373,6 +1458,16 @@
             title="Gravitational lenses"
             onSelect={handleLensSelect}
             onClose={toggleLenses}
+          />
+        {/if}
+        {#if showRubinObjects}
+          <CatalogTable
+            catalog={rubinCatalog}
+            selectedIndex={selectedRubinIndex}
+            title="Rubin Object (DP1)"
+            status={rubinObjLoading ? 'Loading…' : rubinObjStatus}
+            onSelect={handleRubinSelect}
+            onClose={toggleRubinObjects}
           />
         {/if}
         {#if diffMode && baseLayerId === 'offline'}

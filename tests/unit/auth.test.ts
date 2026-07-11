@@ -156,6 +156,12 @@ describe('Auth Module', () => {
           }),
         })
       );
+      // Reconciliation (TODO 128): identity is validated against the Gafaelfawr
+      // user-info endpoint — NOT the old, wrong `/api/dp1/query` TAP route (which
+      // failed for valid tokens and conflated auth with DP1 data rights).
+      const calledUrl = vi.mocked(fetch).mock.calls[0]![0] as string;
+      expect(calledUrl).not.toContain('/api/dp1/query');
+      expect(calledUrl).not.toContain('/api/dp1');
     });
 
     it('returns false when API responds not ok', async () => {

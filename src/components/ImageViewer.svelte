@@ -101,6 +101,8 @@
     showPmVectors = false,
     lensCatalog = null,
     selectedLensIndex = -1,
+    rubinCatalog = null,
+    selectedRubinIndex = -1,
     rulerMode = false,
     onRulerChange,
     offlineBand = 'r' as Band,
@@ -170,6 +172,12 @@
     lensCatalog?: CatalogSet | null;
     /** Index of the selected lens (highlighted marker), or -1. */
     selectedLensIndex?: number;
+    /** Rubin DP1 `dp1.Object` cone-search overlay (feature 128) — the token-gated
+     *  sibling of the Gaia `catalog` layer, an INDEPENDENT layer drawn as square
+     *  markers so it reads differently from Gaia (round) and lenses (diamond). */
+    rubinCatalog?: CatalogSet | null;
+    /** Index of the selected Rubin Object (highlighted marker), or -1. */
+    selectedRubinIndex?: number;
     /** When true, dragging measures a great-circle distance instead of panning. */
     rulerMode?: boolean;
     /** Fired with the current ruler measurement (or null when cleared). */
@@ -761,6 +769,7 @@
     renderCoverage();
     renderCatalog();
     renderLensCatalog();
+    renderRubinCatalog();
     renderAlerts();
     renderCrossSection();
     renderRuler();
@@ -903,6 +912,48 @@
       ctx.fillStyle = selected ? '#fff6b0' : 'rgba(255,214,140,0.95)';
       ctx.fillText(label, lx, y);
       ctx.lineWidth = 1.4;
+    }
+    ctx.restore();
+  }
+
+  /**
+   * Draw the Rubin DP1 `dp1.Object` cone-search overlay (feature 128) as SQUARE
+   * magenta markers — a distinct shape from the round Gaia markers
+   * ({@link renderCatalog}) and the gold lens diamonds ({@link renderLensCatalog}),
+   * so the token-gated Rubin Object layer, the public Gaia layer, and the lens
+   * layer can all be shown at once without any one being mistaken for another. The
+   * selected object gets a bright yellow ring + crosshair. Objects off-canvas or on
+   * the far hemisphere (non-finite projection) are skipped.
+   */
+  function renderRubinCatalog() {
+    if (!ctx || !rubinCatalog || rubinCatalog.count === 0) return;
+    const view = currentView();
+    ctx.save();
+    ctx.lineWidth = 1.2;
+    for (let i = 0; i < rubinCatalog.count; i++) {
+      const [x, y] = skyToCanvas(view, rubinCatalog.ra[i]!, rubinCatalog.dec[i]!);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      if (x < -8 || y < -8 || x > canvasWidth + 8 || y > canvasHeight + 8) continue;
+
+      const selected = i === selectedRubinIndex;
+      const s = selected ? 5 : 3.5; // half-side of the square marker
+      ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+      ctx.lineWidth = 2.4;
+      ctx.strokeRect(x - s, y - s, s * 2, s * 2);
+      ctx.fillStyle = selected ? '#ffdcff' : 'rgba(230,90,230,0.9)';
+      ctx.fillRect(x - s, y - s, s * 2, s * 2);
+
+      if (selected) {
+        ctx.strokeStyle = '#ff3';
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        ctx.arc(x, y, s + 4, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(x - s - 8, y); ctx.lineTo(x - s - 2, y);
+        ctx.moveTo(x + s + 2, y); ctx.lineTo(x + s + 8, y);
+        ctx.stroke();
+      }
     }
     ctx.restore();
   }
@@ -1097,6 +1148,8 @@
     void showPmVectors;
     void lensCatalog;
     void selectedLensIndex;
+    void rubinCatalog;
+    void selectedRubinIndex;
     scheduleRender();
   });
 
