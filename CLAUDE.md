@@ -7,8 +7,12 @@ instead of reading its docs**: the wrong TAP endpoint (`/api/dp1` vs
 `/api/tap/sync`), the UWS 303-redirect CORS failure, a guessed SODA cutout
 endpoint, `ForcedSource` cone-searched by coordinates (Rubin requires querying by
 `objectId`), a "dangerous" `ORDER BY … TOP` on `DiaSource`, opaque `gt-` tokens
-treated as JWTs, and no `429`/`Retry-After` handling. Every one was avoidable by
-reading the docs first. **The process, not the individual bug, is what matters.**
+treated as JWTs, no `429`/`Retry-After` handling, and — the biggest — **the whole
+TAP client requesting `FORMAT=json` and calling `resp.json()` when the RSP TAP
+service only ever returns VOTable `binary2` (and an EMPTY body for `FORMAT=json`)**,
+which broke Rubin Objects, light curves, DIA alerts, and cutout discovery at once.
+Every one was avoidable by reading the docs / probing the real endpoint first.
+**The process, not the individual bug, is what matters.**
 
 Before writing (or substantially changing) any client for an external API,
 service, library, or tool:
@@ -34,6 +38,31 @@ service, library, or tool:
 4. **Fold those findings into the spec's data-flow + failure-modes** (below), and
    **encode the REAL response shape as a regression fixture** (a verbatim slice of
    the live response, not a hand-invented mock), then code.
+
+### A path you CANNOT validate against the real service is NOT done — it is PROVISIONAL
+
+This is the rule that was missing. Every Rubin TAP feature (Objects, light curves,
+DIA, cutout discovery) shipped "DONE (CI-unverified, token-gated)" and was in fact
+**broken end-to-end** — because it was only ever run against a hand-invented JSON
+mock. "Done with a caveat" let a wrong response-shape assumption ride for a whole
+session. So:
+
+- **Never mark a real-service path DONE, and never write a mock that INVENTS a
+  response shape, without a captured real response.** If you cannot obtain one
+  (no token / no access), the client is **PROVISIONAL/UNVALIDATED** — say so plainly
+  in the status and the code, do NOT claim it works, and prefer a shape derived from
+  the service's published schema/spec over an imagined one. A hand-invented mock is
+  worse than no test: it manufactures false confidence.
+- **When access DOES become available (e.g. the user provides a token), the FIRST
+  action is to run the real path and reconcile — before any new work.** Probe the
+  endpoint (`curl` with the token: status, content-type, the ACTUAL body), capture a
+  verbatim fixture, and fix whatever the mock hid. `npm run test:live`
+  (`RSP_TOKEN=… `, see `tests/ui/live-dp1-token.spec.ts`) is the standing gate for
+  the token-gated DP1 UI paths; run it whenever a token is in hand.
+- **Assume nothing about a response format from a sibling service.** JSON output is
+  common (Gaia/GAVO) but is NOT universal: the RSP CADC TAP returns **VOTable
+  `binary2` only** and an empty body for `FORMAT=json`. Confirm content-type + the
+  first bytes of the REAL body before choosing `resp.json()` vs `resp.text()`.
 
 Rubin/IVOA specifics and per-API limits are recorded in `docs/rubin-api-usage.md`
 — read it before touching `src/api/*`, and keep it current when you learn more.

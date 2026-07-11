@@ -120,6 +120,26 @@ Endpoint: `https://data.lsst.cloud/api/tap` (sync `/sync`, async `/async`). DP1
 catalogs live in the `dp1` **schema** (ADQL), not a URL path. Scope: `read:tap`
 ([rsp api](https://rsp.lsst.io/guides/api/index.html)).
 
+> **RESPONSE FORMAT (VALIDATED LIVE 2026-07, authenticated DP1 token):** the sync
+> endpoint **ALWAYS returns a VOTable** —
+> `content-type: application/x-votable+xml; serialization=binary2` — and IGNORES the
+> `FORMAT`/`RESPONSEFORMAT` param (csv/tsv/votable all yield binary2). **`FORMAT=json`
+> returns an EMPTY 200 body — JSON output is NOT supported.** Parse VOTable, never
+> JSON (`src/api/votable.ts`; BINARY2 = base64 stream, null-mask per row, big-endian
+> per FIELD datatype; TAP_SCHEMA + async results come back as TABLEDATA). 64-bit
+> `long` ids (`objectId`, `diaSourceId`) must be kept as decimal STRINGS (> 2^53).
+> The 303 sync→`/run` redirect must be followed (dev `/rsp` proxy `followRedirects`).
+> **Verified DP1 tables:** Object, Source, ForcedSource, ForcedSourceOnDiaObject,
+> DiaObject, DiaSource, Visit, CcdVisit, CoaddPatches, SSObject, SSSource, MPCORB.
+> **Light-curve join (verified):** `dp1.ForcedSource` has `objectId, band, visit,
+> psfFlux[Err], psfDiffFlux[Err]`; `dp1.Visit` has `visit, expMidptMJD` → join
+> `fs.visit = v.visit`. **DIA (verified):** `dp1.DiaSource` has `ra, dec,
+> midpointMjdTai, psfFlux, band, diaSourceId`. **Cutout (verified):** `ivoa.ObsCore`
+> `obs_collection='LSST.DP1'`, `dataproduct_subtype='lsst.deep_coadd'` → `access_url`
+> DataLink `ID` → `GET /api/cutout/sync?ID=<id>&POS=CIRCLE ra dec radiusDeg` → FITS
+> (the ObsCore `ID` is accepted by SODA directly; no DataLink-doc hop needed).
+> Regenerate the committed fixture with the curl in `tests/regression/votable.regression.test.ts`.
+
 ### (a) Documented limits / recommendations
 
 - **Sync vs async:** categorical, not numeric — async for any table data, sync
@@ -161,6 +181,7 @@ catalogs live in the `dp1` **schema** (ADQL), not a URL path. Scope: `read:tap`
 | Item | Status |
 |---|---|
 | Endpoint / schema (`/api/tap/sync`, `dp1.*`) | ✅ Correct |
+| **Response format** | ✅ **FIXED** — was requesting `FORMAT=json` + `resp.json()` (empty body → "empty or unparseable JSON body"), which broke Objects/light-curves/DIA/cutout-discovery live. Now parses VOTable binary2/TABLEDATA via `votable.ts`. Real fixture: `tests/fixtures/dp1-object-cone.vot.xml`. The JSON path was only ever "tested" against a hand-invented mock — the process failure, not just the bug |
 | Sync vs async | ⚠️ **All live callers use sync `query()`**; `queryAsync()` exists but is **dead code** (only referenced in `tap.ts` + its test) |
 | MAXREC | `query()` sends `MAXREC=10000`; callers pass 10k (light curve), 20k (DIA), 100 (obscore). ⚠️ `queryAsync` sends `MAXREC=0` (unlimited) |
 | `SELECT *` | ✅ live clients (`obscore`, `lightcurve`, `diaSource`, `rubinObjects`) name columns. ✅ the dead `buildConeSearch()` `SELECT TOP N *` has been **DELETED** from `tap.ts` (was unused — only self-referenced + its test), so the anti-pattern can't be revived. ✅ **DONE (TODO 128)** — the DP0.2→DP1 reconciliation shipped as `rubinObjects.buildObjectConeSearch`: an explicit-column `dp1.Object` cone search (`objectId, coord_ra, coord_dec, refBand, {ugrizy}_psfMag, r_cModelMag`; columns verified against sdm_schemas `dp1.yaml`), spatial `CONTAINS(POINT(coord_ra,coord_dec), CIRCLE(...))`, radius in degrees, NO `ORDER BY`, auth-gated `fetchRubinObjects` |
