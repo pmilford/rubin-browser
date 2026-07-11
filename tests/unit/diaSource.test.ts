@@ -272,6 +272,52 @@ describe('fetchDiaAlerts', () => {
     expect(as.time[0]).toBeCloseTo(60001, 3);
   });
 
+  // Kills a silent-truncation impl: a capped/overflowed field MUST be flagged so
+  // the UI never presents an arbitrary subset (no ORDER BY) as the whole field.
+  it('flags truncated when the server overflows OR the row count hits the cap', async () => {
+    vi.mocked(isAuthenticated).mockReturnValue(true);
+
+    // (a) Server-side MAXREC overflow → truncated regardless of row count.
+    vi.mocked(query).mockResolvedValueOnce({
+      status: 'overflow',
+      rowCount: 2,
+      columns: [],
+      rows: [
+        { ra: 1, dec: 1, mjd: 60000, flux: 100 },
+        { ra: 2, dec: 2, mjd: 60001, flux: 100 },
+      ],
+    });
+    expect((await fetchDiaAlerts({ ...params, maxRows: 10000 })).truncated).toBe(true);
+
+    // (b) ADQL TOP cap hit (rowCount === cap) → truncated even if status says OK.
+    vi.mocked(query).mockResolvedValueOnce({
+      status: 'completed',
+      rowCount: 2,
+      columns: [],
+      rows: [
+        { ra: 1, dec: 1, mjd: 60000, flux: 100 },
+        { ra: 2, dec: 2, mjd: 60001, flux: 100 },
+      ],
+    });
+    expect((await fetchDiaAlerts({ ...params, maxRows: 2 })).truncated).toBe(true);
+
+    // (c) A complete result under the cap is NOT flagged.
+    vi.mocked(query).mockResolvedValueOnce(
+      tapResult([{ ra: 1, dec: 1, mjd: 60000, flux: 100 }])
+    );
+    expect((await fetchDiaAlerts({ ...params, maxRows: 10000 })).truncated).toBeFalsy();
+  });
+
+  // Kills an impl that ignores the epoch window and always pulls the whole field.
+  it('pushes the epoch window into the ADQL when tMin/tMax are given', async () => {
+    vi.mocked(isAuthenticated).mockReturnValue(true);
+    vi.mocked(query).mockResolvedValue(tapResult([{ ra: 1, dec: 1, mjd: 60050, flux: 100 }]));
+    await fetchDiaAlerts({ ...params, tMinMjd: 60040, tMaxMjd: 60060 });
+    const sentAdql = vi.mocked(query).mock.calls[0]![0] as string;
+    expect(sentAdql).toContain('ds.midpointMjdTai >= 60040');
+    expect(sentAdql).toContain('ds.midpointMjdTai <= 60060');
+  });
+
   // Empty field is honest data, not an error.
   it('returns a valid empty AlertSet (count 0) on an empty result', async () => {
     vi.mocked(isAuthenticated).mockReturnValue(true);

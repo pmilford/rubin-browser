@@ -37,6 +37,13 @@ export interface AlertSet {
   mag: Float32Array; // brightness magnitude (smaller = brighter)
   time: Float32Array; // detection epoch, Modified Julian Date (MJD)
   id: Uint32Array;
+  /**
+   * True when the source truncated the result to a row cap — i.e. the field has
+   * MORE detections than are in this set (a spatially-arbitrary subset, since the
+   * DIA query has no ORDER BY). Set only by the live DIA fetch; the synthetic
+   * generator never truncates and leaves this undefined. Callers must surface it.
+   */
+  truncated?: boolean;
 }
 
 /**

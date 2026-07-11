@@ -39,8 +39,16 @@ import type { TapQueryResult } from '../types/catalog.js';
  */
 export const DIA_DEFAULT_ALERT_TYPE: AlertType = AlertType.Unknown;
 
-/** Default row cap for a DIA cone query. */
-export const DIA_DEFAULT_MAX_ROWS = 20000;
+/**
+ * Default row cap for a DIA cone query. A 1-deg DP1 field can hold ~250k
+ * detections (a live COUNT over EDFS returned 257,578), far more than an overlay
+ * can usefully draw; the RSP TAP sync endpoint serves up to ~200k per request.
+ * 50k bounds the payload (~2.5 MB) while covering most fields; when a field
+ * exceeds it the fetch flags {@link AlertSet.truncated} so the UI says so and the
+ * user can narrow the epoch window (which re-queries server-side) to get all of
+ * a slice rather than an arbitrary subset of the whole.
+ */
+export const DIA_DEFAULT_MAX_ROWS = 50000;
 
 export interface DiaSourceQueryParams {
   /** Right ascension of the cone centre, degrees (ICRS). */
@@ -284,5 +292,13 @@ export async function fetchDiaAlerts(params: DiaSourceQueryParams): Promise<Aler
 
   // Empty result is a legitimate answer (DP1 covers only a few small fields), not
   // an error — return a valid empty AlertSet so the UI shows an honest "none here".
-  return parseDiaSources(result);
+  const set = parseDiaSources(result);
+
+  // Flag truncation so the overlay never presents a partial field as complete.
+  // The query has no ORDER BY, so a capped result is a spatially-ARBITRARY subset:
+  // 'overflow' means the server hit MAXREC; rowCount === cap means the ADQL TOP
+  // cap was reached. Either way there are more detections than are shown.
+  const cap = params.maxRows ?? DIA_DEFAULT_MAX_ROWS;
+  set.truncated = result.status === 'overflow' || result.rowCount >= cap;
+  return set;
 }

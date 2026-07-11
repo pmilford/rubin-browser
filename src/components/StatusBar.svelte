@@ -92,7 +92,7 @@
     <span class="pixel" title="Pixel intensity value">Val: {pixelValue.toExponential(3)}</span>
   {/if}
   {#if message}
-    <span class="message">{message}</span>
+    <span class="message" aria-label="Status message">{message}</span>
   {/if}
 </div>
 

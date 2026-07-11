@@ -178,6 +178,13 @@ test.describe('LIVE Rubin DP1 (requires RSP_TOKEN with DP1 rights)', () => {
       alertToggle,
       `Live DIA returned no detections over EDFS. RSP errors: ${rspFailures().join(' | ') || 'none'}`
     ).toContainText(/DIA,\s*[1-9][\d,]*/, { timeout: 30000 });
+
+    // EDFS holds ~257k detections (a live COUNT), far above the 50k cap, so the
+    // fetch MUST flag truncation honestly rather than presenting a partial field
+    // as complete. This is the "no silent caps" guarantee, validated live.
+    await expect(page.locator('[aria-label="Status message"]')).toContainText(/TRUNCATED/, {
+      timeout: 30000,
+    });
   });
 
   test('SODA FITS cutout resolves to a real image at the field centre', async ({ page }) => {

@@ -162,15 +162,28 @@
       return;
     }
     alertLoading = true;
-    statusMessage = `Fetching Rubin DIASources near ${currentRa.toFixed(2)}, ${currentDec.toFixed(2)}…`;
+    // Push the epoch window into the QUERY (server-side) when the user has
+    // narrowed the time slider, so a truncated field can be fetched COMPLETELY
+    // one slice at a time instead of client-filtering an arbitrary capped subset.
+    const win = alertTimeWindow;
+    const windowNote = win ? ` in MJD ${win.min.toFixed(0)}–${win.max.toFixed(0)}` : '';
+    statusMessage = `Fetching Rubin DIASources near ${currentRa.toFixed(2)}, ${currentDec.toFixed(2)}${windowNote}…`;
     try {
       // ~1° radius ≈ a DP1 field; DP1 has no DIA outside its few small fields.
-      const set = await fetchDiaAlerts({ ra: currentRa, dec: currentDec, radiusDeg: 1.0 });
+      const set = await fetchDiaAlerts({
+        ra: currentRa,
+        dec: currentDec,
+        radiusDeg: 1.0,
+        tMinMjd: win?.min,
+        tMaxMjd: win?.max,
+      });
       applyAlertSet(set);
       statusMessage =
-        set.count > 0
-          ? `Live DIA: ${set.count.toLocaleString()} DIASources near the view centre`
-          : 'No DIA sources in this field (DP1 covers only a few small fields — try a DP1 field).';
+        set.count === 0
+          ? `No DIA sources in this field${windowNote} (DP1 covers only a few small fields — try a DP1 field).`
+          : set.truncated
+            ? `Live DIA: showing ${set.count.toLocaleString()}${windowNote} — TRUNCATED (the field has more; narrow the epoch window and Refresh, or zoom in).`
+            : `Live DIA: ${set.count.toLocaleString()} DIASources near the view centre${windowNote}`;
     } catch (e) {
       statusMessage = e instanceof Error ? e.message : 'DIA fetch failed.';
     } finally {

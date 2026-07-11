@@ -45,7 +45,12 @@ export interface GalaxyProperties {
 }
 
 export interface TapQueryResult {
-  status: 'completed' | 'executing' | 'error';
+  /**
+   * 'overflow' means the service truncated the result to MAXREC (or the ADQL
+   * `TOP` cap) — there are MORE matching rows than were returned. Callers that
+   * cap rows MUST surface this rather than presenting the partial set as complete.
+   */
+  status: 'completed' | 'executing' | 'error' | 'overflow';
   rowCount: number;
   columns: ColumnDef[];
   rows: Record<string, unknown>[];
