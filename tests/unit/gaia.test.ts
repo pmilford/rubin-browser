@@ -29,9 +29,11 @@ function gaiaJson(names: string[], rows: unknown[][]): unknown {
 describe('buildGaiaConeAdql', () => {
   const base: GaiaConeParams = { ra: 265.0, dec: -28.0, radiusDeg: 0.1 };
 
-  it('targets gaiadr3.gaia_source (the star catalog)', () => {
+  it('targets the CORS-enabled GAVO gaia.dr3lite star catalog', () => {
     const adql = buildGaiaConeAdql(base);
-    expect(adql).toContain('FROM gaiadr3.gaia_source');
+    expect(adql).toContain('FROM gaia.dr3lite');
+    // Must NOT target the ESA archive table (that host is CORS-blocked in-browser).
+    expect(adql).not.toContain('gaiadr3.gaia_source');
     expect(adql).not.toContain('dp1.');
     expect(adql).not.toContain('dp02');
   });
@@ -50,7 +52,7 @@ describe('buildGaiaConeAdql', () => {
     expect(radius).not.toBeCloseTo(0.1 / 3600, 12);
   });
 
-  it('selects the astrometry + three-band photometry columns', () => {
+  it('selects the astrometry + photometry columns, deriving bp_rp (dr3lite has no bp_rp column)', () => {
     const adql = buildGaiaConeAdql(base);
     for (const col of [
       'source_id',
@@ -60,12 +62,14 @@ describe('buildGaiaConeAdql', () => {
       'pmra',
       'pmdec',
       'phot_g_mean_mag',
-      'bp_rp',
       'radial_velocity',
-      'teff_gspphot',
     ]) {
       expect(adql).toContain(col);
     }
+    // bp_rp is DERIVED (dr3lite ships no precomputed colour), aliased AS bp_rp.
+    expect(adql).toContain('phot_bp_mean_mag - phot_rp_mean_mag AS bp_rp');
+    // teff_gspphot is NOT in dr3lite — selecting it would 400 the real query.
+    expect(adql).not.toContain('teff_gspphot');
   });
 
   // Kills an uncapped query (which could pull the whole Gaia catalog).
@@ -199,6 +203,37 @@ describe('parseGaiaResponse', () => {
     expect(cat.sourceId.length).toBe(0);
   });
 
+  // REAL-SHAPE regression: GAVO/DaCHS returns column descriptors under `columns`,
+  // NOT `metadata` (ESA's key). This is a VERBATIM-shaped slice of a live GAVO
+  // dr3lite response (verified: derived bp_rp present, radial_velocity null).
+  // The old mock only ever used ESA's `metadata` key, so it hid the CORS-mirror
+  // migration bug — a parser reading only `metadata` throws on this body.
+  it('parses the live GAVO shape (columns key, derived bp_rp, null radial_velocity)', () => {
+    const gavo = {
+      columns: [
+        { name: 'source_id', datatype: 'long' },
+        { name: 'ra', datatype: 'double' },
+        { name: 'dec', datatype: 'double' },
+        { name: 'parallax', datatype: 'float' },
+        { name: 'pmra', datatype: 'float' },
+        { name: 'pmdec', datatype: 'float' },
+        { name: 'phot_g_mean_mag', datatype: 'float' },
+        { name: 'bp_rp', datatype: 'float' },
+        { name: 'radial_velocity', datatype: 'float' },
+      ],
+      data: [[4845546850256555392, 62.026148678589, -37.07564387135609, 0.44069237, 8.680595, -6.3714776, 18.55878, 0.7495556, null]],
+    };
+    const cat = parseGaiaResponse(gavo);
+    expect(cat.count).toBe(1);
+    expect(cat.ra[0]).toBeCloseTo(62.02615, 4);
+    expect(cat.dec[0]).toBeCloseTo(-37.07564, 4);
+    expect(cat.gMag[0]).toBeCloseTo(18.55878, 4);
+    expect(cat.bpRp[0]).toBeCloseTo(0.74956, 4); // DERIVED colour survived
+    expect(cat.parallax[0]).toBeCloseTo(0.44069, 4);
+    // radial_velocity null in the source → NaN, not 0 (null must not read as data).
+    expect(Number.isNaN(cat.radialVelocity[0])).toBe(true);
+  });
+
   // Kills an impl that silently returns an empty catalog for a malformed body.
   it('throws on malformed responses (no/empty metadata, no ra/dec column)', () => {
     expect(() => parseGaiaResponse({ data: [] })).toThrow(/metadata/);
@@ -240,7 +275,7 @@ describe('fetchGaiaCone', () => {
     const body = String(init?.body);
     expect(body).toContain('LANG=ADQL');
     expect(body).toContain('REQUEST=doQuery');
-    expect(decodeURIComponent(body)).toContain('gaiadr3.gaia_source');
+    expect(decodeURIComponent(body)).toContain('gaia.dr3lite');
 
     expect(cat.count).toBe(2);
     expect(cat.sourceId[0]).toBe('4472832130942575872');

@@ -71,9 +71,9 @@ test('Gaia markers render in >1 colour, the CMD shows points, and CMD↔marker s
   // Sources near the default centre (62, -37), well separated in RA/Dec so they
   // don't overdraw each other once zoomed in: one HOT/blue (bp_rp 0.0) at centre,
   // one COOL/red (bp_rp 2.6) to the north, one with NO colour (NaN → grey) to the west.
-  await page.route('**/tap-server/tap/sync', async (route) => {
+  await page.route('**/dc.zah.uni-heidelberg.de/**', async (route) => {
     const body = JSON.stringify({
-      metadata: [
+      columns: [
         { name: 'source_id' }, { name: 'ra' }, { name: 'dec' },
         { name: 'parallax' }, { name: 'pmra' }, { name: 'pmdec' },
         { name: 'phot_g_mean_mag' }, { name: 'bp_rp' },
@@ -130,9 +130,9 @@ test('Gaia markers render in >1 colour, the CMD shows points, and CMD↔marker s
 });
 
 test('proper-motion vectors toggle draws arrows only when on', async ({ page }) => {
-  await page.route('**/tap-server/tap/sync', async (route) => {
+  await page.route('**/dc.zah.uni-heidelberg.de/**', async (route) => {
     const body = JSON.stringify({
-      metadata: [
+      columns: [
         { name: 'source_id' }, { name: 'ra' }, { name: 'dec' },
         { name: 'parallax' }, { name: 'pmra' }, { name: 'pmdec' },
         { name: 'phot_g_mean_mag' }, { name: 'bp_rp' },

@@ -24,9 +24,9 @@ async function waitForTiles(page: Page, quietMs = 900, hardCapMs = 12000): Promi
 
 test('Gaia overlay lists sources in a linked table and links a row to the marker', async ({ page }) => {
   // Sources near the default view centre (62, -37) so markers land on-canvas.
-  await page.route('**/tap-server/tap/sync', async (route) => {
+  await page.route('**/dc.zah.uni-heidelberg.de/**', async (route) => {
     const body = JSON.stringify({
-      metadata: [
+      columns: [
         { name: 'source_id' }, { name: 'ra' }, { name: 'dec' },
         { name: 'phot_g_mean_mag' }, { name: 'bp_rp' },
         { name: 'pmra' }, { name: 'pmdec' }, { name: 'parallax' },

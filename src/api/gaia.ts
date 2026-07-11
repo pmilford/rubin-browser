@@ -1,42 +1,48 @@
 /**
- * Gaia DR3 catalog client — driven by the PUBLIC ESA Gaia TAP service.
+ * Gaia DR3 catalog client — driven by a PUBLIC, CORS-enabled Gaia TAP mirror.
  *
- * Unlike the Rubin DP1 clients in this directory (`tap.ts`, `diaSource.ts`,
- * `soda.ts`), Gaia is an OPEN, un-authenticated service: the ESA Gaia Archive
- * TAP endpoint takes anonymous queries and does NOT use the Rubin RSP token.
- * Therefore this module deliberately does NOT import or call `getAuthHeader()` /
- * `isAuthenticated()` from `./auth.js` — attaching a Rubin bearer token to an ESA
- * request would be wrong and pointless. (This is the one client in `src/api/`
- * that is auth-free by design.)
+ * Gaia is an OPEN, un-authenticated service (no Rubin RSP token), so this module
+ * deliberately does NOT import `getAuthHeader()`/`isAuthenticated()` — the one
+ * client in `src/api/` that is auth-free by design.
  *
- * Endpoint + protocol (IVOA TAP sync):
- *   POST https://gea.esac.esa.int/tap-server/tap/sync
+ * WHY NOT the ESA archive directly: the ESA Gaia TAP host
+ * (`gea.esac.esa.int/tap-server/tap/sync`) does NOT send an
+ * `Access-Control-Allow-Origin` header (verified: a cross-origin GET returns 200
+ * with no ACAO, and the CORS preflight OPTIONS is 403). A browser fetch to it
+ * from the app origin is therefore CORS-blocked ("Failed to fetch") — which is
+ * exactly the bug this migration fixes. We use a CORS-enabled VO mirror instead
+ * so it works from the browser in dev AND prod with no proxy.
+ *
+ * Endpoint + protocol (IVOA TAP sync, GAVO/DaCHS):
+ *   POST https://dc.zah.uni-heidelberg.de/tap/sync   (GAVO sends ACAO — verified)
  *   form params: REQUEST=doQuery, LANG=ADQL, FORMAT=json, QUERY=<adql>
  *   response JSON shape: { metadata: [{ name, datatype, ... }], data: [[...], ...] }
- *   (columns are addressed BY metadata name — never by positional index — because
- *   the archive does not guarantee column order matches the SELECT list.)
+ *   (columns are addressed BY metadata name — never by positional index.)
  *
- * Scope / honesty (mirrors BACKLOG #12 — do NOT overpromise):
- *   - Main table is `gaiadr3.gaia_source`. Gaia has THREE broad bands, not
- *     per-filter images: G (`phot_g_mean_mag`), G_BP (`phot_bp_mean_mag`), G_RP
- *     (`phot_rp_mean_mag`); `bp_rp` is the published BP−RP colour.
- *   - REDSHIFT: Gaia is a Milky-Way STAR survey; ordinary stars have NO
- *     cosmological redshift. Redshift exists only for the extragalactic subset,
- *     in SEPARATE tables (`gaiadr3.qso_candidates.redshift_qsoc`,
- *     `gaiadr3.galaxy_candidates`). {@link buildGaiaConeAdql} (stars) therefore
- *     NEVER selects a redshift column; {@link buildGaiaQsoAdql} is the distinct,
- *     clearly-named builder that does.
+ * Table + columns (validated against the live GAVO `TAP_SCHEMA` — do NOT guess):
+ *   - `gaia.dr3lite` — GAVO's lightweight Gaia DR3 mirror. It HAS `source_id, ra,
+ *     dec, parallax, pmra, pmdec, phot_g_mean_mag, phot_bp_mean_mag,
+ *     phot_rp_mean_mag, radial_velocity, ruwe`. It does NOT ship a precomputed
+ *     `bp_rp` column, so the star builder DERIVES it as
+ *     `phot_bp_mean_mag - phot_rp_mean_mag AS bp_rp`; and it has NO
+ *     `teff_gspphot`, so that column is not selected (the parser tolerates its
+ *     absence → NaN). CDS VizieR (`tapvizier.cds.unistra.fr`, `"I/355/gaiadr3"`,
+ *     ACAO:*) is an alternative CORS mirror if a full-DR3 column is ever needed.
+ *   - REDSHIFT: Gaia stars have NO cosmological redshift; only the extragalactic
+ *     subset does, in separate tables. {@link buildGaiaConeAdql} (stars) NEVER
+ *     selects a redshift column; {@link buildGaiaQsoAdql} is the distinct builder
+ *     that does (ESA-schema table names; not present in `dr3lite`).
  *
- * The parser fills a columnar {@link GaiaCatalog} of parallel TypedArrays (the
- * same flavour of layout `src/data/alerts.ts` uses) so an overlay renderer can
- * reuse the alert-overlay spatial index over `ra`/`dec`.
- *
- * All coordinates are DEGREES throughout (ICRS); there are no arcsec inputs to
- * convert here.
+ * The parser fills a columnar {@link GaiaCatalog} of parallel TypedArrays so an
+ * overlay renderer can reuse the alert-overlay spatial index over `ra`/`dec`.
+ * All coordinates are DEGREES throughout (ICRS).
  */
 
-/** The public ESA Gaia Archive TAP synchronous endpoint (no auth). */
-export const GAIA_TAP_SYNC_URL = 'https://gea.esac.esa.int/tap-server/tap/sync';
+/** Public CORS-enabled Gaia DR3 TAP sync endpoint (GAVO/DaCHS; no auth). See header. */
+export const GAIA_TAP_SYNC_URL = 'https://dc.zah.uni-heidelberg.de/tap/sync';
+
+/** The GAVO Gaia DR3 table backing {@link buildGaiaConeAdql}. */
+export const GAIA_SOURCE_TABLE = 'gaia.dr3lite';
 
 /** Default row cap for a Gaia cone query (TOP N in the ADQL). */
 export const GAIA_DEFAULT_MAX_ROWS = 5000;
@@ -123,8 +129,9 @@ function coneParts(params: GaiaConeParams): {
  * Build a cone-search ADQL query for Gaia DR3 STARS around a sky position.
  *
  * Selects the standard astrometry + three-band photometry the overlay needs:
- * `source_id, ra, dec, parallax, pmra, pmdec, phot_g_mean_mag, bp_rp,
- * radial_velocity, teff_gspphot` from `gaiadr3.gaia_source`. Radius is DEGREES
+ * `source_id, ra, dec, parallax, pmra, pmdec, phot_g_mean_mag`, the derived
+ * `bp_rp` (= phot_bp_mean_mag − phot_rp_mean_mag; dr3lite has no precomputed
+ * colour column), and `radial_velocity`, from `gaia.dr3lite`. Radius is DEGREES
  * (TAP CIRCLE wants degrees) and ra/dec/radius are finite-checked, so nothing
  * user-controlled is interpolated as an un-vetted string.
  *
@@ -142,9 +149,10 @@ export function buildGaiaConeAdql(params: GaiaConeParams): string {
   return `SELECT TOP ${top}
   source_id, ra, dec,
   parallax, pmra, pmdec,
-  phot_g_mean_mag, bp_rp,
-  radial_velocity, teff_gspphot
-FROM gaiadr3.gaia_source
+  phot_g_mean_mag,
+  phot_bp_mean_mag - phot_rp_mean_mag AS bp_rp,
+  radial_velocity
+FROM ${GAIA_SOURCE_TABLE}
 WHERE CONTAINS(
   POINT('ICRS', ra, dec),
   CIRCLE('ICRS', ${raStr}, ${decStr}, ${radiusStr})
@@ -211,11 +219,14 @@ export function parseGaiaResponse(raw: unknown): GaiaCatalog {
     throw new Error('parseGaiaResponse: expected a Gaia TAP JSON object with metadata/data');
   }
   const obj = raw as Record<string, unknown>;
-  const metadata = obj.metadata;
+  // The column descriptors live under `metadata` in IVOA VOTable-JSON (ESA) but
+  // under `columns` in GAVO/DaCHS JSON — accept either (verified against a live
+  // GAVO dr3lite response). Both are arrays of { name, datatype, ... }.
+  const metadata = Array.isArray(obj.metadata) ? obj.metadata : obj.columns;
   if (!Array.isArray(metadata) || metadata.length === 0) {
     throw new Error(
-      'parseGaiaResponse: malformed Gaia response — missing or empty `metadata` ' +
-        '(cannot map columns by name)'
+      'parseGaiaResponse: malformed Gaia response — missing or empty column ' +
+        'descriptors (`metadata`/`columns`; cannot map columns by name)'
     );
   }
 
