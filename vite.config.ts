@@ -22,6 +22,15 @@ export default defineConfig({
         target: 'https://data.lsst.cloud',
         changeOrigin: true,
         secure: true,
+        // Rubin's TAP is a UWS service: POST /api/tap/sync returns a 303 whose
+        // Location is the ABSOLUTE https://data.lsst.cloud/api/tap/sync/<jobid>/run.
+        // Without this, the browser auto-follows that redirect straight to
+        // data.lsst.cloud — bypassing this proxy — and it's CORS-blocked (no
+        // Access-Control-Allow-Origin), breaking light curves and DIA/alert
+        // queries. followRedirects makes the proxy chase the 303 server-side; the
+        // redirect stays on data.lsst.cloud (same host), so follow-redirects keeps
+        // the Authorization header, and the browser only ever sees this origin.
+        followRedirects: true,
         rewrite: (p) => p.replace(/^\/rsp/, ''),
       },
     },
