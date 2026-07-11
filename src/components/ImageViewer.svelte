@@ -65,6 +65,7 @@
     type CoordSystem,
   } from '../utils/graticule.js';
   import { nearestObject, identifyAt, type IdentifyInfo } from '../data/objects.js';
+  import type { Ds9Region } from '../utils/ds9Regions.js';
   import { sampleProfile, type LineProfile } from '../utils/crossSection.js';
   import type { ViewerState, ScalingFunction, ColorMapName, InterpolationMethod } from '../types/image.js';
 
@@ -105,6 +106,11 @@
     selectedRubinIndex = -1,
     rulerMode = false,
     onRulerChange,
+    regions = [] as Ds9Region[],
+    showRegions = true,
+    regionMode = false,
+    regionShape = 'circle' as 'circle' | 'polygon',
+    onRegionsChange,
     offlineBand = 'r' as Band,
     offlineMjd = OFFLINE_MJD,
     onViewerStateChange,
@@ -182,6 +188,18 @@
     rulerMode?: boolean;
     /** Fired with the current ruler measurement (or null when cleared). */
     onRulerChange?: (m: { separationDeg: number; paDeg: number; text: string } | null) => void;
+    /** DS9 regions to draw (feature 121). Sky regions in ICRS degrees; reprojected
+     *  every frame via skyToCanvas so they track pan/zoom (not screen-pinned). */
+    regions?: Ds9Region[];
+    /** When true (and `regions` non-empty), draw the committed region layer. */
+    showRegions?: boolean;
+    /** When true, the region overlay steals the pointer: drawing a region instead
+     *  of panning the sky (mirrors the ruler / cross-section tools). */
+    regionMode?: boolean;
+    /** Which shape the user is drawing: 'circle' (drag) or 'polygon' (click verts). */
+    regionShape?: 'circle' | 'polygon';
+    /** Fired with the updated region list whenever the user commits a new region. */
+    onRegionsChange?: (regions: Ds9Region[]) => void;
     /** OFFLINE mode only: wavelength band to synthesize (g/r/i/z/y). */
     offlineBand?: Band;
     /** OFFLINE mode only: epoch (MJD) to synthesize — drives light curves + noise. */
@@ -257,6 +275,18 @@
   let rulerP0 = $state<{ ra: number; dec: number } | null>(null);
   let rulerP1 = $state<{ ra: number; dec: number } | null>(null);
   let rulerDragHandle: 0 | 1 | null = null;
+  // DS9 region-drawing overlay (feature 121): interactive only in region mode.
+  // A committed region's geometry is stored in RA/Dec degrees and reprojected each
+  // render. Drafts (in-progress) live here as sky points until committed upward.
+  let regionCanvasEl: HTMLCanvasElement | undefined;
+  let regionCtx: CanvasRenderingContext2D | null = null;
+  // Circle draft: centre + the point the drag is currently at (radius = sep).
+  let regionCircleCenter = $state<{ ra: number; dec: number } | null>(null);
+  let regionCircleEdge = $state<{ ra: number; dec: number } | null>(null);
+  let regionDrawingCircle = false;
+  // Polygon draft: committed vertices + a live cursor point for the rubber band.
+  let regionPolyVerts = $state<{ ra: number; dec: number }[]>([]);
+  let regionPolyCursor = $state<{ ra: number; dec: number } | null>(null);
   // Private scratch canvas for honest PRE-colormap luminance sampling: base tiles
   // are drawn to it raw (no scaling/colormap/invert), so the profile reflects the
   // displayed image intensity, never the post-processed/colormapped pixels.
@@ -773,6 +803,7 @@
     renderAlerts();
     renderCrossSection();
     renderRuler();
+    renderRegionOverlay();
 
     // Time the full frame → FPS + last-render for the HUD, then push a snapshot.
     perf.recordRender(performance.now() - renderStart);
@@ -1052,6 +1083,141 @@
     rulerCtx.fillText(text, mx + 12, my - 8);
   }
 
+  // --- DS9 regions (feature 121) --------------------------------------------
+
+  /** Approximate on-screen radius (px) of a degree-radius sky circle centred at
+   *  (ra,dec): project the centre and a point `rDeg` away in Dec (clamped near the
+   *  pole) and take the pixel distance. Exact for small regions; a slight
+   *  approximation for large ones, which DS9 regions rarely are. */
+  function skyRadiusToPixels(view: ViewParams, cRa: number, cDec: number, rDeg: number): number {
+    const [cx, cy] = skyToCanvas(view, cRa, cDec);
+    if (!Number.isFinite(cx)) return NaN;
+    const edgeDec = cDec + rDeg <= 89.9 ? cDec + rDeg : cDec - rDeg;
+    const [ex, ey] = skyToCanvas(view, cRa, edgeDec);
+    if (!Number.isFinite(ex)) return NaN;
+    return Math.hypot(ex - cx, ey - cy);
+  }
+
+  /** Draw one region's outline in the current (already pan-translated) context. */
+  function drawRegionShape(
+    context: CanvasRenderingContext2D,
+    view: ViewParams,
+    region: Ds9Region,
+    pxPerDeg: number
+  ) {
+    if (region.shape === 'circle') {
+      const [cx, cy] = skyToCanvas(view, region.x, region.y);
+      if (!Number.isFinite(cx)) return;
+      const rPx = skyRadiusToPixels(view, region.x, region.y, region.r);
+      if (!Number.isFinite(rPx) || rPx <= 0) return;
+      context.beginPath();
+      context.arc(cx, cy, rPx, 0, Math.PI * 2);
+      context.stroke();
+    } else if (region.shape === 'ellipse' || region.shape === 'box') {
+      const [cx, cy] = skyToCanvas(view, region.x, region.y);
+      if (!Number.isFinite(cx)) return;
+      const angle = (-region.angle * Math.PI) / 180; // screen +y is down → negate
+      context.save();
+      context.translate(cx, cy);
+      context.rotate(angle);
+      context.beginPath();
+      if (region.shape === 'ellipse') {
+        context.ellipse(0, 0, region.a * pxPerDeg, region.b * pxPerDeg, 0, 0, Math.PI * 2);
+      } else {
+        const w = region.w * pxPerDeg;
+        const h = region.h * pxPerDeg;
+        context.rect(-w / 2, -h / 2, w, h);
+      }
+      context.stroke();
+      context.restore();
+    } else if (region.shape === 'polygon') {
+      context.beginPath();
+      let started = false;
+      for (const p of region.points) {
+        const [x, y] = skyToCanvas(view, p.x, p.y);
+        if (!Number.isFinite(x)) { started = false; continue; } // off-hemisphere vertex
+        if (!started) { context.moveTo(x, y); started = true; } else { context.lineTo(x, y); }
+      }
+      context.closePath();
+      context.stroke();
+    }
+  }
+
+  /**
+   * Draw the DS9 region layer on the region overlay canvas: the COMMITTED regions
+   * (always, when `showRegions` — the overlay is visible even with the tool off,
+   * like the alert canvas) plus the in-progress DRAFT (only in region mode). The
+   * overlay canvas holds only vector strokes (never cross-origin tiles), so it is
+   * not CORS-tainted and its geometry is reprojected via skyToCanvas every frame,
+   * tracking pan/zoom instead of being screen-pinned. `exportPng` composites this
+   * canvas too, so regions appear in a saved screenshot. Regions on the far
+   * hemisphere (non-finite projection) are skipped.
+   */
+  function renderRegionOverlay() {
+    if (!regionCtx || !regionCanvasEl) return;
+    regionCtx.clearRect(0, 0, canvasWidth, canvasHeight);
+    const view = currentView();
+    const pxPerDeg = canvasWidth / Math.max(1e-6, fov);
+    regionCtx.save();
+    regionCtx.translate(panOffsetX, panOffsetY);
+
+    // Committed regions (solid) — visible whether or not the tool is active.
+    if (showRegions && regions && regions.length > 0) {
+      regionCtx.setLineDash([]);
+      regionCtx.strokeStyle = 'rgba(120,255,120,0.95)';
+      regionCtx.lineWidth = 1.5;
+      for (const region of regions) {
+        if (region.frame !== 'icrs') continue; // image-frame regions need WCS we lack
+        drawRegionShape(regionCtx, view, region, pxPerDeg);
+      }
+    }
+
+    if (!regionMode) { regionCtx.restore(); return; }
+    regionCtx.strokeStyle = 'rgba(120,255,160,0.95)';
+    regionCtx.setLineDash([5, 3]);
+    regionCtx.lineWidth = 1.5;
+
+    if (regionCircleCenter && regionCircleEdge) {
+      const [cx, cy] = skyToCanvas(view, regionCircleCenter.ra, regionCircleCenter.dec);
+      const rDeg = angularSeparation(
+        regionCircleCenter.ra, regionCircleCenter.dec,
+        regionCircleEdge.ra, regionCircleEdge.dec
+      );
+      const rPx = skyRadiusToPixels(view, regionCircleCenter.ra, regionCircleCenter.dec, rDeg);
+      if (Number.isFinite(cx) && Number.isFinite(rPx) && rPx > 0) {
+        regionCtx.beginPath();
+        regionCtx.arc(cx, cy, rPx, 0, Math.PI * 2);
+        regionCtx.stroke();
+      }
+    }
+
+    if (regionPolyVerts.length > 0) {
+      regionCtx.beginPath();
+      let started = false;
+      const chain = regionPolyCursor ? [...regionPolyVerts, regionPolyCursor] : regionPolyVerts;
+      for (const v of chain) {
+        const [x, y] = skyToCanvas(view, v.ra, v.dec);
+        if (!Number.isFinite(x)) { started = false; continue; }
+        if (!started) { regionCtx.moveTo(x, y); started = true; } else { regionCtx.lineTo(x, y); }
+      }
+      regionCtx.stroke();
+      // Vertex handles (solid), first vertex highlighted (click it to close).
+      regionCtx.setLineDash([]);
+      for (let i = 0; i < regionPolyVerts.length; i++) {
+        const [x, y] = skyToCanvas(view, regionPolyVerts[i]!.ra, regionPolyVerts[i]!.dec);
+        if (!Number.isFinite(x)) continue;
+        regionCtx.beginPath();
+        regionCtx.arc(x, y, i === 0 ? 6 : 4, 0, Math.PI * 2);
+        regionCtx.fillStyle = i === 0 ? 'rgba(255,240,120,0.9)' : 'rgba(30,60,30,0.9)';
+        regionCtx.fill();
+        regionCtx.strokeStyle = 'rgba(120,255,160,0.95)';
+        regionCtx.lineWidth = 2;
+        regionCtx.stroke();
+      }
+    }
+    regionCtx.restore();
+  }
+
   /** A short screen-space compass ray (screen +y points down, so the angle from
    *  compassRose maps straight to cos/sin). */
   function drawCompassRay(cx: number, cy: number, angle: number, len: number, color: string, label: string) {
@@ -1150,7 +1316,23 @@
     void selectedLensIndex;
     void rubinCatalog;
     void selectedRubinIndex;
+    void regions;
+    void showRegions;
+    void regionMode;
+    void regionShape;
     scheduleRender();
+  });
+
+  // Clear any in-progress draft when the tool is switched off or the shape
+  // changes, so a half-drawn polygon can't leak into the other mode.
+  let lastRegionMode = regionMode;
+  let lastRegionShape = regionShape;
+  $effect(() => {
+    if (regionMode !== lastRegionMode || regionShape !== lastRegionShape) {
+      lastRegionMode = regionMode;
+      lastRegionShape = regionShape;
+      cancelRegionDraft();
+    }
   });
 
   function renderDirect() {
@@ -2213,6 +2395,105 @@
     rulerCanvasEl?.releasePointerCapture?.(e.pointerId);
   }
 
+  // --- DS9 region drawing pointer handlers (own the drag; never pan) ---------
+
+  const REGION_CLOSE_PX = 12; // click within this of vertex 0 closes the polygon
+  const REGION_MIN_RADIUS_DEG = 1e-6; // reject a degenerate zero-radius circle
+
+  /** Screen point under a region-overlay pointer event, and its sky coords. */
+  function regionEventSky(e: PointerEvent): { px: number; py: number; ra: number; dec: number } | null {
+    if (!regionCanvasEl) return null;
+    const rect = regionCanvasEl.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    const py = e.clientY - rect.top;
+    const [ra, dec] = canvasToSky(currentView(), px, py);
+    if (!Number.isFinite(ra) || !Number.isFinite(dec)) return null;
+    return { px, py, ra, dec };
+  }
+
+  function commitRegion(region: Ds9Region) {
+    onRegionsChange?.([...(regions ?? []), region]);
+  }
+
+  function onRegionPointerDown(e: PointerEvent) {
+    if (!regionMode || !regionCanvasEl || e.button !== 0) return;
+    e.stopPropagation();
+    const hit = regionEventSky(e);
+    if (!hit) return;
+
+    if (regionShape === 'circle') {
+      // Drag from centre outward; radius = great-circle sep at pointer-up.
+      regionCircleCenter = { ra: hit.ra, dec: hit.dec };
+      regionCircleEdge = { ra: hit.ra, dec: hit.dec };
+      regionDrawingCircle = true;
+      regionCanvasEl.setPointerCapture(e.pointerId);
+    } else {
+      // Polygon: each click adds a vertex; clicking near the first closes it.
+      if (regionPolyVerts.length >= 3) {
+        const view = currentView();
+        const [fx, fy] = skyToCanvas(view, regionPolyVerts[0]!.ra, regionPolyVerts[0]!.dec);
+        if (
+          Number.isFinite(fx) &&
+          Math.hypot(hit.px - (fx + panOffsetX), hit.py - (fy + panOffsetY)) <= REGION_CLOSE_PX
+        ) {
+          commitRegion({
+            shape: 'polygon',
+            frame: 'icrs',
+            points: regionPolyVerts.map((v) => ({ x: v.ra, y: v.dec })),
+          });
+          regionPolyVerts = [];
+          regionPolyCursor = null;
+          scheduleRender();
+          return;
+        }
+      }
+      regionPolyVerts = [...regionPolyVerts, { ra: hit.ra, dec: hit.dec }];
+      regionPolyCursor = { ra: hit.ra, dec: hit.dec };
+    }
+    scheduleRender();
+  }
+
+  function onRegionPointerMove(e: PointerEvent) {
+    if (!regionMode) return;
+    const hit = regionEventSky(e);
+    if (!hit) return;
+    if (regionDrawingCircle) {
+      regionCircleEdge = { ra: hit.ra, dec: hit.dec };
+      scheduleRender();
+    } else if (regionShape === 'polygon' && regionPolyVerts.length > 0) {
+      regionPolyCursor = { ra: hit.ra, dec: hit.dec };
+      scheduleRender();
+    }
+  }
+
+  function onRegionPointerUp(e: PointerEvent) {
+    if (!regionDrawingCircle) return;
+    regionDrawingCircle = false;
+    regionCanvasEl?.releasePointerCapture?.(e.pointerId);
+    if (regionCircleCenter && regionCircleEdge) {
+      const r = angularSeparation(
+        regionCircleCenter.ra, regionCircleCenter.dec,
+        regionCircleEdge.ra, regionCircleEdge.dec
+      );
+      if (r >= REGION_MIN_RADIUS_DEG) {
+        commitRegion({ shape: 'circle', frame: 'icrs', x: regionCircleCenter.ra, y: regionCircleCenter.dec, r });
+      }
+    }
+    regionCircleCenter = null;
+    regionCircleEdge = null;
+    scheduleRender();
+  }
+
+  /** Cancel an in-progress polygon (Escape) so a stray click chain can be undone. */
+  function cancelRegionDraft() {
+    regionPolyVerts = [];
+    regionPolyCursor = null;
+    regionCircleCenter = null;
+    regionCircleEdge = null;
+    regionDrawingCircle = false;
+    scheduleRender();
+  }
+
   // Report the current ruler measurement (great-circle separation + PA) to the parent.
   $effect(() => {
     if (!rulerMode || !rulerP0 || !rulerP1) {
@@ -2347,6 +2628,13 @@
       case 'Home':
         e.preventDefault();
         resetView();
+        break;
+      case 'Escape':
+        // Cancel an in-progress region draft (half-drawn polygon / circle).
+        if (regionMode && (regionPolyVerts.length > 0 || regionDrawingCircle)) {
+          e.preventDefault();
+          cancelRegionDraft();
+        }
         break;
       case 'ArrowLeft':
         e.preventDefault();
@@ -2676,6 +2964,7 @@
     if (alertCanvasEl) alertCtx = alertCanvasEl.getContext('2d');
     if (xsectionCanvasEl) xsectionCtx = xsectionCanvasEl.getContext('2d');
     if (rulerCanvasEl) rulerCtx = rulerCanvasEl.getContext('2d');
+    if (regionCanvasEl) regionCtx = regionCanvasEl.getContext('2d');
     resizeToContainer();
 
     const ro = new ResizeObserver(() => resizeToContainer());
@@ -2959,6 +3248,12 @@
         rulerCanvasEl.style.width = w + 'px';
         rulerCanvasEl.style.height = h + 'px';
       }
+      if (regionCanvasEl) {
+        regionCanvasEl.width = w;
+        regionCanvasEl.height = h;
+        regionCanvasEl.style.width = w + 'px';
+        regionCanvasEl.style.height = h + 'px';
+      }
       // Safety: ensure FOV is sane after resize
       fov = zoomToFov(zoomLevel);
       // Resize the post-processing offscreen ONLY when the size actually changed:
@@ -3120,6 +3415,19 @@
     onpointercancel={onRulerPointerUp}
   ></canvas>
 
+  <!-- DS9 region-drawing overlay: interactive ONLY in region mode, steals the
+       drag/clicks so drawing a region never pans the sky. -->
+  <canvas
+    bind:this={regionCanvasEl}
+    class="region-canvas"
+    class:active={regionMode}
+    aria-label="Region drawing overlay"
+    onpointerdown={onRegionPointerDown}
+    onpointermove={onRegionPointerMove}
+    onpointerup={onRegionPointerUp}
+    onpointercancel={onRegionPointerUp}
+  ></canvas>
+
   <!-- Magnifier loupe: a zoomed copy of the pixels under the cursor. Only mounted
        when enabled; non-interactive so it never steals pointer events. -->
   {#if showMagnifier}
@@ -3262,6 +3570,19 @@
   }
 
   .ruler-canvas.active {
+    pointer-events: auto;
+    cursor: crosshair;
+  }
+
+  .region-canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    pointer-events: none;
+    z-index: 7;
+  }
+
+  .region-canvas.active {
     pointer-events: auto;
     cursor: crosshair;
   }

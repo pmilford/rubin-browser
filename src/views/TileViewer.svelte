@@ -33,6 +33,7 @@
   import type { IdentifyInfo } from '../data/objects.js';
   import type { Band } from '../data/syntheticSky.js';
   import { temporalCrossSectionGrid, type LineProfile } from '../utils/crossSection.js';
+  import { parseDs9, serializeDs9, type Ds9Region } from '../utils/ds9Regions.js';
   import type { ScalingFunction, ColorMapName, InterpolationMethod, ViewerState } from '../types/image.js';
   import { SURVEY_OVERLAYS, type SurveyInfo } from '../constants.js';
   import type { FilterBand } from '../constants.js';
@@ -235,7 +236,7 @@
   let crossSectionProfile = $state<LineProfile | null>(null);
   function toggleCrossSection() {
     crossSectionMode = !crossSectionMode;
-    if (crossSectionMode) rulerMode = false; // both tools steal the pointer
+    if (crossSectionMode) { rulerMode = false; regionMode = false; } // all steal the pointer
     statusMessage = crossSectionMode
       ? 'Cross-section: drag a line across the image to profile intensity'
       : 'Cross-section: off';
@@ -568,7 +569,7 @@
   let rulerReadout = $state<string | null>(null);
   function toggleRuler() {
     rulerMode = !rulerMode;
-    if (rulerMode) crossSectionMode = false; // both tools steal the pointer
+    if (rulerMode) { crossSectionMode = false; regionMode = false; } // all steal the pointer
     if (!rulerMode) rulerReadout = null;
     statusMessage = rulerMode
       ? 'Ruler: drag between two points to measure great-circle distance'
@@ -577,6 +578,110 @@
   function handleRulerChange(m: { separationDeg: number; paDeg: number; text: string } | null) {
     rulerReadout = m?.text ?? null;
     if (m) statusMessage = `Distance: ${m.text}`;
+  }
+
+  // DS9 regions (feature 121): draw / import / export circles, polygons, etc.
+  // Sky regions are stored in ICRS degrees and reprojected by ImageViewer.
+  let regions = $state<Ds9Region[]>([]);
+  let regionMode = $state(false);
+  let regionShape = $state<'circle' | 'polygon'>('circle');
+  let regionImportOpen = $state(false);
+  let regionImportText = $state('');
+  let regionImportMessage = $state<string | null>(null);
+  let regionFileInput: HTMLInputElement | undefined;
+  const REGION_IMPORT_PLACEHOLDER = '# Region file format: DS9\nfk5\ncircle(202.47,47.20,30")';
+
+  function toggleRegionMode() {
+    regionMode = !regionMode;
+    if (regionMode) {
+      // Region drawing steals the pointer, so it can't coexist with the other
+      // pointer-stealing tools.
+      rulerMode = false;
+      crossSectionMode = false;
+      surfaceMode = false;
+    }
+    statusMessage = regionMode
+      ? regionShape === 'circle'
+        ? 'Regions: drag to draw a circle'
+        : 'Regions: click to add polygon vertices; click the first vertex (or Esc) to finish'
+      : 'Regions: draw off';
+  }
+
+  function setRegionShape(shape: 'circle' | 'polygon') {
+    regionShape = shape;
+    if (regionMode) {
+      statusMessage =
+        shape === 'circle'
+          ? 'Regions: drag to draw a circle'
+          : 'Regions: click to add polygon vertices; click the first vertex (or Esc) to finish';
+    }
+  }
+
+  function handleRegionsChange(next: Ds9Region[]) {
+    regions = next;
+    statusMessage = `Regions: ${next.length} region${next.length === 1 ? '' : 's'}`;
+  }
+
+  function clearRegions() {
+    regions = [];
+    statusMessage = 'Regions: cleared';
+  }
+
+  /** Serialize the current regions to a DS9 .reg file and trigger a download. */
+  function exportRegions() {
+    if (regions.length === 0) {
+      statusMessage = 'Regions: nothing to export — draw or import a region first';
+      return;
+    }
+    const text = serializeDs9(regions);
+    const blob = new Blob([text], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'regions.reg';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    statusMessage = `Regions: exported ${regions.length} region${regions.length === 1 ? '' : 's'} to regions.reg`;
+  }
+
+  /** Parse pasted / uploaded DS9 text and add the regions. Honest about junk:
+   *  a message, never a crash and never a silent no-op. */
+  function importRegions(text: string) {
+    let parsed: Ds9Region[];
+    try {
+      parsed = parseDs9(text);
+    } catch {
+      // parseDs9 is designed never to throw, but stay defensive at the boundary.
+      regionImportMessage = 'Could not parse that as a DS9 region file.';
+      return;
+    }
+    if (parsed.length === 0) {
+      regionImportMessage =
+        'No recognizable DS9 regions found (need e.g. a fk5/icrs circle or polygon).';
+      return;
+    }
+    regions = [...regions, ...parsed];
+    regionImportMessage = `Imported ${parsed.length} region${parsed.length === 1 ? '' : 's'}.`;
+    statusMessage = `Regions: imported ${parsed.length}`;
+    regionImportText = '';
+    regionImportOpen = false;
+  }
+
+  function importFromTextarea() {
+    importRegions(regionImportText);
+  }
+
+  function handleRegionFile(e: Event) {
+    const input = e.target as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => importRegions(String(reader.result ?? ''));
+    reader.onerror = () => { regionImportMessage = 'Could not read that file.'; };
+    reader.readAsText(file);
+    input.value = ''; // allow re-selecting the same file
   }
 
   // 3D surface plot — a TEMPORAL WATERFALL of the cross-section line: column =
@@ -623,6 +728,7 @@
     surfaceMode = !surfaceMode;
     if (surfaceMode) {
       rulerMode = false;
+      regionMode = false;
       // The surface IS the cross-section over time, so it needs a line: enable the
       // cross-section tool (which seeds a default line) when offline.
       if (baseLayerId === 'offline') crossSectionMode = true;
@@ -1022,6 +1128,10 @@
       {selectedRubinIndex}
       {rulerMode}
       onRulerChange={handleRulerChange}
+      {regions}
+      {regionMode}
+      {regionShape}
+      onRegionsChange={handleRegionsChange}
       {rubinDataset}
       {offlineBand}
       {offlineMjd}
@@ -1269,6 +1379,62 @@
 
         <button
           class="xsection-toggle"
+          class:on={regionMode}
+          aria-pressed={regionMode}
+          aria-label="Toggle region drawing"
+          title="Draw DS9 regions: a circle (drag) or polygon (click vertices, close on the first). Sky-anchored (RA/Dec) so they track pan/zoom."
+          onclick={toggleRegionMode}
+        >
+          ⬡ Regions{#if regions.length} ({regions.length}){/if}
+        </button>
+
+        {#if regionMode}
+          <label class="rubin-filter" aria-label="Region shape">
+            <span class="layer-label">Shape</span>
+            <select
+              value={regionShape}
+              aria-label="Region shape select"
+              onchange={(e) => setRegionShape((e.currentTarget as HTMLSelectElement).value as 'circle' | 'polygon')}
+            >
+              <option value="circle">Circle (drag)</option>
+              <option value="polygon">Polygon (click)</option>
+            </select>
+          </label>
+        {/if}
+
+        {#if regionMode || regions.length}
+          <button
+            class="xsection-toggle"
+            aria-label="Export regions as DS9 .reg file"
+            title="Download the current regions as a DS9 .reg file"
+            onclick={exportRegions}
+          >
+            ⭳ Export .reg
+          </button>
+          <button
+            class="xsection-toggle"
+            class:on={regionImportOpen}
+            aria-pressed={regionImportOpen}
+            aria-label="Import DS9 regions"
+            title="Paste or upload a DS9 region file to render"
+            onclick={() => { regionImportOpen = !regionImportOpen; regionImportMessage = null; }}
+          >
+            ⭱ Import
+          </button>
+          {#if regions.length}
+            <button
+              class="xsection-toggle"
+              aria-label="Clear all regions"
+              title="Remove every drawn/imported region"
+              onclick={clearRegions}
+            >
+              ✕ Clear regions
+            </button>
+          {/if}
+        {/if}
+
+        <button
+          class="xsection-toggle"
           class:on={showMagnifier}
           aria-pressed={showMagnifier}
           aria-label="Toggle magnifier"
@@ -1416,6 +1582,36 @@
         <span class="ai-note">synthetic demo event</span>
       </div>
     {/if}
+    {#if uiVisible && regionImportOpen}
+      <div class="region-import" role="region" aria-label="Import DS9 regions">
+        <div class="ri-header">
+          <span class="ri-title">Import DS9 regions</span>
+          <button class="ri-close" aria-label="Close region import" onclick={() => { regionImportOpen = false; }}>×</button>
+        </div>
+        <textarea
+          class="ri-textarea"
+          aria-label="DS9 region text"
+          placeholder={REGION_IMPORT_PLACEHOLDER}
+          bind:value={regionImportText}
+        ></textarea>
+        <div class="ri-actions">
+          <button class="ri-btn" aria-label="Parse pasted regions" onclick={importFromTextarea}>Add pasted regions</button>
+          <button class="ri-btn" aria-label="Choose region file" onclick={() => regionFileInput?.click()}>Upload .reg file…</button>
+          <input
+            bind:this={regionFileInput}
+            type="file"
+            accept=".reg,.txt,text/plain"
+            aria-label="Region file input"
+            style="display:none"
+            onchange={handleRegionFile}
+          />
+        </div>
+        {#if regionImportMessage}
+          <div class="ri-message" aria-label="Region import message">{regionImportMessage}</div>
+        {/if}
+      </div>
+    {/if}
+
     {#if uiVisible && (identifyInfo || simbadQuery || showCatalog || showLenses || showRubinObjects || crossSectionMode || surfaceMode || lightCurveMode || cutoutOpen || rgbOpen || (diffMode && baseLayerId === 'offline'))}
       <!-- Right-side stack: the object-ID popup sits ABOVE the analysis plots so
            they never overlap. -->
@@ -1616,7 +1812,10 @@
     position: absolute;
     top: 8px;
     left: 8px;
-    z-index: 6;
+    /* Above the interactive overlay canvases (z-index ≤ 7) so the toolbar stays
+       clickable while a pointer-stealing tool (region / ruler / cross-section) is
+       active — otherwise an active full-viewer overlay intercepts button clicks. */
+    z-index: 12;
     display: flex;
     align-items: center;
     flex-wrap: wrap;
@@ -1748,6 +1947,72 @@
     border-radius: 4px; padding: 3px 10px; font: inherit; font-size: 11px; cursor: pointer;
   }
   .lc-nosource-close:hover { background: #24406a; }
+
+  .region-import {
+    position: absolute;
+    top: 44px;
+    left: 12px;
+    z-index: 17;
+    width: 320px;
+    background: #12122a;
+    border: 1px solid #3a6;
+    border-radius: 6px;
+    padding: 8px;
+    color: #ccd;
+    font-size: 11px;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+  }
+  .region-import .ri-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+  }
+  .region-import .ri-title { color: #9f9; font-weight: 700; }
+  .region-import .ri-close {
+    background: #22243a;
+    border: 1px solid #445;
+    border-radius: 4px;
+    color: #ccd;
+    cursor: pointer;
+    padding: 2px 7px;
+    font-family: inherit;
+  }
+  .region-import .ri-textarea {
+    width: 100%;
+    height: 90px;
+    box-sizing: border-box;
+    background: #0b0b18;
+    border: 1px solid #345;
+    border-radius: 4px;
+    color: #cfe;
+    font-family: inherit;
+    font-size: 11px;
+    padding: 6px;
+    resize: vertical;
+  }
+  .region-import .ri-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 6px;
+    flex-wrap: wrap;
+  }
+  .region-import .ri-btn {
+    background: #1a3a24;
+    border: 1px solid #3a6;
+    border-radius: 4px;
+    color: #cfe;
+    cursor: pointer;
+    padding: 4px 8px;
+    font-family: inherit;
+    font-size: 11px;
+  }
+  .region-import .ri-btn:hover { background: #245a34; }
+  .region-import .ri-message {
+    margin-top: 6px;
+    color: #bd9;
+    line-height: 1.4;
+  }
 
   .right-stack {
     position: absolute;
