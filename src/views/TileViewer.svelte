@@ -2189,4 +2189,42 @@
     padding: 3px 8px;
     cursor: pointer;
   }
+
+  /* --- Responsive breakpoints (feature 127) --------------------------------- */
+  /* Tablet / small window: the control cluster may use the full width instead of
+     being capped at 60% (which crams the toggles into a tall column), and panels
+     never exceed the viewport. */
+  @media (max-width: 720px) {
+    .active-layers {
+      max-width: calc(100% - 12px);
+      gap: 3px;
+    }
+    .active-layers button,
+    .active-layers select {
+      padding: 3px 5px;
+      font-size: 11px;
+    }
+    .right-stack {
+      max-width: calc(100vw - 20px);
+      top: 40px;
+    }
+  }
+  /* Phone: tighten margins, and let the right-hand analysis panels span the width
+     so they don't overflow off-screen; give touch targets a little more height. */
+  @media (max-width: 480px) {
+    .active-layers {
+      top: 4px;
+      left: 4px;
+    }
+    .right-stack {
+      left: 4px;
+      right: 4px;
+      max-width: none;
+      align-items: stretch;
+    }
+    .active-layers button,
+    .active-layers select {
+      min-height: 30px;
+    }
+  }
 </style>

@@ -2303,15 +2303,72 @@
   let dragStartOffsetX = 0;
   let dragStartOffsetY = 0;
 
+  // --- Touch pinch-to-zoom (feature 127) ---------------------------------------
+  // Pointer events unify mouse/pen/touch, so a single finger already pans via the
+  // drag path. Two fingers = pinch-zoom: we track every active pointer and drive
+  // the zoom from the change in the two-finger DISTANCE (a doubling ⇒ +1 zoom
+  // level), zooming about the screen centre exactly like the wheel so the centred
+  // sky point is preserved. Pinch suspends the one-finger pan while it is active.
+  const activePointers = new Map<number, { x: number; y: number }>();
+  let isPinching = false;
+  let pinchStartDist = 0;
+  let pinchStartZoom = 0;
+
+  /** Distance between the first two active pointers (0 if fewer than two). */
+  function twoPointerDist(): number {
+    const pts = [...activePointers.values()];
+    if (pts.length < 2) return 0;
+    return Math.hypot(pts[0]!.x - pts[1]!.x, pts[0]!.y - pts[1]!.y);
+  }
+
   function onPointerDown(e: PointerEvent) {
-    if (e.button !== 0) return;
     if (crossSectionMode) return; // in cross-section mode the overlay handles drags
+    // Touch: track every finger so a second one can start a pinch. Mouse keeps the
+    // left-button-only guard.
+    if (e.pointerType === 'touch') {
+      activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (activePointers.size >= 2) {
+        // Second finger down → begin pinch, cancel any in-progress one-finger pan.
+        isPinching = true;
+        isDragging = false;
+        panOffsetX = 0;
+        panOffsetY = 0;
+        pinchStartDist = twoPointerDist();
+        pinchStartZoom = zoomLevel;
+        return;
+      }
+    } else if (e.button !== 0) {
+      return;
+    }
     isDragging = true;
     dragStartX = e.clientX;
     dragStartY = e.clientY;
     dragStartOffsetX = panOffsetX;
     dragStartOffsetY = panOffsetY;
-    (e.target as Element).setPointerCapture(e.pointerId);
+    try {
+      (e.target as Element).setPointerCapture(e.pointerId);
+    } catch {
+      /* a synthetic/inactive pointer (tests) can't be captured — harmless */
+    }
+  }
+
+  /** Update the live pinch from the two current finger positions. */
+  function updatePinch() {
+    const dist = twoPointerDist();
+    if (dist <= 0 || pinchStartDist <= 0) return;
+    // A doubling of finger spread ⇒ +1 zoom level (log2 ratio).
+    const target = pinchStartZoom + Math.log2(dist / pinchStartDist);
+    const clamped = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, target));
+    if (clamped === zoomLevel) return;
+    // Preserve the sky point at screen centre across the zoom (same as onWheel).
+    const [centerRa, centerDec] = canvasToSky(currentView(), canvasWidth / 2, canvasHeight / 2);
+    zoomLevel = clamped;
+    fov = zoomToFov(zoomLevel);
+    ra = centerRa;
+    dec = centerDec;
+    scheduleRender();
+    loadTilesSoon();
+    emitState();
   }
 
   // --- Live cursor readout (RA/Dec + sampled luminance under the pointer) ---
@@ -2445,6 +2502,15 @@
   }
 
   function onPointerMove(e: PointerEvent) {
+    // Keep the tracked finger positions current so a pinch reads live distances.
+    if (e.pointerType === 'touch' && activePointers.has(e.pointerId)) {
+      activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    }
+    if (isPinching) {
+      updatePinch();
+      return; // a pinch owns the gesture — no pan, no cursor readout churn
+    }
+
     updateCursorReadout(e);
 
     if (showMagnifier && magnifierCtx) {
@@ -2685,6 +2751,20 @@
   let pendingIdentifyTimer: ReturnType<typeof setTimeout> | null = null;
 
   function onPointerUp(e: PointerEvent) {
+    // Touch bookkeeping: drop the lifted finger. Leaving pinch (fewer than two
+    // fingers) finalises the zoom and reloads tiles at the new level.
+    if (e.pointerType === 'touch') {
+      activePointers.delete(e.pointerId);
+      if (isPinching && activePointers.size < 2) {
+        isPinching = false;
+        pinchStartDist = 0;
+        loadTiles();
+        emitState();
+        return;
+      }
+    }
+    if (isPinching) return; // a second finger is still down — stay in pinch
+
     if (!isDragging) return;
     isDragging = false;
 
@@ -3722,6 +3802,9 @@
     cursor: grab;
     image-rendering: pixelated;
     outline: none;
+    /* Own all touch gestures (one-finger pan, two-finger pinch-zoom) instead of
+       letting the browser scroll/zoom the page — feature 127. */
+    touch-action: none;
   }
 
   .alert-canvas {

@@ -217,6 +217,8 @@
     color: #e0e0e0;
     font-size: 13px;
     z-index: 20;
+    /* Wrap onto a second row instead of overflowing off narrow screens (127). */
+    flex-wrap: wrap;
   }
 
   .search-group {
@@ -312,5 +314,16 @@
     background: #16351f;
     color: #6ee08c;
     border-color: #3a8c52;
+  }
+
+  /* Phone: shrink the search field and drop the flexible spacer so the icon
+     buttons pack and wrap instead of overflowing the viewport (feature 127). */
+  @media (max-width: 480px) {
+    .search-input {
+      width: 108px;
+    }
+    .spacer {
+      display: none;
+    }
   }
 </style>
