@@ -131,6 +131,30 @@ test.describe('LIVE Rubin DP1 (requires RSP_TOKEN with DP1 rights)', () => {
     ).toBeVisible({ timeout: 30000 });
   });
 
+  test('ForcedSource light curve plots real epochs when centred on a DP1 object', async ({ page }) => {
+    const rspFailures = trackRspFailures(page);
+    await page.goto('/');
+    await page.locator('select[aria-label="Base layer"]').selectOption('rubin');
+    // A known EDFS object that has forced-source photometry (from a live probe).
+    const search = page.locator('input[aria-label="Search coordinates"]');
+    await search.fill('59.28107, -48.98508');
+    await search.press('Enter');
+    await page.waitForTimeout(2000);
+
+    await page.locator('button[aria-label="Toggle light curve"]').click();
+    const refresh = page.locator('button[aria-label="Refresh light curve"]');
+    if (await refresh.count()) await refresh.first().click();
+
+    // Real ForcedSource epochs → plotted points on the intensity-vs-time SVG. A
+    // no-data / error state (or the old JSON-parse break) shows zero points.
+    await expect
+      .poll(() => page.locator('[aria-label="Intensity vs time"] circle').count(), {
+        timeout: 30000,
+        message: `no light-curve points plotted. RSP errors: ${rspFailures().join(' | ') || 'none'}`,
+      })
+      .toBeGreaterThan(1);
+  });
+
   test('SODA FITS cutout resolves to a real image at the field centre', async ({ page }) => {
     const rspFailures = trackRspFailures(page);
     await page.goto('/');

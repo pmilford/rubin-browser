@@ -852,9 +852,18 @@
     const pixelScaleArcsec = (sepDeg(ra1, dec1, ra2, dec2) / 16) * 3600;
     if (!(pixelScaleArcsec > 0)) return null;
 
-    const psfArcsec = nominalPsfArcsec();
-    const localPsfPx = psfArcsec / pixelScaleArcsec;
-    const N = Math.max(24, Math.min(96, Math.round(6 * localPsfPx)));
+    // Effective PSF (feature 123): a downsampled base (DSS / Rubin HiPS at browse
+    // zoom) cannot resolve anything finer than ~a couple of its OWN pixels, so the
+    // resolvable scale is the DISPLAY pixel, not the physical seeing — take the
+    // larger of the two. Without this floor the physical seeing ÷ a coarse display
+    // pixel is ≪ 1, so every real-imagery click was wrongly gated
+    // "insufficient resolution / too faint" even on obvious sources.
+    const MIN_DISPLAY_PSF_PX = 2.5;
+    const psfArcsec = Math.max(nominalPsfArcsec(), MIN_DISPLAY_PSF_PX * pixelScaleArcsec);
+    const localPsfPx = psfArcsec / pixelScaleArcsec; // ≥ MIN_DISPLAY_PSF_PX
+    // Box big enough to hold the source AND a background ring (a too-small box sits
+    // entirely inside a bright source → uniform → SNR 0 → false "too faint").
+    const N = Math.max(32, Math.min(128, Math.round(6 * localPsfPx)));
     const half = N / 2;
     const grid = new Float32Array(N * N);
     for (let j = 0; j < N; j++) {
