@@ -2,6 +2,7 @@
 
 import { getAuthHeader } from './auth.js';
 import { toRequestUrl } from './rspProxy.js';
+import { fetchWithRetry } from './rateLimit.js';
 import type { TapQueryResult, ColumnDef, ConeSearchParams } from '../types/catalog.js';
 
 // The Rubin RSP TAP service (DP1 catalogs live in the `dp1` SCHEMA, queried via
@@ -31,7 +32,9 @@ export async function query(
     MAXREC: String(maxRec),
   });
 
-  const resp = await fetch(toRequestUrl(`${TAP_BASE}/sync`), {
+  // Retry on 429 (rate limited) / 503, honouring Retry-After — the RSP enforces
+  // per-user quotas and replies 429 rather than failing outright.
+  const resp = await fetchWithRetry(toRequestUrl(`${TAP_BASE}/sync`), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
