@@ -3,6 +3,7 @@
 import { getAuthHeader } from './auth.js';
 import { toRequestUrl } from './rspProxy.js';
 import { fetchWithRetry } from './rateLimit.js';
+import { parseVotable } from './votable.js';
 import type { TapQueryResult, ColumnDef } from '../types/catalog.js';
 
 // The Rubin RSP TAP service (DP1 catalogs live in the `dp1` SCHEMA, queried via
@@ -13,22 +14,33 @@ import type { TapQueryResult, ColumnDef } from '../types/catalog.js';
 const TAP_BASE = 'https://data.lsst.cloud/api/tap';
 
 export interface TapOptions {
-  format?: 'json' | 'votable' | 'csv';
   maxRec?: number;
   asyncTimeout?: number; // ms, for async queries
 }
 
-/** Execute a synchronous TAP query */
+/**
+ * Execute a synchronous TAP query and return name-keyed rows.
+ *
+ * VALIDATED AGAINST THE LIVE SERVICE (data.lsst.cloud, an authenticated DP1
+ * account, 2026-07): the RSP `/api/tap/sync` endpoint ALWAYS responds with a
+ * VOTable (`application/x-votable+xml; serialization=binary2`) and returns an
+ * EMPTY body for `FORMAT=json` — JSON output is not supported. We therefore parse
+ * VOTable (see votable.ts), never JSON. `RESPONSEFORMAT` is honoured over the
+ * legacy `FORMAT`; we send both, but the service returns binary2 regardless.
+ */
 export async function query(
   adql: string,
   options: TapOptions = {}
 ): Promise<TapQueryResult> {
-  const { format = 'json', maxRec = 10000 } = options;
+  const { maxRec = 10000 } = options;
 
   const body = new URLSearchParams({
+    REQUEST: 'doQuery',
     QUERY: adql,
     LANG: 'ADQL',
-    FORMAT: format,
+    // The RSP always serialises binary2; send the standard params for correctness.
+    RESPONSEFORMAT: 'votable',
+    FORMAT: 'votable',
     MAXREC: String(maxRec),
   });
 
@@ -48,53 +60,45 @@ export async function query(
     throw new Error(`TAP query failed (${resp.status}): ${text}`);
   }
 
-  if (format === 'json') {
-    // A 200 that isn't JSON means we hit the wrong route (the RSP portal SPA
-    // returns HTML for unregistered paths) or the session isn't authenticated —
-    // surface that honestly instead of a cryptic JSON.parse "Unexpected token <".
-    const contentType = resp.headers?.get?.('content-type') ?? '';
-    if (contentType && !contentType.includes('json')) {
-      const text = await resp.text();
-      throw new Error(
-        `TAP returned a non-JSON response (content-type: ${contentType || 'unknown'}). ` +
-          'The request likely hit the wrong endpoint or was not authenticated. ' +
-          `First bytes: ${text.slice(0, 100).replace(/\s+/g, ' ').trim()}…`
-      );
-    }
-    // A 200 with an EMPTY body makes resp.json() throw "Unexpected end of JSON
-    // input" — surfaced live on the light-curve path. Turn that (and any
-    // unparseable body) into an honest, actionable message instead.
-    let json: unknown;
-    try {
-      json = await resp.json();
-    } catch (err) {
-      throw new Error(
-        `TAP returned an empty or unparseable JSON body (HTTP ${resp.status}). ` +
-          'This usually means the query returned nothing or the session lacks ' +
-          'DP1 data rights — sign in with an RSP token that has DP1 access.',
-        { cause: err }
-      );
-    }
-    return parseJsonResponse(json);
+  const text = await resp.text();
+  // An empty body (the classic symptom of an unauthenticated / no-data-rights
+  // session, or a wrong endpoint) is surfaced honestly rather than as a cryptic
+  // XML-parse failure.
+  if (!text.trim()) {
+    throw new Error(
+      'TAP returned an empty response body (HTTP 200). This usually means the ' +
+        'session lacks DP1 data rights or the request hit the wrong endpoint — ' +
+        'sign in with an RSP token that has DP1 access.'
+    );
+  }
+  // If the RSP portal SPA HTML came back (wrong route / not authenticated), say so.
+  const head = text.slice(0, 200).toLowerCase();
+  if (head.includes('<!doctype html') || head.includes('<html')) {
+    throw new Error(
+      'TAP returned HTML instead of a VOTable — the request likely hit the wrong ' +
+        'endpoint or was not authenticated (check the RSP token).'
+    );
   }
 
-  // For VOTable/CSV, return raw text as single column
-  const text = await resp.text();
+  const vot = parseVotable(text);
   return {
-    status: 'completed',
-    rowCount: 0,
-    columns: [{ name: 'raw', datatype: 'string' }],
-    rows: [{ raw: text }],
+    status: vot.status === 'OVERFLOW' ? 'overflow' : 'completed',
+    rowCount: vot.rows.length,
+    columns: vot.fields.map(
+      (f): ColumnDef => ({ name: f.name, datatype: f.datatype, unit: f.unit })
+    ),
+    rows: vot.rows,
   };
 }
 
-/** Submit an async TAP query (for large result sets) */
+/**
+ * Submit an async TAP query (for large result sets) and return name-keyed rows.
+ * The async result is likewise a VOTable (see {@link query}); parsed via votable.ts.
+ */
 export async function queryAsync(
   adql: string,
   options: TapOptions = {}
 ): Promise<TapQueryResult> {
-  const { format = 'json' } = options;
-
   // Submit job
   const submitResp = await fetch(toRequestUrl(`${TAP_BASE}/async`), {
     method: 'POST',
@@ -103,9 +107,10 @@ export async function queryAsync(
       ...getAuthHeader(),
     },
     body: new URLSearchParams({
+      REQUEST: 'doQuery',
       QUERY: adql,
       LANG: 'ADQL',
-      FORMAT: format,
+      RESPONSEFORMAT: 'votable',
       MAXREC: '0', // no limit for async
     }).toString(),
   });
@@ -131,15 +136,12 @@ export async function queryAsync(
       const resultResp = await fetch(toRequestUrl(`${jobUrl}/results/result`), {
         headers: getAuthHeader(),
       });
-      if (format === 'json') {
-        return parseJsonResponse(await resultResp.json());
-      }
-      const text = await resultResp.text();
+      const vot = parseVotable(await resultResp.text());
       return {
-        status: 'completed',
-        rowCount: 0,
-        columns: [{ name: 'raw', datatype: 'string' }],
-        rows: [{ raw: text }],
+        status: vot.status === 'OVERFLOW' ? 'overflow' : 'completed',
+        rowCount: vot.rows.length,
+        columns: vot.fields.map((f): ColumnDef => ({ name: f.name, datatype: f.datatype, unit: f.unit })),
+        rows: vot.rows,
       };
     }
 
@@ -151,27 +153,4 @@ export async function queryAsync(
   }
 
   throw new Error('Async TAP query timed out');
-}
-
-/** Parse VOTable JSON response into TapQueryResult */
-function parseJsonResponse(data: unknown): TapQueryResult {
-  // Rubin TAP returns VOTable-like JSON
-  const obj = data as Record<string, unknown>;
-  const metadata = (obj.metadata ?? {}) as Record<string, unknown>;
-  const rawColumns = (metadata.fields ?? []) as Record<string, string>[];
-  const rawRows = (obj.data ?? obj.rows ?? []) as Record<string, unknown>[];
-
-  const columns: ColumnDef[] = rawColumns.map((f) => ({
-    name: f.name ?? f.ID ?? 'unknown',
-    datatype: f.datatype ?? 'string',
-    unit: f.unit,
-    description: f.description,
-  }));
-
-  return {
-    status: 'completed',
-    rowCount: rawRows.length,
-    columns,
-    rows: rawRows,
-  };
 }

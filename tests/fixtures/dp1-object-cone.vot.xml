@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<VOTABLE xmlns="http://www.ivoa.net/xml/VOTable/v1.3" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" version="1.4">
+  <RESOURCE type="results">
+    <INFO name="QUERY_STATUS" value="OK" />
+    <INFO name="QUERY_TIMESTAMP" value="2026-07-11T18:45:13.852" />
+    <INFO name="QUERY" value="SELECT TOP 2 objectId, coord_ra, coord_dec, r_psfMag FROM dp1.Object WHERE CONTAINS(POINT('ICRS',coord_ra,coord_dec),CIRCLE('ICRS',59.29,-48.99,0.05))=1" />
+    <TABLE>
+      <FIELD name="objectId" datatype="long" ID="col_0" ucd="meta.id;src">
+        <DESCRIPTION>Unique id. Unique ObjectID</DESCRIPTION>
+      </FIELD>
+      <FIELD name="coord_ra" datatype="double" ID="col_1" ucd="pos.eq.ra;meta.main" unit="deg">
+        <DESCRIPTION>Fiducial ICRS Right Ascension of centroid used for database indexing</DESCRIPTION>
+      </FIELD>
+      <FIELD name="coord_dec" datatype="double" ID="col_2" ucd="pos.eq.dec;meta.main" unit="deg">
+        <DESCRIPTION>Fiducial ICRS Declination of centroid used for database indexing</DESCRIPTION>
+      </FIELD>
+      <FIELD name="r_psfMag" datatype="float" ID="col_3" unit="mag">
+        <DESCRIPTION>AB magnitude of the r-band psfFlux.</DESCRIPTION>
+      </FIELD>
+      <DATA>
+      <BINARY2>
+        <STREAM encoding='base64'>
+AAg6c2AAAESEQE2j+kK/g4DASH4XHQd+EUHUXgEACDpzcAAANTNATZ/HZ+sNIsBI
+fGWpam+9QcnbVw==
+        </STREAM>
+      </BINARY2>
+    </DATA>
+</TABLE>
+  </RESOURCE>
+  <RESOURCE type="meta" utype="adhoc:service">
+    <DESCRIPTION>ForcedSource time series</DESCRIPTION>
+    <PARAM name="accessURL" datatype="char" arraysize="*" value="https://data.lsst.cloud/api/datalink/timeseries" />
+    <PARAM name="standardID" datatype="char" arraysize="*" value="lsst://api.data.lsst.cloud/datalink/timeseries#v0.1" />
+    <GROUP name="inputParams">
+      <PARAM name="id" datatype="long" ucd="meta.id" ref="col_0" value="">
+        <DESCRIPTION>Object ID for time series</DESCRIPTION>
+      </PARAM>
+      <PARAM name="table" datatype="char" arraysize="*" value="dp1.ForcedSource">
+        <DESCRIPTION>Table containing time series data</DESCRIPTION>
+      </PARAM>
+      <PARAM name="id_column" datatype="char" arraysize="*" value="objectId">
+        <DESCRIPTION>Foreign key in time series table</DESCRIPTION>
+      </PARAM>
+      <PARAM name="join_time_column" datatype="char" arraysize="*" value="dp1.CcdVisit.expMidptMJD">
+        <DESCRIPTION>Foreign column spec for time retrieval</DESCRIPTION>
+      </PARAM>
+      <PARAM name="join_style" datatype="char" arraysize="*" value="visit_detector">
+        <DESCRIPTION>Single-column (ccdVisit) or composite-key (visit_detector) JOIN</DESCRIPTION>
+      </PARAM>
+      <PARAM name="band" datatype="char" arraysize="*" value="all">
+        <DESCRIPTION>Filter band to retrieve (default: all)</DESCRIPTION>
+        <VALUES>
+          <OPTION value="all" />
+          <OPTION value="u" />
+          <OPTION value="g" />
+          <OPTION value="r" />
+          <OPTION value="i" />
+          <OPTION value="z" />
+          <OPTION value="y" />
+        </VALUES>
+      </PARAM>
+      <PARAM name="detail" datatype="char" arraysize="*" value="principal">
+        <DESCRIPTION>Level of detail for time series (default: principal)</DESCRIPTION>
+        <VALUES>
+          <OPTION value="full" />
+          <OPTION value="principal" />
+          <OPTION value="minimal" />
+        </VALUES>
+      </PARAM>
+    </GROUP>
+  </RESOURCE>
+</VOTABLE>

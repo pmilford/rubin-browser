@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { query, queryAsync } from '../../src/api/tap.js';
 import { setToken, clearToken } from '../../src/api/auth.js';
 
@@ -12,6 +13,29 @@ Object.defineProperty(globalThis, 'sessionStorage', {
   writable: true,
 });
 
+// The VERBATIM live RSP TAP response (VOTable binary2) — the shape the service
+// ACTUALLY returns (validated against data.lsst.cloud). Using the real fixture is
+// the whole point: the old tests mocked an invented JSON shape and hid that every
+// live TAP call was broken.
+const REAL_VOT = readFileSync('tests/fixtures/dp1-object-cone.vot.xml', 'utf-8');
+
+/** Build a minimal TABLEDATA VOTable for synthetic unit cases. */
+function tabledataVot(fields: { name: string; datatype: string }[], rows: string[][], status = 'OK'): string {
+  const fieldXml = fields
+    .map((f, i) => `<FIELD name="${f.name}" datatype="${f.datatype}" ID="c${i}"/>`)
+    .join('');
+  const rowXml = rows.map((r) => `<TR>${r.map((v) => `<TD>${v}</TD>`).join('')}</TR>`).join('');
+  return `<?xml version="1.0"?><VOTABLE version="1.4"><RESOURCE type="results"><INFO name="QUERY_STATUS" value="${status}"/><TABLE>${fieldXml}<DATA><TABLEDATA>${rowXml}</TABLEDATA></DATA></TABLE></RESOURCE></VOTABLE>`;
+}
+
+function mockText(text: string, ok = true, status = 200): void {
+  globalThis.fetch = vi.fn().mockResolvedValue({
+    ok,
+    status,
+    text: () => Promise.resolve(text),
+  });
+}
+
 describe('TAP Client', () => {
   describe('query', () => {
     beforeEach(() => {
@@ -20,178 +44,74 @@ describe('TAP Client', () => {
       vi.restoreAllMocks();
     });
 
-    it('sends ADQL to sync endpoint', async () => {
-      const mockResponse = {
-        metadata: { fields: [{ name: 'objectId', datatype: 'long' }] },
-        data: [{ objectId: '12345' }],
-      };
-
-      globalThis.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve(mockResponse),
-      });
-
+    it('POSTs ADQL + bearer to /sync and parses the REAL binary2 VOTable to rows', async () => {
+      mockText(REAL_VOT);
       setToken('test-token');
-      const result = await query('SELECT TOP 1 * FROM Object');
+      const result = await query('SELECT TOP 2 objectId, coord_ra, coord_dec, r_psfMag FROM dp1.Object');
 
       expect(fetch).toHaveBeenCalledWith(
         expect.stringContaining('/sync'),
         expect.objectContaining({
           method: 'POST',
-          headers: expect.objectContaining({
-            Authorization: 'Bearer test-token',
-          }),
+          headers: expect.objectContaining({ Authorization: 'Bearer test-token' }),
         })
       );
-
       expect(result.status).toBe('completed');
-      expect(result.rowCount).toBe(1);
+      expect(result.rowCount).toBe(2);
       expect(result.columns[0].name).toBe('objectId');
+      // objectId is a 64-bit long preserved as an EXACT string (not a rounded number).
+      expect(result.rows[0].objectId).toBe('592913157106713732');
+      expect(result.rows[0].coord_ra as number).toBeCloseTo(59.281075, 5);
     });
 
-    it('throws a clear error when a 200 returns HTML, not JSON (wrong endpoint / SPA)', async () => {
-      // The RSP portal SPA answers unregistered routes (e.g. the old /api/dp1/sync)
-      // with a 200 HTML page; surface that honestly, not a cryptic JSON.parse error.
-      globalThis.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        headers: { get: (h: string) => (h === 'content-type' ? 'text/html; charset=utf-8' : null) },
-        text: () => Promise.resolve('<!DOCTYPE html><html><body>Rubin Science Platform</body></html>'),
-        json: () => Promise.reject(new Error('Unexpected token <')),
-      });
-      setToken('test-token');
-      await expect(query('SELECT 1')).rejects.toThrow(/non-JSON response/i);
-    });
-
-    it('turns an empty/unparseable 200 JSON body into an honest error (not "Unexpected end of JSON input")', async () => {
-      // Live symptom on the light-curve path: an empty 200 body makes resp.json()
-      // throw "Unexpected end of JSON input"; the client must surface an actionable
-      // message about no rows / missing DP1 data rights instead.
-      globalThis.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        headers: { get: (h: string) => (h === 'content-type' ? 'application/json' : null) },
-        json: () => Promise.reject(new Error('Unexpected end of JSON input')),
-      });
-      setToken('test-token');
-      await expect(query('SELECT 1')).rejects.toThrow(/empty or unparseable JSON body/i);
-    });
-
-    it('still parses JSON when the content-type header says json', async () => {
-      globalThis.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        headers: { get: (h: string) => (h === 'content-type' ? 'application/json' : null) },
-        json: () => Promise.resolve({ metadata: { fields: [{ name: 'x', datatype: 'int' }] }, data: [{ x: 1 }] }),
-      });
-      setToken('test-token');
+    it('parses a TABLEDATA VOTable, keying rows by column name', async () => {
+      mockText(tabledataVot([{ name: 'x', datatype: 'int' }, { name: 'y', datatype: 'double' }], [['1', '2.5'], ['3', '4.5']]));
       const result = await query('SELECT 1');
-      expect(result.rowCount).toBe(1);
+      expect(result.rowCount).toBe(2);
+      expect(result.rows[1]).toEqual({ x: 3, y: 4.5 });
+    });
+
+    it('surfaces an EMPTY 200 body as an honest data-rights error (the live symptom)', async () => {
+      // FORMAT=json returns an empty body from the RSP; a session without DP1 rights
+      // also yields empty. Must be actionable, not a cryptic parse failure.
+      mockText('   ');
+      setToken('test-token');
+      await expect(query('SELECT 1')).rejects.toThrow(/empty response body/i);
+    });
+
+    it('surfaces an HTML 200 body (wrong endpoint / SPA) honestly', async () => {
+      mockText('<!DOCTYPE html><html><body>Rubin Science Platform</body></html>');
+      setToken('test-token');
+      await expect(query('SELECT 1')).rejects.toThrow(/HTML instead of a VOTable/i);
+    });
+
+    it('throws the ADQL error from a QUERY_STATUS=ERROR VOTable', async () => {
+      const errVot =
+        `<?xml version="1.0"?><VOTABLE version="1.4"><RESOURCE type="results">` +
+        `<INFO name="QUERY_STATUS" value="ERROR">Unknown column 'nope'</INFO></RESOURCE></VOTABLE>`;
+      mockText(errVot);
+      await expect(query('SELECT nope FROM dp1.Object')).rejects.toThrow(/Unknown column 'nope'/);
     });
 
     it('throws on HTTP error', async () => {
-      globalThis.fetch = vi.fn().mockResolvedValue({
-        ok: false,
-        status: 401,
-        text: () => Promise.resolve('Unauthorized'),
-      });
-
+      mockText('Unauthorized', false, 401);
       setToken('bad-token');
       await expect(query('SELECT * FROM Object')).rejects.toThrow('401');
     });
 
-    it('works without auth header when no token', async () => {
-      globalThis.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({ metadata: { fields: [] }, data: [] }),
-      });
-
+    it('works without an auth header when no token', async () => {
+      mockText(tabledataVot([{ name: 'x', datatype: 'int' }], []));
       await query('SELECT TOP 1 * FROM Object');
-
       const headers = vi.mocked(fetch).mock.calls[0][1]?.headers as Record<string, string>;
       expect(headers.Authorization).toBeUndefined();
     });
 
-    it('parses response with no metadata key', async () => {
-      globalThis.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({ data: [{ x: 1 }] }),
-      });
-
+    it('returns zero rows (not an error) for an empty-but-valid result', async () => {
+      mockText(tabledataVot([{ name: 'objectId', datatype: 'long' }], []));
       const result = await query('SELECT 1');
-      expect(result.columns).toEqual([]);
-      expect(result.rowCount).toBe(1);
-    });
-
-    it('parses response using rows instead of data', async () => {
-      globalThis.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({ rows: [{ a: 1 }, { a: 2 }] }),
-      });
-
-      const result = await query('SELECT 1');
-      expect(result.rowCount).toBe(2);
-    });
-
-    it('parses response with no data and no rows', async () => {
-      globalThis.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({}),
-      });
-
-      const result = await query('SELECT 1');
+      expect(result.rowCount).toBe(0);
       expect(result.rows).toEqual([]);
-      expect(result.rowCount).toBe(0);
-    });
-
-    it('parses columns with ID fallback and no name', async () => {
-      globalThis.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        json: () =>
-          Promise.resolve({
-            metadata: {
-              fields: [
-                { ID: 'col_id', datatype: 'int' },
-                {},
-              ],
-            },
-            data: [],
-          }),
-      });
-
-      const result = await query('SELECT 1');
-      expect(result.columns[0].name).toBe('col_id');
-      expect(result.columns[0].datatype).toBe('int');
-      expect(result.columns[1].name).toBe('unknown');
-      expect(result.columns[1].datatype).toBe('string');
-    });
-
-    it('parses columns with missing datatype', async () => {
-      globalThis.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        json: () =>
-          Promise.resolve({
-            metadata: { fields: [{ name: 'x' }] },
-            data: [],
-          }),
-      });
-
-      const result = await query('SELECT 1');
-      expect(result.columns[0].datatype).toBe('string');
-    });
-
-    it('returns raw text for non-JSON format', async () => {
-      const csvText = 'objectId,ra,dec\n12345,62.0,-37.0';
-
-      globalThis.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        text: () => Promise.resolve(csvText),
-      });
-
-      setToken('test-token');
-      const result = await query('SELECT * FROM Object', { format: 'csv' });
-
-      expect(result.status).toBe('completed');
-      expect(result.rowCount).toBe(0);
-      expect(result.columns).toEqual([{ name: 'raw', datatype: 'string' }]);
-      expect(result.rows).toEqual([{ raw: csvText }]);
+      expect(result.columns[0].name).toBe('objectId');
     });
   });
 
@@ -202,162 +122,60 @@ describe('TAP Client', () => {
       vi.restoreAllMocks();
     });
 
-    it('submits job, polls, and returns JSON results', async () => {
+    it('submits, polls, and parses the VOTable result', async () => {
       setToken('async-token');
-
-      const jobUrl = 'https://data.lsst.cloud/api/dp1/async/job123';
-      const mockResult = {
-        metadata: { fields: [{ name: 'objectId', datatype: 'long' }] },
-        data: [{ objectId: '999' }],
-      };
+      const jobUrl = 'https://data.lsst.cloud/api/tap/async/job123';
+      const resultVot = tabledataVot([{ name: 'objectId', datatype: 'long' }], [['999']]);
 
       let pollCount = 0;
       globalThis.fetch = vi.fn().mockImplementation((url: string) => {
-        if (url.endsWith('/async')) {
-          // Submit response
-          return Promise.resolve({
-            ok: true,
-            headers: new Headers({ Location: jobUrl }),
-          });
-        }
+        if (url.endsWith('/async')) return Promise.resolve({ ok: true, headers: new Headers({ Location: jobUrl }) });
         if (url.endsWith('/phase')) {
-          // First poll returns EXECUTING, second returns COMPLETED
           pollCount++;
-          const phase = pollCount >= 2 ? 'COMPLETED' : 'EXECUTING';
-          return Promise.resolve({
-            ok: true,
-            text: () => Promise.resolve(phase),
-          });
+          return Promise.resolve({ ok: true, text: () => Promise.resolve(pollCount >= 2 ? 'COMPLETED' : 'EXECUTING') });
         }
-        if (url.endsWith('/results/result')) {
-          return Promise.resolve({
-            ok: true,
-            json: () => Promise.resolve(mockResult),
-          });
-        }
+        if (url.endsWith('/results/result')) return Promise.resolve({ ok: true, text: () => Promise.resolve(resultVot) });
         return Promise.reject(new Error(`Unexpected URL: ${url}`));
       });
 
-      // Use a short timeout but long enough for the test
       const result = await queryAsync('SELECT * FROM Object', { asyncTimeout: 60000 });
-
       expect(result.status).toBe('completed');
       expect(result.rowCount).toBe(1);
-      expect(result.columns[0].name).toBe('objectId');
-    });
-
-    it('returns raw text for non-JSON async results', async () => {
-      setToken('async-token');
-
-      const jobUrl = 'https://data.lsst.cloud/api/dp1/async/job456';
-      const votableText = '<VOTABLE>...</VOTABLE>';
-
-      globalThis.fetch = vi.fn().mockImplementation((url: string) => {
-        if (url.endsWith('/async')) {
-          return Promise.resolve({
-            ok: true,
-            headers: new Headers({ Location: jobUrl }),
-          });
-        }
-        if (url.endsWith('/phase')) {
-          return Promise.resolve({
-            ok: true,
-            text: () => Promise.resolve('COMPLETED'),
-          });
-        }
-        if (url.endsWith('/results/result')) {
-          return Promise.resolve({
-            ok: true,
-            text: () => Promise.resolve(votableText),
-          });
-        }
-        return Promise.reject(new Error(`Unexpected URL: ${url}`));
-      });
-
-      const result = await queryAsync('SELECT * FROM Object', { format: 'votable' });
-
-      expect(result.status).toBe('completed');
-      expect(result.rowCount).toBe(0);
-      expect(result.columns).toEqual([{ name: 'raw', datatype: 'string' }]);
-      expect(result.rows).toEqual([{ raw: votableText }]);
+      expect(result.rows[0].objectId).toBe('999');
     });
 
     it('throws when submit fails', async () => {
       setToken('async-token');
-
-      globalThis.fetch = vi.fn().mockResolvedValue({
-        ok: false,
-        status: 500,
-      });
-
-      await expect(queryAsync('SELECT * FROM Object')).rejects.toThrow(
-        'Async TAP submit failed (500)'
-      );
+      globalThis.fetch = vi.fn().mockResolvedValue({ ok: false, status: 500 });
+      await expect(queryAsync('SELECT * FROM Object')).rejects.toThrow('Async TAP submit failed (500)');
     });
 
     it('throws when no job location returned', async () => {
       setToken('async-token');
-
-      globalThis.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        headers: new Headers(), // no Location header
-      });
-
-      await expect(queryAsync('SELECT * FROM Object')).rejects.toThrow(
-        'No job location returned'
-      );
+      globalThis.fetch = vi.fn().mockResolvedValue({ ok: true, headers: new Headers() });
+      await expect(queryAsync('SELECT * FROM Object')).rejects.toThrow('No job location returned');
     });
 
-    it('throws when job errors', async () => {
+    it('throws when the job errors', async () => {
       setToken('async-token');
-
-      const jobUrl = 'https://data.lsst.cloud/api/dp1/async/joberr';
-
+      const jobUrl = 'https://data.lsst.cloud/api/tap/async/joberr';
       globalThis.fetch = vi.fn().mockImplementation((url: string) => {
-        if (url.endsWith('/async')) {
-          return Promise.resolve({
-            ok: true,
-            headers: new Headers({ Location: jobUrl }),
-          });
-        }
-        if (url.endsWith('/phase')) {
-          return Promise.resolve({
-            ok: true,
-            text: () => Promise.resolve('ERROR'),
-          });
-        }
+        if (url.endsWith('/async')) return Promise.resolve({ ok: true, headers: new Headers({ Location: jobUrl }) });
+        if (url.endsWith('/phase')) return Promise.resolve({ ok: true, text: () => Promise.resolve('ERROR') });
         return Promise.reject(new Error(`Unexpected URL: ${url}`));
       });
-
-      await expect(queryAsync('SELECT * FROM Object')).rejects.toThrow(
-        'Async TAP query failed'
-      );
+      await expect(queryAsync('SELECT * FROM Object')).rejects.toThrow('Async TAP query failed');
     });
 
     it('throws on timeout', async () => {
       setToken('async-token');
-
-      const jobUrl = 'https://data.lsst.cloud/api/dp1/async/jobtimeout';
-
+      const jobUrl = 'https://data.lsst.cloud/api/tap/async/jobtimeout';
       globalThis.fetch = vi.fn().mockImplementation((url: string) => {
-        if (url.endsWith('/async')) {
-          return Promise.resolve({
-            ok: true,
-            headers: new Headers({ Location: jobUrl }),
-          });
-        }
-        if (url.endsWith('/phase')) {
-          return Promise.resolve({
-            ok: true,
-            text: () => Promise.resolve('EXECUTING'),
-          });
-        }
+        if (url.endsWith('/async')) return Promise.resolve({ ok: true, headers: new Headers({ Location: jobUrl }) });
+        if (url.endsWith('/phase')) return Promise.resolve({ ok: true, text: () => Promise.resolve('EXECUTING') });
         return Promise.reject(new Error(`Unexpected URL: ${url}`));
       });
-
-      await expect(
-        queryAsync('SELECT * FROM Object', { asyncTimeout: 0 })
-      ).rejects.toThrow('Async TAP query timed out');
+      await expect(queryAsync('SELECT * FROM Object', { asyncTimeout: 0 })).rejects.toThrow('Async TAP query timed out');
     });
   });
 });
