@@ -6,6 +6,7 @@ import {
   isAuthenticated,
   isTokenPersisted,
   getAuthHeader,
+  getTokenExpiry,
   validateToken,
 } from '../../src/api/auth.js';
 
@@ -186,6 +187,37 @@ describe('Auth Module', () => {
     it('returns null when JWT payload has no exp field', () => {
       setToken(fakeJwt({ sub: 'user', iat: 123 }));
       expect(isAuthenticated()).toBe(true);
+    });
+  });
+
+  describe('opaque RSP tokens (gt-…) are not JWTs', () => {
+    // Real RSP tokens are opaque Gafaelfawr handles like `gt-<random>.<random>`.
+    // A `.`-containing gt- token is the adversarial case: a naive JWT parser would
+    // atob() the middle segment and could fabricate a bogus expiry from it.
+    const OPAQUE_TOKEN = 'gt-abc123DEF456.ghi789JKL012';
+
+    it('reports UNKNOWN (null) expiry for a gt- token — never a fabricated value', () => {
+      setToken(OPAQUE_TOKEN);
+      // Honest: no client-decodable expiry exists, so it must be null. A JWT-parsing
+      // impl that decodes the segment after the dot would return a non-null number.
+      expect(getTokenExpiry()).toBeNull();
+    });
+
+    it('treats a gt- token as present and valid-shaped (stored, authenticated, Bearer header)', () => {
+      setToken(OPAQUE_TOKEN);
+      expect(getToken()).toBe(OPAQUE_TOKEN);
+      // Unknown expiry ⇒ not expirable client-side ⇒ authenticated until a 401.
+      expect(isAuthenticated()).toBe(true);
+      expect(getAuthHeader()).toEqual({ Authorization: `Bearer ${OPAQUE_TOKEN}` });
+    });
+
+    it('never self-expires a gt- token (expiry stays unknown across checks)', () => {
+      setToken(OPAQUE_TOKEN);
+      expect(isAuthenticated()).toBe(true);
+      // A fabricated past-expiry would clear the token here; an honest null keeps it.
+      expect(isAuthenticated()).toBe(true);
+      expect(getToken()).toBe(OPAQUE_TOKEN);
+      expect(getTokenExpiry()).toBeNull();
     });
   });
 });

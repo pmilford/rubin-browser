@@ -163,10 +163,10 @@ catalogs live in the `dp1` **schema** (ADQL), not a URL path. Scope: `read:tap`
 | Endpoint / schema (`/api/tap/sync`, `dp1.*`) | ✅ Correct |
 | Sync vs async | ⚠️ **All live callers use sync `query()`**; `queryAsync()` exists but is **dead code** (only referenced in `tap.ts` + its test) |
 | MAXREC | `query()` sends `MAXREC=10000`; callers pass 10k (light curve), 20k (DIA), 100 (obscore). ⚠️ `queryAsync` sends `MAXREC=0` (unlimited) |
-| `SELECT *` | ✅ live clients (`obscore`, `lightcurve`, `diaSource`) name columns. ⚠️ `buildConeSearch()` still `SELECT TOP N *` — **dead code**, don't revive |
+| `SELECT *` | ✅ live clients (`obscore`, `lightcurve`, `diaSource`) name columns. ✅ the dead `buildConeSearch()` `SELECT TOP N *` has been **DELETED** from `tap.ts` (was unused — only self-referenced + its test), so the anti-pattern can't be revived |
 | Spatial predicate | ✅ `CONTAINS(POINT, CIRCLE)` everywhere |
-| `ORDER BY` + `TOP` | ❌ `diaSource.buildDiaSourceAdql` and `lightcurve.buildLightCurveAdql` both `ORDER BY mjd` with `TOP` |
-| ForcedSource by objectId | ❌ `lightcurve.ts` cone-searches ForcedSource by `coord_ra/coord_dec` directly |
+| `ORDER BY` + `TOP` | ✅ **FIXED** — the `ORDER BY mjd` has been dropped from both `diaSource.buildDiaSourceAdql` and `lightcurve.buildLightCurveAdql`. Light curves are sorted client-side in `parseLightCurveResult`; the DIA `AlertSet` is consumed order-independently (min/max scan + per-index predicates) so needs no sort |
+| ForcedSource by objectId | ✅ **FIXED** — `lightcurve.buildLightCurveAdql` now cone-searches `dp1.Object` (`coord_ra`/`coord_dec`) / `dp1.DiaObject` (`ra`/`dec`) spatially, then JOINs `ForcedSource`/`ForcedSourceOnDiaObject` on `objectId`/`diaObjectId`; the `dp1.Visit` join still supplies the MJD. No coordinate scan on the forced table |
 | 429 / `Retry-After` / backoff | ❌ **None.** `query()` only checks `resp.ok`, throws on any non-2xx |
 | Async polling | `queryAsync` polls `/phase` every 2 s, 300 s timeout, no 429 handling (dead code) |
 
@@ -178,12 +178,14 @@ catalogs live in the `dp1` **schema** (ADQL), not a URL path. Scope: `read:tap`
 2. **Wire `queryAsync()` into the large-result callers** (`diaSource`,
    `lightcurve`) or add size-based routing, so table queries use async UWS.
    Give `queryAsync` a real `MAXREC` (not 0) and 429 handling. (Roadmap #2.)
-3. **`lightcurve.buildLightCurveAdql`:** switch to select the object spatially in
-   `dp1.Object`/`dp1.DiaObject` then join ForcedSource on the ID. (Roadmap #3.)
-4. **Drop `ORDER BY mjd`** from `diaSource`/`lightcurve` ADQL; sort client-side
-   (`parseLightCurveResult` already sorts; `parseDiaSources` does not — add a sort
-   there if order matters). (Roadmap #4.)
-5. Delete or fix the dead `buildConeSearch` `SELECT *` so it can't regress.
+3. ✅ **DONE — `lightcurve.buildLightCurveAdql`** now selects the object spatially
+   in `dp1.Object`/`dp1.DiaObject` then joins ForcedSource on the ID. (Roadmap #3.)
+4. ✅ **DONE — dropped `ORDER BY mjd`** from `diaSource`/`lightcurve` ADQL; light
+   curves sort client-side in `parseLightCurveResult`. `parseDiaSources` needs no
+   sort — every `AlertSet` consumer (`alertTimeRange`, `timeWindowPredicate`,
+   `alertsInWindow`) is order-independent. (Roadmap #4.)
+5. ✅ **DONE — deleted the dead `buildConeSearch` `SELECT *`** (and its test) so it
+   can't regress.
 
 ---
 
@@ -371,7 +373,8 @@ a lower rate limit than Butler; exact number **not documented**
 - ✅ Correct table (`dp1.DiaSource`), correct columns (`ra`/`dec`,
   `midpointMjdTai`, `psfFlux`, `band`), honest `Unknown` classification, spatial
   `CONTAINS`. Fine at DP1 scale.
-- ❌ `SELECT TOP 20000 … ORDER BY mjd` — the discouraged `ORDER BY`+`TOP` pattern.
+- ✅ **FIXED** — the discouraged `ORDER BY`+`TOP` pattern is gone; the query is now
+  `SELECT TOP 20000 …` with NO `ORDER BY` (the `AlertSet` is consumed order-independently).
 - ⚠️ Sync `query()` for up to 20 k rows (should be async — Roadmap #2).
 - ⚠️ Cone-search directly on DiaSource. Fine now (3 M rows); at DR-scale a wide
   radius over tens of billions of rows is a melt risk.
@@ -410,17 +413,20 @@ a lower rate limit than Butler; exact number **not documented**
 - ✅ Token in `sessionStorage` by default, opt-in `localStorage`; `Bearer` header
   via `getAuthHeader`; identity validated against Gafaelfawr
   `/auth/api/v1/user-info` (200 = valid, independent of data rights).
-- ⚠️ `parseTokenExpiry` does `atob(token.split('.')[1])` assuming a **JWT**. RSP
-  user tokens are typically **opaque Gafaelfawr `gt-…` tokens, not JWTs**, so this
-  returns `null` and no client-side expiry is known — expiry is only discovered on
-  a 401. Not harmful (401 handling covers it) but the JWT assumption is misleading.
+- ✅ **FIXED** — `parseTokenExpiry` no longer assumes a JWT. An opaque Gafaelfawr
+  `gt-…` token is now detected explicitly (`isOpaqueRspToken`) and its expiry is
+  honestly reported as `null` (unknown) — never fabricated from `atob`-ing a random
+  handle. Only a genuinely JWT-shaped token (3 dot-separated segments) is decoded.
+  A new `getTokenExpiry()` exposes the value, and a `gt-…` token is still treated as
+  present/valid-shaped (stored, authenticated, `Bearer` header) until a real 401.
 - ⚠️ No scope pre-check (identity only). Fine — 401/403 per-service handling covers
   a missing scope.
 
 ### (c) Recommendations
 
-- Treat the token as opaque; don't rely on JWT-parsed expiry. Optionally read
-  expiry from the `/auth/api/v1/user-info` / token-info response instead.
+- ✅ **DONE** — the token is now treated as opaque (`isOpaqueRspToken`); no reliance
+  on JWT-parsed expiry (`getTokenExpiry()` is `null` for `gt-…`). Optionally, expiry
+  could still be read from the `/auth/api/v1/user-info` / token-info response.
 - No change needed to the `Bearer` transport for these REST services.
 
 ---
@@ -446,19 +452,19 @@ a lower rate limit than Butler; exact number **not documented**
 2. Route table-returning TAP queries (DIA, light curve) through async UWS; wire
    the existing `queryAsync()` in (or add size-based routing) and give it a real
    `MAXREC` + 429 handling.
-3. Rewrite `lightcurve.buildLightCurveAdql` to select the object in
-   `dp1.Object`/`dp1.DiaObject` spatially, then join ForcedSource by
+3. ✅ **DONE** — `lightcurve.buildLightCurveAdql` selects the object in
+   `dp1.Object`/`dp1.DiaObject` spatially, then joins ForcedSource by
    `objectId`/`diaObjectId` (Rubin's required pattern for the largest tables).
-4. Drop `ORDER BY mjd` from `diaSource`/`lightcurve` ADQL; sort client-side (add a
-   sort in `parseDiaSources`).
+4. ✅ **DONE** — dropped `ORDER BY mjd` from `diaSource`/`lightcurve` ADQL; light
+   curves sort client-side. `parseDiaSources` needs no sort (order-independent).
 5. Replace the 48-tile order-1 allsky backdrop with the HiPS `Allsky` preview
    file (fewer requests, fewer quota units).
 6. Add an async-cutout fallback in `soda.ts` for cutouts that exceed the 1-min
    sync timeout; throttle any multi-stamp feature to the 35/15min budget.
-7. Stop treating the RSP token as a JWT in `auth.ts` (opaque `gt-…` tokens); read
-   expiry from the auth API instead of `atob`.
-8. Delete or fix the dead `buildConeSearch` `SELECT *` in `tap.ts` so the
-   anti-pattern can't be revived.
+7. ✅ **DONE** — `auth.ts` no longer treats the RSP token as a JWT; opaque `gt-…`
+   tokens report `null` (unknown) expiry via `getTokenExpiry()` instead of `atob`.
+8. ✅ **DONE** — deleted the dead `buildConeSearch` `SELECT *` (and its test) from
+   `tap.ts` so the anti-pattern can't be revived.
 9. Surface a user-visible "rate-limited, retrying…" status (from
    `X-RateLimit-Remaining` / `Retry-After`) instead of a hard error.
 

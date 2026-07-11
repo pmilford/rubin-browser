@@ -3,7 +3,7 @@
 import { getAuthHeader } from './auth.js';
 import { toRequestUrl } from './rspProxy.js';
 import { fetchWithRetry } from './rateLimit.js';
-import type { TapQueryResult, ColumnDef, ConeSearchParams } from '../types/catalog.js';
+import type { TapQueryResult, ColumnDef } from '../types/catalog.js';
 
 // The Rubin RSP TAP service (DP1 catalogs live in the `dp1` SCHEMA, queried via
 // ADQL — `dp1` is NOT a URL path segment). Verified against the DP1 docs
@@ -151,27 +151,6 @@ export async function queryAsync(
   }
 
   throw new Error('Async TAP query timed out');
-}
-
-/** Build a cone search ADQL query */
-export function buildConeSearch(params: ConeSearchParams): string {
-  const { ra, dec, radius, catalog, maxRecords = 1000 } = params;
-  // DP1 catalog namespace (was `dp02_dc2_catalogs.*`, i.e. DP0.2 — the wrong data
-  // release for the /api/dp1 endpoint this client targets).
-  const table = `dp1.${catalog}`;
-  const radiusDeg = radius / 3600; // arcsec to degrees
-
-  // NB: `dp1.*` cone tables expose `coord_ra`/`coord_dec` for Object/Source/
-  // ForcedSource; DiaObject/DiaSource use `ra`/`dec` (adjust the projection when
-  // wiring those). No `dist` column exists in DP1, so we do not ORDER BY it.
-  return `
-    SELECT TOP ${maxRecords} *
-    FROM ${table}
-    WHERE CONTAINS(
-      POINT('ICRS', coord_ra, coord_dec),
-      CIRCLE('ICRS', ${ra}, ${dec}, ${radiusDeg})
-    ) = 1
-  `.trim();
 }
 
 /** Parse VOTable JSON response into TapQueryResult */

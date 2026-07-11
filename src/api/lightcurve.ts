@@ -9,15 +9,28 @@
  *
  * Authoritative DP1 schema (sdm_schemas `dp1.yaml`, browsable at
  * https://sdm-schemas.lsst.io/dp1.html; see also https://dp1.lsst.io/products/catalogs/):
+ *   - `dp1.Object`                  — the coadd object catalog. Cone-searched
+ *     spatially on `coord_ra`/`coord_dec`; joined to ForcedSource on `objectId`.
+ *   - `dp1.DiaObject`               — the DIA object catalog. Cone-searched on
+ *     `ra`/`dec` (DiaObject/DiaSource expose `ra`/`dec`, NOT `coord_ra`/`coord_dec`);
+ *     joined to ForcedSourceOnDiaObject on `diaObjectId`.
  *   - `dp1.ForcedSource`            — forced PSF photometry on visit + difference
- *     images at every `dp1.Object` position. Columns used: `objectId`,
- *     `coord_ra`, `coord_dec`, `visit`, `band`, `psfFlux`, `psfFluxErr`,
- *     `psfDiffFlux`, `psfDiffFluxErr` (fluxes in nJy). It has NO time column.
+ *     images at every `dp1.Object` position. Columns used: `objectId`, `visit`,
+ *     `band`, `psfFlux`, `psfFluxErr`, `psfDiffFlux`, `psfDiffFluxErr` (fluxes in
+ *     nJy). It has NO time column.
  *   - `dp1.ForcedSourceOnDiaObject` — the DIA analogue at every `dp1.DiaObject`
  *     position (same flux/band columns; `diaObjectId` instead of `objectId`).
  *   - `dp1.Visit`                   — per-visit metadata. `expMidptMJD` is the
  *     visit mid-point in MJD (TAI). ForcedSource carries no MJD of its own, so
  *     the epoch comes from joining `dp1.Visit` on `visit`.
+ *
+ * ACCESS PATTERN (Rubin-mandated): ForcedSource / ForcedSourceOnDiaObject must be
+ * queried BY `objectId` / `diaObjectId`, NOT by coordinates. This module therefore
+ * cone-searches `dp1.Object` / `dp1.DiaObject` spatially, then JOINs the forced
+ * table on the object id — never `CONTAINS(POINT(fs.coord_ra, ...))` on the forced
+ * table directly (a coordinate scan over the ~30-trillion-row forced-photometry
+ * table does not survive DR-scale). Source:
+ * https://dp1.lsst.io/products/adql_queries.html.
  *
  * NOT `dp02_dc2_catalogs.*` (that is DP0.2, a different data release and the
  * long-standing smell in `tap.ts`). Endpoint is `https://data.lsst.cloud/api/tap/sync`.
@@ -44,11 +57,43 @@ const MAG_ERR_FACTOR = 2.5 / Math.LN10;
 /** Which DP1 forced-photometry table to cone-search. */
 export type LightCurveSourceTable = 'forced' | 'dia';
 
-const LIGHTCURVE_TABLES: Record<LightCurveSourceTable, { table: string }> = {
-  // Forced photometry at Object positions.
-  forced: { table: 'ForcedSource' },
-  // Forced photometry at DiaObject positions (recommended for transients).
-  dia: { table: 'ForcedSourceOnDiaObject' },
+/**
+ * Per-variant schema binding for the Object→ForcedSource join. Each variant names
+ * the object catalog to cone-search, the forced table to join to it, the id column
+ * they share, and the object catalog's spatial coordinate columns (Object uses
+ * `coord_ra`/`coord_dec`; DiaObject uses `ra`/`dec`).
+ */
+interface LightCurveTableSpec {
+  /** Object catalog to cone-search spatially (without the `dp1.` prefix). */
+  objectTable: string;
+  /** Forced-photometry table joined on the id column (without the `dp1.` prefix). */
+  forcedTable: string;
+  /** The id column shared by objectTable and forcedTable. */
+  idColumn: string;
+  /** Object catalog's RA column for the spatial CONTAINS. */
+  objectRaCol: string;
+  /** Object catalog's Dec column for the spatial CONTAINS. */
+  objectDecCol: string;
+}
+
+const LIGHTCURVE_TABLES: Record<LightCurveSourceTable, LightCurveTableSpec> = {
+  // Forced photometry at Object positions: cone-search dp1.Object, join on objectId.
+  forced: {
+    objectTable: 'Object',
+    forcedTable: 'ForcedSource',
+    idColumn: 'objectId',
+    objectRaCol: 'coord_ra',
+    objectDecCol: 'coord_dec',
+  },
+  // Forced photometry at DiaObject positions (recommended for transients):
+  // cone-search dp1.DiaObject (ra/dec), join on diaObjectId.
+  dia: {
+    objectTable: 'DiaObject',
+    forcedTable: 'ForcedSourceOnDiaObject',
+    idColumn: 'diaObjectId',
+    objectRaCol: 'ra',
+    objectDecCol: 'dec',
+  },
 };
 
 export interface LightCurveQueryParams {
@@ -130,9 +175,16 @@ function validateBand(band: string): LightCurveBand {
 }
 
 /**
- * Build a cone-search ADQL query for a DP1 forced-source light curve at a sky
- * position. Selects epoch (MJD from dp1.Visit), band, and PSF flux/error, joined
- * to dp1.Visit for the time axis, ordered by MJD.
+ * Build an ADQL query for a DP1 forced-source light curve at a sky position, using
+ * Rubin's mandated access pattern: cone-search the OBJECT catalog spatially, then
+ * JOIN the forced-photometry table on the object id (`objectId`/`diaObjectId`) —
+ * NEVER a coordinate scan on ForcedSource itself. `dp1.Visit` supplies the MJD
+ * (`expMidptMJD`), since the forced table carries no time column.
+ *
+ * There is deliberately NO `ORDER BY`: Rubin flags `ORDER BY` + `TOP` as dangerous
+ * (it sorts the full matched set before truncating), so the series is sorted
+ * client-side in `parseLightCurveResult`. See
+ * https://dp1.lsst.io/products/adql_queries.html.
  *
  * Radius is converted arcsec→degrees at this boundary (TAP CIRCLE wants degrees).
  */
@@ -153,18 +205,21 @@ export function buildLightCurveAdql(params: LightCurveQueryParams): string {
 
   const bandClause = band !== undefined ? `\n  AND fs.band = '${validateBand(band)}'` : '';
 
+  // Cone-search the object catalog (obj) spatially; join the forced table (fs) on
+  // the object id; join Visit (v) for the MJD. The CONTAINS predicate is on the
+  // OBJECT catalog's coordinates, not on ForcedSource.
   return `SELECT TOP ${top}
-  fs.coord_ra AS ra, fs.coord_dec AS dec, fs.band AS band,
+  obj.${spec.objectRaCol} AS ra, obj.${spec.objectDecCol} AS dec, fs.band AS band,
   v.expMidptMJD AS mjd,
   fs.psfFlux AS flux, fs.psfFluxErr AS fluxErr,
   fs.psfDiffFlux AS diffFlux, fs.psfDiffFluxErr AS diffFluxErr
-FROM dp1.${spec.table} AS fs
+FROM dp1.${spec.objectTable} AS obj
+JOIN dp1.${spec.forcedTable} AS fs ON fs.${spec.idColumn} = obj.${spec.idColumn}
 JOIN dp1.Visit AS v ON fs.visit = v.visit
 WHERE CONTAINS(
-  POINT('ICRS', fs.coord_ra, fs.coord_dec),
+  POINT('ICRS', obj.${spec.objectRaCol}, obj.${spec.objectDecCol}),
   CIRCLE('ICRS', ${formatDeg(raDeg)}, ${formatDeg(decDeg)}, ${formatDeg(radiusDeg)})
-) = 1${bandClause}
-ORDER BY mjd`;
+) = 1${bandClause}`;
 }
 
 /* -------------------------------------------------------------------------- */

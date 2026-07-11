@@ -84,12 +84,14 @@ describe('buildDiaSourceAdql', () => {
     expect(buildDiaSourceAdql({ ...base, maxRows: 500 })).toContain('SELECT TOP 500');
   });
 
-  it('selects the real DP1 DIA columns (id, ra, dec, mjd, flux)', () => {
+  it('selects the real DP1 DIA columns (id, ra, dec, mjd, flux) with NO dangerous ORDER BY', () => {
     const adql = buildDiaSourceAdql(base);
     expect(adql).toContain('ds.diaSourceId');
     expect(adql).toContain('ds.midpointMjdTai');
     expect(adql).toContain('ds.psfFlux');
-    expect(adql).toMatch(/ORDER BY\s+mjd/);
+    // Rubin flags ORDER BY + TOP as dangerous; the AlertSet is consumed
+    // order-independently (min/max scan + per-index predicates), so no sort is emitted.
+    expect(adql).not.toMatch(/ORDER BY/i);
   });
 
   it('rejects non-finite coordinates and non-positive radius', () => {

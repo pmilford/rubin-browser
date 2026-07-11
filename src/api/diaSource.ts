@@ -83,7 +83,14 @@ function formatNum(value: number): string {
  * Build a cone-search ADQL query for DP1 DIA source detections around a sky
  * position, optionally restricted to a [tMinMjd, tMaxMjd] epoch window. Selects
  * id, position, epoch (`midpointMjdTai`), and difference-image PSF flux; there
- * is NO Visit join because DiaSource carries its own MJD. Ordered by MJD.
+ * is NO Visit join because DiaSource carries its own MJD.
+ *
+ * There is deliberately NO `ORDER BY`: Rubin flags `ORDER BY` + `TOP` as dangerous
+ * (it sorts the full matched set before truncating). The resulting AlertSet is
+ * consumed order-independently — `alertTimeRange` scans for min/max and
+ * `timeWindowPredicate`/`alertsInWindow` are per-index predicates — so no
+ * client-side MJD sort is needed. See
+ * https://dp1.lsst.io/products/adql_queries.html.
  *
  * Radius is degrees (TAP CIRCLE wants degrees); ra/dec/radius/time are numeric
  * and finite-checked, so nothing user-controlled is interpolated as a string.
@@ -118,8 +125,7 @@ FROM dp1.DiaSource AS ds
 WHERE CONTAINS(
   POINT('ICRS', ds.ra, ds.dec),
   CIRCLE('ICRS', ${formatNum(raDeg)}, ${formatNum(decDeg)}, ${formatNum(radius)})
-) = 1${timeClauses.join('')}
-ORDER BY mjd`;
+) = 1${timeClauses.join('')}`;
 }
 
 /* -------------------------------------------------------------------------- */

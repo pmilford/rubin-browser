@@ -77,6 +77,18 @@ export function getAuthHeader(): Record<string, string> {
 }
 
 /**
+ * The current token's expiry in epoch milliseconds, or `null` when it is unknown.
+ *
+ * RSP user tokens are OPAQUE Gafaelfawr handles (`gt-…`), not JWTs, so their expiry
+ * cannot be decoded client-side and is honestly reported as `null` — never a
+ * fabricated value. A real expiry is only surfaced by a 401 from the service.
+ */
+export function getTokenExpiry(): number | null {
+  getToken(); // rehydrate authState from storage if the token isn't in memory
+  return authState.expiresAt;
+}
+
+/**
  * Validate the token's IDENTITY against the RSP auth service.
  *
  * Uses Gafaelfawr's user-info endpoint, which returns 200 for any valid token
@@ -95,11 +107,31 @@ export async function validateToken(token: string): Promise<boolean> {
   }
 }
 
-/** Attempt to parse expiry from JWT token */
+/**
+ * True for an opaque Gafaelfawr RSP token (`gt-…`). These are the tokens the RSP
+ * actually issues: random handles, NOT JWTs, with no client-decodable payload.
+ */
+function isOpaqueRspToken(token: string): boolean {
+  return token.startsWith('gt-');
+}
+
+/**
+ * Best-effort token expiry in epoch milliseconds, or `null` when unknown.
+ *
+ * RSP user tokens are opaque `gt-…` handles with nothing to decode, so we do NOT
+ * try to JWT-parse them and do NOT fabricate an expiry — we return `null`
+ * (expiry unknown; a 401 from the service is the real end-of-life signal). Only a
+ * genuinely JWT-shaped token (three dot-separated segments) is decoded, as a
+ * convenience for deployments that mint JWTs.
+ */
 function parseTokenExpiry(token: string): number | null {
+  // Opaque RSP token: no client-side expiry exists — report unknown, don't invent one.
+  if (isOpaqueRspToken(token)) return null;
+  const parts = token.split('.');
+  if (parts.length !== 3) return null; // not a JWT — nothing to decode
   try {
-    const payload = JSON.parse(atob(token.split('.')[1]));
-    return payload.exp ? payload.exp * 1000 : null;
+    const payload = JSON.parse(atob(parts[1]!)) as { exp?: number };
+    return typeof payload.exp === 'number' ? payload.exp * 1000 : null;
   } catch {
     return null;
   }

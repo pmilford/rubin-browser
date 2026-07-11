@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { buildConeSearch, query, queryAsync } from '../../src/api/tap.js';
+import { query, queryAsync } from '../../src/api/tap.js';
 import { setToken, clearToken } from '../../src/api/auth.js';
 
 const mockStorage = new Map<string, string>();
@@ -13,50 +13,6 @@ Object.defineProperty(globalThis, 'sessionStorage', {
 });
 
 describe('TAP Client', () => {
-  describe('buildConeSearch', () => {
-    it('builds correct ADQL for Object catalog', () => {
-      const adql = buildConeSearch({
-        ra: 62.0,
-        dec: -37.0,
-        radius: 10, // arcsec
-        catalog: 'Object',
-      });
-
-      expect(adql).toContain('FROM dp1.Object');
-      // DP0.2 namespace against the /api/dp1 endpoint was the long-standing bug.
-      expect(adql).not.toContain('dp02_dc2_catalogs');
-      expect(adql).toContain('62');
-      expect(adql).toContain('-37');
-      expect(adql).toContain('CIRCLE');
-      expect(adql).toContain('CONTAINS');
-      // No `dist` column exists in DP1 — the phantom ORDER BY was removed.
-      expect(adql).not.toContain('ORDER BY dist');
-    });
-
-    it('converts arcsec to degrees', () => {
-      const adql = buildConeSearch({
-        ra: 0,
-        dec: 0,
-        radius: 3600, // 1 degree
-        catalog: 'Source',
-      });
-
-      expect(adql).toContain('1)'); // 3600 arcsec = 1 degree
-    });
-
-    it('respects maxRecords', () => {
-      const adql = buildConeSearch({
-        ra: 0,
-        dec: 0,
-        radius: 60,
-        catalog: 'DiaObject',
-        maxRecords: 50,
-      });
-
-      expect(adql).toContain('TOP 50');
-    });
-  });
-
   describe('query', () => {
     beforeEach(() => {
       clearToken();

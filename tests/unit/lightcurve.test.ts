@@ -36,9 +36,18 @@ function tapResult(rows: Record<string, unknown>[]): TapQueryResult {
 describe('buildLightCurveAdql', () => {
   const base: LightCurveQueryParams = { ra: 62.0, dec: -37.0, radiusArcsec: 10 };
 
-  it('targets the DP1 forced-source table and Visit join, NOT DP0.2', () => {
+  it('cone-searches dp1.Object and JOINs ForcedSource on objectId (NOT a ForcedSource coordinate scan)', () => {
     const adql = buildLightCurveAdql(base);
-    expect(adql).toContain('FROM dp1.ForcedSource');
+    // Rubin-mandated pattern: the OBJECT catalog is the FROM/cone table; ForcedSource
+    // is JOINED on the id, never cone-searched itself.
+    expect(adql).toContain('FROM dp1.Object');
+    expect(adql).toContain('JOIN dp1.ForcedSource');
+    expect(adql).toMatch(/ON\s+fs\.objectId\s*=\s*obj\.objectId/);
+    // Adversarial: the old anti-pattern cone-searched ForcedSource directly. A
+    // `FROM dp1.ForcedSource` / `POINT('ICRS', fs.coord_ra, …)` impl MUST fail.
+    expect(adql).not.toContain('FROM dp1.ForcedSource');
+    expect(adql).not.toContain('POINT(\'ICRS\', fs.coord_ra');
+    // Visit join still supplies the MJD.
     expect(adql).toContain('JOIN dp1.Visit');
     expect(adql).toContain('fs.visit = v.visit');
     // The DP0.2 namespace would be the classic wrong-release bug.
@@ -54,12 +63,14 @@ describe('buildLightCurveAdql', () => {
     expect(adql).toContain('fs.psfFluxErr');
   });
 
-  it('cone-searches with CONTAINS/POINT/CIRCLE and orders by MJD', () => {
+  it('cone-searches with CONTAINS/POINT/CIRCLE on the OBJECT coords, with NO dangerous ORDER BY', () => {
     const adql = buildLightCurveAdql(base);
     expect(adql).toContain('CONTAINS(');
-    expect(adql).toContain("POINT('ICRS', fs.coord_ra, fs.coord_dec)");
+    // The spatial predicate is on the Object catalog's coords, not ForcedSource's.
+    expect(adql).toContain("POINT('ICRS', obj.coord_ra, obj.coord_dec)");
     expect(adql).toContain("CIRCLE('ICRS'");
-    expect(adql).toMatch(/ORDER BY\s+mjd/);
+    // Rubin flags ORDER BY + TOP as dangerous; parseLightCurveResult sorts client-side.
+    expect(adql).not.toMatch(/ORDER BY/i);
   });
 
   it('converts arcsec radius to DEGREES at the boundary (kills a units bug)', () => {
@@ -97,10 +108,17 @@ describe('buildLightCurveAdql', () => {
     expect(() => buildLightCurveAdql({ ...base, radiusArcsec: -5 })).toThrow(/radiusArcsec/);
   });
 
-  it('supports the DIA forced-source table variant', () => {
+  it('supports the DIA variant: cone-search dp1.DiaObject (ra/dec), JOIN ForcedSourceOnDiaObject on diaObjectId', () => {
     const adql = buildLightCurveAdql({ ...base, table: 'dia' });
-    expect(adql).toContain('FROM dp1.ForcedSourceOnDiaObject');
+    expect(adql).toContain('FROM dp1.DiaObject');
+    expect(adql).toContain('JOIN dp1.ForcedSourceOnDiaObject');
+    expect(adql).toMatch(/ON\s+fs\.diaObjectId\s*=\s*obj\.diaObjectId/);
+    // DiaObject exposes ra/dec (not coord_ra/coord_dec) for the spatial cut.
+    expect(adql).toContain("POINT('ICRS', obj.ra, obj.dec)");
+    // Still NOT a coordinate scan on the forced table.
+    expect(adql).not.toContain('FROM dp1.ForcedSourceOnDiaObject');
     expect(adql).toContain('JOIN dp1.Visit');
+    expect(adql).not.toMatch(/ORDER BY/i);
   });
 
   it('respects maxRecords via TOP', () => {
