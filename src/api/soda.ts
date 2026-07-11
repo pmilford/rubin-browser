@@ -8,15 +8,20 @@
  * scaling → canvas) so the viewer can display honest *linear-float* pixels rather
  * than pre-stretched 8-bit HiPS JPEGs.
  *
- * Endpoint (assumption, documented honestly): Rubin's Data Access Center exposes
- * the image cutout service under `https://data.lsst.cloud/api/cutout` (the RSP
- * `vo-cutouts`/`soda` app), alongside the TAP endpoint `.../api/dp1` used by
- * `tap.ts`/`lightcurve.ts`. The DP1 docs / RSP DataLink point at the same host.
- * The exact sync path is not pinned down in this repo, so it is exported as the
- * single const `SODA_SYNC_URL` — change it in ONE place if the deployed path
- * differs, and every URL/test tracks it. We build the request with the IVOA
- * `POS=CIRCLE <ra> <dec> <radiusDeg>` parameter (degrees, ICRS), which is the
- * trivially-correct, testable spatial form.
+ * Endpoint (CONFIRMED against Rubin docs): the RSP exposes the image cutout
+ * service (`lsst-sqre/vo-cutouts`, the IVOA SODA `cutout-sync` app) at
+ * `https://data.lsst.cloud/api/cutout`. Verified via dp1.lsst.io tutorial 103.4
+ * "Small image cutouts" and the vo-cutouts service. It is exported as the single
+ * const `SODA_SYNC_URL` — change it in ONE place if the deployed path differs,
+ * and every URL/test tracks it. We build the request with the IVOA
+ * `POS=CIRCLE <ra> <dec> <radiusDeg>` parameter (degrees, ICRS) plus the dataset
+ * `ID` (below).
+ *
+ * The `ID` selecting WHICH per-band deep-coadd to cut is DISCOVERED, not guessed:
+ * `src/api/obscore.ts` (`discoverCutoutId`) queries ObsTAP (`ivoa.ObsCore`) for
+ * the coadd whose footprint contains the position and reads the DataLink `ID`
+ * from its `access_url`. `fetchCutoutAt` below composes discovery + fetch into
+ * the one call the UI needs.
  *
  * Auth: cutouts are DP1 data and require an RSP token with the `read:image`
  * scope. Like every client here, auth comes ONLY from `./auth.js`
@@ -31,10 +36,11 @@
 
 import { getAuthHeader, isAuthenticated } from './auth.js';
 import { toRequestUrl } from './rspProxy.js';
+import { discoverCutoutId } from './obscore.js';
 
 /**
  * Base host for Rubin Data Access services (same host as the DP1 TAP endpoint in
- * `tap.ts`: `https://data.lsst.cloud/api/dp1`). Cutouts live under `/api/cutout`.
+ * `tap.ts`: `https://data.lsst.cloud/api/tap`). Cutouts live under `/api/cutout`.
  */
 export const SODA_BASE = 'https://data.lsst.cloud/api/cutout';
 
@@ -193,4 +199,59 @@ export async function fetchCutout(params: CutoutParams): Promise<ArrayBuffer> {
   }
 
   return buffer;
+}
+
+/** Params for a position+band cutout that discovers its own dataset ID. */
+export interface CutoutAtParams {
+  /** Right ascension of the cutout centre, degrees (ICRS). */
+  ra: number;
+  /** Declination of the cutout centre, degrees (ICRS). */
+  dec: number;
+  /** Full side/diameter of the cutout in ARCSECONDS. */
+  sizeArcsec: number;
+  /** LSST band (u,g,r,i,z,y) — selects which per-band deep-coadd to cut. */
+  band: string;
+}
+
+/** A discovered cutout: the FITS bytes plus the dataset ID they were cut from. */
+export interface CutoutResult {
+  /** Raw FITS bytes (feed into `readFits`). */
+  fits: ArrayBuffer;
+  /** The SODA dataset `ID` the cutout was made from (from ObsCore/DataLink). */
+  id: string;
+}
+
+/**
+ * The one-call cutout API for the UI: given a sky position + band, DISCOVER the
+ * DP1 deep-coadd dataset ID that covers it (ObsTAP → DataLink, see
+ * `obscore.discoverCutoutId`) and fetch the FITS cutout from SODA. This is the
+ * full, correct DP1 recipe — no hardcoded/guessed dataset ID. Every failure
+ * (not signed in, no image at this position, token rejected, empty body) is
+ * surfaced as a descriptive thrown error by the two composed steps.
+ */
+export async function fetchCutoutAt(params: CutoutAtParams): Promise<CutoutResult> {
+  // Gate on auth before the discovery query too, so an unauthenticated attempt
+  // fails with the honest "sign in" message rather than a confusing TAP error.
+  if (!isAuthenticated()) {
+    throw new Error(
+      'Rubin cutouts require sign-in (read:image): set an RSP token with DP1 ' +
+        'data rights before requesting an image cutout.'
+    );
+  }
+
+  const { id } = await discoverCutoutId({
+    ra: params.ra,
+    dec: params.dec,
+    band: params.band,
+  });
+
+  const fits = await fetchCutout({
+    ra: params.ra,
+    dec: params.dec,
+    sizeArcsec: params.sizeArcsec,
+    id,
+    band: params.band,
+  });
+
+  return { fits, id };
 }
