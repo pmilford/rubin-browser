@@ -19,7 +19,8 @@
   import CutoutPanel from '../components/CutoutPanel.svelte';
   import RgbCompositePanel from '../components/RgbCompositePanel.svelte';
   import { fetchCutoutAt } from '../api/soda.js';
-  import { readFits, type FitsImage } from '../utils/fits.js';
+  import { type FitsImage } from '../utils/fits.js';
+  import { readFitsImageAsync } from '../utils/fitsCompressed.js';
   import { radecToTileIndex } from '../api/hips.js';
   import CatalogTable from '../components/CatalogTable.svelte';
   import ColorMagnitudeDiagram from '../components/ColorMagnitudeDiagram.svelte';
@@ -345,7 +346,9 @@
     statusMessage = `Fetching FITS cutout at ${ra.toFixed(3)}, ${dec.toFixed(3)} (band ${band})…`;
     try {
       const { fits, id } = await fetchCutoutAt({ ra, dec, sizeArcsec: CUTOUT_SIZE_ARCSEC, band });
-      const parsed = readFits(fits);
+      // DP1 cutouts are tile-compressed multi-extension FITS (GZIP_2), so the
+      // async tile-aware reader is required (plain readFits throws "NAXIS=0").
+      const parsed = await readFitsImageAsync(fits);
       cutoutImage = parsed;
       cutoutMeta = { ra, dec, band, datasetId: id };
       cutoutStatus = 'loaded';
@@ -395,7 +398,7 @@
       // Fetch each band's cutout at the identical position/size so they align.
       for (const band of RGB_BANDS) {
         const { fits } = await fetchCutoutAt({ ra, dec, sizeArcsec: CUTOUT_SIZE_ARCSEC, band });
-        images[band] = readFits(fits);
+        images[band] = await readFitsImageAsync(fits);
       }
       rgbImages = images;
       rgbMeta = { ra, dec };

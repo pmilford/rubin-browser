@@ -139,22 +139,19 @@ test.describe('LIVE Rubin DP1 (requires RSP_TOKEN with DP1 rights)', () => {
 
     await page.locator('button[aria-label="Toggle FITS cutout"]').click();
 
-    // The panel must reach a terminal state; a live token should make it "loaded"
-    // with a non-black cutout. If it errors, surface the app's honest message +
-    // the RSP status codes so the failure is diagnosable, not mysterious.
-    const status = page.locator('[aria-label="FITS cutout status"]');
-    await expect(status).toBeVisible();
-    await expect
-      .poll(
-        async () => (await status.textContent())?.toLowerCase() ?? '',
-        { timeout: 40000, message: `cutout never settled. RSP errors: ${rspFailures().join(' | ') || 'none'}` }
-      )
-      .toMatch(/loaded|error|no dp1/);
+    // On LOAD the status element is replaced by the CutoutPanel (aria-label
+    // "FITS cutout"), so wait for EITHER the loaded panel OR an error message —
+    // whichever settles first — rather than polling an element that vanishes.
+    const loadedPanel = page.locator('[aria-label="FITS cutout image"]');
+    const errorMsg = page.locator('[aria-label="Cutout error"]');
+    await expect(loadedPanel.or(errorMsg)).toBeVisible({
+      timeout: 40000,
+    });
 
-    const statusText = (await status.textContent())?.toLowerCase() ?? '';
-    if (statusText.includes('loaded')) {
-      // The cutout canvas (last one added) must carry real pixels.
-      const ratio = await page.locator('canvas').last().evaluate((el: HTMLCanvasElement) => {
+    if (await loadedPanel.isVisible()) {
+      // The DP1 cutout is a tile-compressed FITS; a successful decode paints real
+      // pixels on the cutout canvas (a black/empty canvas = a decode regression).
+      const ratio = await loadedPanel.evaluate((el: HTMLCanvasElement) => {
         const ctx = el.getContext('2d');
         if (!ctx) return 0;
         const { data } = ctx.getImageData(0, 0, el.width, el.height);
@@ -162,13 +159,12 @@ test.describe('LIVE Rubin DP1 (requires RSP_TOKEN with DP1 rights)', () => {
         for (let i = 0; i < data.length; i += 4) if (data[i + 3]! > 0 && data[i]! > 4) lit++;
         return lit / (data.length / 4);
       });
-      expect(ratio, 'cutout reported loaded but the canvas is empty/black').toBeGreaterThan(0.01);
+      expect(ratio, 'cutout loaded but the canvas is empty/black').toBeGreaterThan(0.01);
     } else {
-      // Not a hard failure (rights/coverage/outage vary), but make it LOUD in the
-      // report so a real regression isn't hidden behind a green run.
+      // Coverage/rights/outage vary — make it LOUD rather than a hidden failure.
       test.info().annotations.push({
         type: 'live-cutout',
-        description: `cutout did not load: "${statusText}" — RSP: ${rspFailures().join(' | ') || 'none'}`,
+        description: `cutout errored: "${await errorMsg.textContent()}" — RSP: ${rspFailures().join(' | ') || 'none'}`,
       });
     }
   });
