@@ -597,6 +597,18 @@
 
   function toggleLightCurve() {
     lightCurveMode = !lightCurveMode;
+    if (lightCurveMode && baseLayerId !== 'offline' && !rubinLcAvailable) {
+      // Without the offline cube or an authenticated Rubin base there is no
+      // epoch source, so the toggle would otherwise silently "do nothing".
+      // Tell the user the prerequisite instead of leaving an empty panel.
+      const why = !rubinActive
+        ? 'switch the base layer to Rubin (DP1) or the Offline demo'
+        : 'sign in with an RSP token that has DP1 data rights';
+      rubinLcCurve = null;
+      rubinLcStatus = `No light-curve source — ${why}.`;
+      statusMessage = `Light curve: no source — ${why}.`;
+      return;
+    }
     if (lightCurveMode && baseLayerId !== 'offline' && rubinLcAvailable) {
       void fetchRubinLc();
     }
@@ -1223,7 +1235,9 @@
           ⤓ PNG
         </button>
 
-        {#if baseLayerId === 'offline' || rubinLcAvailable}
+        <!-- Always visible so the feature is discoverable; if there's no epoch
+             source (not offline, not an authenticated Rubin base) the click
+             explains the prerequisite instead of the button silently missing. -->
           <button
             class="xsection-toggle"
             class:on={lightCurveMode}
@@ -1236,7 +1250,6 @@
           >
             ⌇ Light curve
           </button>
-        {/if}
 
         {#if baseLayerId === 'offline'}
           <button
@@ -1449,6 +1462,14 @@
             onRefresh={fetchRubinLc}
             onClose={toggleLightCurve}
           />
+        {:else if lightCurveMode}
+          <!-- No epoch source (no offline cube, no authenticated Rubin base):
+               show WHY instead of an invisible no-op. -->
+          <div class="lc-nosource" aria-label="Light curve unavailable">
+            <div class="lc-nosource-title">Light curve unavailable</div>
+            <div class="lc-nosource-msg">{rubinLcStatus ?? 'No epoch source at this position.'}</div>
+            <button class="lc-nosource-close" aria-label="Close light curve" onclick={toggleLightCurve}>Dismiss</button>
+          </div>
         {/if}
       </div>
     {/if}
@@ -1615,6 +1636,23 @@
     color: #bdf;
     border-color: rgba(120, 200, 255, 0.7);
   }
+
+  .lc-nosource {
+    background: rgba(12, 14, 22, 0.97);
+    border: 1px solid rgba(120, 200, 255, 0.5);
+    border-radius: 8px;
+    padding: 10px 12px;
+    color: #d8e2f0;
+    font-size: 12px;
+    width: 260px;
+  }
+  .lc-nosource-title { color: #9cf; font-weight: 700; margin-bottom: 4px; }
+  .lc-nosource-msg { color: #bcd; line-height: 1.4; }
+  .lc-nosource-close {
+    margin-top: 8px; background: #1a2a44; color: #cde; border: 1px solid #345;
+    border-radius: 4px; padding: 3px 10px; font: inherit; font-size: 11px; cursor: pointer;
+  }
+  .lc-nosource-close:hover { background: #24406a; }
 
   .right-stack {
     position: absolute;
