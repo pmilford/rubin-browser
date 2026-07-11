@@ -433,10 +433,19 @@ a lower rate limit than Butler; exact number **not documented**
 
 ## 7. Public services (context)
 
-- **Gaia** (`gaia.ts`): the **public ESA** TAP
-  (`https://gea.esac.esa.int/tap-server/tap/sync`), anonymous, **not** the RSP —
-  correctly kept separate, no RSP token sent. Subject to ESA's own limits, out of
-  scope for RSP quotas.
+- **Gaia** (`gaia.ts`): a **public CORS-enabled GAVO/DaCHS** Gaia DR3 mirror
+  (`https://dc.zah.uni-heidelberg.de/tap/sync`, table `gaia.dr3lite`), anonymous,
+  **not** the RSP — correctly kept separate, no RSP token sent. Subject to GAVO's
+  own limits, out of scope for RSP quotas. NOTE: the direct **ESA** host
+  (`gea.esac.esa.int`) sends **no `Access-Control-Allow-Origin`**, so a browser
+  fetch is CORS-blocked — the GAVO mirror is used specifically because it sends
+  ACAO. Two DaCHS-specific gotchas, both VERIFIED live: (1) GAVO returns column
+  descriptors under `columns`, not ESA's `metadata` (the parser accepts either);
+  (2) `source_id` is a 64-bit int > 2^53, so `FORMAT=json` delivers it as a bare
+  JSON number that `JSON.parse` rounds — select it as TEXT via the ADQL idiom
+  `source_id || '' AS source_id` (DaCHS **rejects** `CAST(source_id AS
+  VARCHAR)`/`AS TEXT`: "No VOTable type for varchar") so it arrives as a JSON
+  string and survives intact (`SOURCE_ID_AS_TEXT`, TODO 134).
 - Public CDS/DSS HiPS tiles: the code correctly withholds the RSP `Bearer` token
   from non-Rubin hosts (a credentialed cross-origin request would trip a CORS
   preflight the public host rejects) — see the `useAuth = !!rspToken &&
