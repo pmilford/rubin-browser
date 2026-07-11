@@ -29,7 +29,7 @@
   import SurfacePlot from '../components/SurfacePlot.svelte';
   import { OFFLINE_EPOCHS, OFFLINE_BANDS, brightestOfflineVariable, offlineLightCurve } from '../data/offlineDataset.js';
   import LightCurvePlot from '../components/LightCurvePlot.svelte';
-  import { RUBIN_DATASETS } from '../utils/baseLayer.js';
+  import { RUBIN_DATASETS, fetchDp1Datasets, type RubinDataset } from '../utils/baseLayer.js';
   import type { IdentifyInfo } from '../data/objects.js';
   import type { Band } from '../data/syntheticSky.js';
   import { temporalCrossSectionGrid, type LineProfile } from '../utils/crossSection.js';
@@ -797,6 +797,14 @@
   // composites or a single ugrizy band). Shown when the Rubin base is active.
   let rubinDataset = $state(seed.rubinDataset ?? 'color_gri');
 
+  // The datasets offered in the Filter dropdown (TODO 129). Seeded with the
+  // hardcoded fallback so the dropdown is populated INSTANTLY, then replaced by
+  // the set discovered from the DP1 HiPS list endpoint once the Rubin base first
+  // becomes active. Discovery failure (network/CORS/404/malformed) leaves the
+  // fallback in place — the dropdown always works, never empties, never crashes.
+  let rubinDatasets = $state<readonly RubinDataset[]>(RUBIN_DATASETS);
+  let datasetsDiscovered = $state(false);
+
   // Offline synthetic cube browsing: independent time (epoch) and wavelength
   // (band) axes. Only meaningful while the offline base layer is active; drive
   // ImageViewer to re-synthesize tiles per (band, mjd).
@@ -822,6 +830,17 @@
   const rubinActive = $derived(
     baseLayerId === 'rubin' || (baseLayerId === 'auto' && resolvedBaseLabel.startsWith('Rubin'))
   );
+
+  // TODO 129: when the Rubin base first becomes active, replace the hardcoded
+  // fallback list with the datasets discovered from the DP1 HiPS list endpoint.
+  // Runs at most once; any failure leaves the fallback list untouched.
+  $effect(() => {
+    if (!rubinActive || datasetsDiscovered) return;
+    datasetsDiscovered = true;
+    void fetchDp1Datasets().then((discovered) => {
+      if (discovered.length > 0) rubinDatasets = discovered;
+    });
+  });
 
   // NOTE: the old SidePanel epoch/blink controls were driven by MOCK epochs
   // (constants.DEFAULT_MOCK_EPOCHS) that never changed the imagery — a dead
@@ -1226,12 +1245,12 @@
               onchange={() => { statusMessage = `Rubin dataset: ${rubinDataset}`; }}
             >
               <optgroup label="Colour composites">
-                {#each RUBIN_DATASETS.filter((d) => d.kind === 'color') as d (d.id)}
+                {#each rubinDatasets.filter((d) => d.kind === 'color') as d (d.id)}
                   <option value={d.id}>{d.label}</option>
                 {/each}
               </optgroup>
               <optgroup label="Single band">
-                {#each RUBIN_DATASETS.filter((d) => d.kind === 'band') as d (d.id)}
+                {#each rubinDatasets.filter((d) => d.kind === 'band') as d (d.id)}
                   <option value={d.id}>{d.label}-band</option>
                 {/each}
               </optgroup>
@@ -1652,6 +1671,7 @@
             catalog={lensCatalog}
             selectedIndex={selectedLensIndex}
             title="Gravitational lenses"
+            caption="Known strong-lens positions (all-sky). Arcs/rings (mag ~20–26) need deep imaging — Rubin coadds or HST; lensed-quasar doubles/quads show in Gaia. None lie in a DP1 field."
             onSelect={handleLensSelect}
             onClose={toggleLenses}
           />

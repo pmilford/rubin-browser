@@ -6,6 +6,7 @@
     selectedIndex = -1,
     title = 'Catalog',
     status = null,
+    caption = null,
     onSelect,
     onClose,
   }: {
@@ -14,6 +15,8 @@
     title?: string;
     /** Loading / error / empty message shown when there are no rows. */
     status?: string | null;
+    /** Optional context line shown under the header (always, even with rows). */
+    caption?: string | null;
     /** Fired when a row is clicked (index into the catalog) — links to the marker. */
     onSelect?: (index: number) => void;
     onClose?: () => void;
@@ -30,6 +33,10 @@
     <span class="ct-title">{title}{#if catalog && catalog.count > 0} · {catalog.count.toLocaleString()}{/if}</span>
     <button class="ct-close" aria-label="Close catalog" onclick={() => onClose?.()}>×</button>
   </div>
+
+  {#if caption}
+    <div class="ct-caption" aria-label="Catalog caption">{caption}</div>
+  {/if}
 
   {#if catalog && catalog.count > 0}
     <div class="ct-scroll">
@@ -83,5 +90,6 @@
   tbody tr.selected { background: rgba(255, 255, 90, 0.18); }
   tbody tr.selected td { color: #ffd; }
   .ct-status { color: #bbb; padding: 4px 2px; }
+  .ct-caption { color: #9ab; padding: 0 2px 6px; font-size: 9px; line-height: 1.35; }
   .ct-more { color: #789; padding: 3px 2px; }
 </style>

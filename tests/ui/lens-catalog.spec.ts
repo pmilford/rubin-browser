@@ -67,8 +67,10 @@ test('lens overlay lists a known lens, recenters on click, and paints gold marke
   // A real, verified lens name from the bundled catalog.
   await expect(table.getByText('Einstein Cross (Q2237+0305)')).toBeVisible();
 
-  // Click the Einstein Cross row (located by its name, not a brittle index).
-  const row = table.locator('tr', { hasText: 'Einstein Cross' });
+  // Click the Einstein Cross row (located by its UNIQUE full designation, not a
+  // brittle index — and not the bare "Einstein Cross", which also matches other
+  // rows whose note column mentions "einstein cross" under case-insensitive hasText).
+  const row = table.locator('tr', { hasText: 'Einstein Cross (Q2237+0305)' });
   await row.click();
   await expect(row).toHaveAttribute('aria-selected', 'true');
 

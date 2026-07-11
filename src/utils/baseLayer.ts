@@ -9,6 +9,9 @@
  * couldn't distinguish an explicit Rubin choice from auto-resolved-Rubin.
  */
 
+import { getAuthHeader } from '../api/auth.js';
+import { toRequestUrl } from '../api/rspProxy.js';
+
 export const PUBLIC_HIPS = 'https://alasky.cds.unistra.fr/DSS/DSSColor';
 
 // DP1 HiPS lives under /api/hips/v2/dp1/deep_coadd/… (the old DP0.2 path
@@ -79,6 +82,107 @@ export function resolveActiveBaseUrl(
   if (mode === 'rubin') return rubin;
   if (!hasToken || fellBack) return PUBLIC_HIPS;
   return rubin;
+}
+
+// --- DP1 dataset discovery ------------------------------------------------
+//
+// The datasets above are the hardcoded FALLBACK. The live set is discovered at
+// runtime from the DP1 HiPS list endpoint. Probed 2026-07-11 from
+// http://localhost:5173 origin:
+//   GET https://data.lsst.cloud/api/hips/v2/dp1/list
+//   → 200, content-type: text/plain, NO Access-Control-Allow-Origin header.
+// Because the RSP host sends no ACAO, a browser fetch is CORS-blocked, so the
+// request MUST go through the dev `/rsp` proxy via toRequestUrl() (same as every
+// other Rubin request). The body is a HiPS multi-record "properties" list: one
+// blank-line-separated block per dataset, each a set of `key = value` lines,
+// including e.g.:
+//   creator_did       = ivo://org.rubinobs/lsst-dp1?hips=color_gri&type=deep_coadd
+//   hips_service_url   = https://data.lsst.cloud/api/hips/v2/dp1/deep_coadd/color_gri
+//   dataproduct_subtype = color   (NOTE: this is "color" even for single BANDS —
+//                                   kind must come from the id prefix, not this)
+// The live list returned exactly the 11 datasets hardcoded above (5 colour
+// composites + 6 ugrizy bands). See tests/fixtures/dp1-hips-list.txt.
+
+/** The public DP1 HiPS list endpoint (absolute; rewritten by toRequestUrl in dev). */
+export const RUBIN_DP1_LIST_URL = 'https://data.lsst.cloud/api/hips/v2/dp1/list';
+
+/** Derive the short selector label for a dataset id (matches RUBIN_DATASETS). */
+function datasetLabel(id: string, kind: 'color' | 'band'): string {
+  return kind === 'color' ? `${id.slice('color_'.length)} colour` : id.slice('band_'.length);
+}
+
+/** Extract the dataset id (e.g. `color_gri`, `band_r`) from one parsed record. */
+function datasetIdFromRecord(props: Map<string, string>): string | null {
+  // Prefer the service URL's last path segment — it is exactly the id.
+  const url = props.get('hips_service_url');
+  if (url) {
+    const seg = url.split(/[?#]/)[0]!.split('/').filter(Boolean).pop();
+    if (seg) return seg;
+  }
+  // Fallback: the `hips=<id>` query param of the creator_did IVOA identifier.
+  const did = props.get('creator_did');
+  const m = did?.match(/[?&]hips=([^&]+)/);
+  return m ? m[1]! : null;
+}
+
+/**
+ * Parse the DP1 HiPS `…/list` body (a HiPS multi-record properties list) into the
+ * same typed shape as {@link RUBIN_DATASETS}. Pure and total: blocks are split on
+ * blank lines; each block's `key = value` lines are read; the dataset id comes
+ * from `hips_service_url` (or the `creator_did` `hips=` param); `kind` is derived
+ * from the id prefix (`color_`/`band_`), since `dataproduct_subtype` is "color"
+ * even for grayscale bands. Records without a recognisable colour/band id are
+ * skipped, and duplicate ids are kept once. Malformed / empty input yields `[]`.
+ */
+export function parseDp1DatasetList(text: string): RubinDataset[] {
+  const datasets: RubinDataset[] = [];
+  const seen = new Set<string>();
+  for (const block of text.split(/\n[ \t]*\n/)) {
+    const props = new Map<string, string>();
+    for (const line of block.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const eq = trimmed.indexOf('=');
+      if (eq < 0) continue;
+      props.set(trimmed.slice(0, eq).trim(), trimmed.slice(eq + 1).trim());
+    }
+    const id = datasetIdFromRecord(props);
+    if (!id || seen.has(id)) continue;
+    const kind: 'color' | 'band' | null = id.startsWith('color_')
+      ? 'color'
+      : id.startsWith('band_')
+        ? 'band'
+        : null;
+    if (!kind) continue;
+    seen.add(id);
+    datasets.push({ id, label: datasetLabel(id, kind), kind });
+  }
+  return datasets;
+}
+
+/**
+ * Discover the available DP1 HiPS datasets at runtime from the list endpoint,
+ * falling back to the hardcoded {@link RUBIN_DATASETS} on ANY failure (network,
+ * CORS, non-2xx, or a body that parses to nothing) so the Filter dropdown is
+ * NEVER empty and the app never breaks. Routed through toRequestUrl() so it works
+ * behind the dev `/rsp` proxy (the endpoint sends no CORS header).
+ *
+ * `fetchImpl` is injectable for unit testing; it defaults to the global fetch.
+ */
+export async function fetchDp1Datasets(
+  fetchImpl: typeof fetch = fetch,
+): Promise<readonly RubinDataset[]> {
+  try {
+    const resp = await fetchImpl(toRequestUrl(RUBIN_DP1_LIST_URL), {
+      headers: getAuthHeader(),
+    });
+    if (!resp.ok) return RUBIN_DATASETS;
+    const parsed = parseDp1DatasetList(await resp.text());
+    return parsed.length > 0 ? parsed : RUBIN_DATASETS;
+  } catch {
+    // Network error / CORS / abort / non-text body — degrade to the hardcoded list.
+    return RUBIN_DATASETS;
+  }
 }
 
 /** Whether a resolved base URL points at the authenticated Rubin service. */
