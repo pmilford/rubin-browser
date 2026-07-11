@@ -47,6 +47,24 @@ const OFFLINE_NOISE_SIGMA = 1.5;
 
 let sky: SyntheticSky | null = null;
 
+/**
+ * A single KNOWN extended galaxy injected into the offline cube so the image
+ * classifier (feature 123) can be exercised end-to-end through the real cursor
+ * → cutout → classify seam (the rest of the offline sky is point sources / stars).
+ * Position is fixed and away from the "Find a transient" jump so the two demos
+ * don't overlap. Peak brightness is kept well below the 8-bit clip (mag ~19.5 →
+ * ~145 counts) so its core is NOT saturated — a saturated core would (correctly)
+ * be classified "uncertain", defeating the demo.
+ */
+export const OFFLINE_GALAXY = { ra: 150, dec: 20, reArcsec: 180, sersicN: 1, mag: 19.5 } as const;
+
+/**
+ * A single KNOWN bright STAR (point source) near the galaxy, so the classifier's
+ * star path can also be exercised end-to-end at a fixed, navigable position. Same
+ * sub-clip brightness so its core is not saturated.
+ */
+export const OFFLINE_STAR = { ra: 150, dec: 22, fwhmArcsec: 67, mag: 19.5 } as const;
+
 /** The bundled synthetic sky (full sphere, all epochs+bands, generated once, lazily). */
 export function offlineSky(): SyntheticSky {
   if (!sky) {
@@ -61,6 +79,26 @@ export function offlineSky(): SyntheticSky {
       // nothing between pixel centres — the sky would look like flat noise and a
       // transient blink would be invisible. See SyntheticSkyConfig.fwhmArcsecRange.
       fwhmArcsecRange: [45, 90],
+    });
+    // Inject the extended galaxy (constant, so it never appears as a variable).
+    const galaxyMag = Object.fromEntries(BANDS.map((b) => [b, OFFLINE_GALAXY.mag])) as Record<Band, number>;
+    sky.sources.push({
+      id: 9_000_001,
+      ra: OFFLINE_GALAXY.ra,
+      dec: OFFLINE_GALAXY.dec,
+      baseMag: galaxyMag,
+      fwhmArcsec: 67, // nominal beam; unused for a Sérsic source but required by the type
+      variability: { kind: 'constant' },
+      morphology: { kind: 'sersic', reArcsec: OFFLINE_GALAXY.reArcsec, sersicN: OFFLINE_GALAXY.sersicN },
+    });
+    const starMag = Object.fromEntries(BANDS.map((b) => [b, OFFLINE_STAR.mag])) as Record<Band, number>;
+    sky.sources.push({
+      id: 9_000_002,
+      ra: OFFLINE_STAR.ra,
+      dec: OFFLINE_STAR.dec,
+      baseMag: starMag,
+      fwhmArcsec: OFFLINE_STAR.fwhmArcsec,
+      variability: { kind: 'constant' },
     });
   }
   return sky;

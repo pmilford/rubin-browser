@@ -1,0 +1,572 @@
+/**
+ * PURE, NaN-safe image morphology features for star/galaxy classification.
+ *
+ * This is the "measurement" half of the image-based object classifier (see
+ * docs/research/object-type-classification-prd.md §3). It takes a small cutout of
+ * honest, pre-colormap intensity (a Float32Array grid, with NaN cells marking
+ * GAPS — off-tile / no-data — exactly like crossSection.ts) and returns a fixed
+ * set of scalar features. Every feature is a pure function of the cutout; there is
+ * NO DOM, NO colormap, and NO randomness.
+ *
+ * INDEPENDENCE (design-review blocker B2): this module shares NO centroid / PSF /
+ * second-moment helper with syntheticMorphology.ts. It measures a source using
+ * ONLY the pixels handed to it and the caller-supplied `psfFwhmArcsec`. The
+ * closed-form tests pin HAND-computed published values (a Gaussian of known σ
+ * measures FWHM = 2.3548·σ; Gini of a single-nonzero pixel ≈ 1, of a flat field
+ * ≈ 0; concentration of a point < an n=1 disk < an n=4 bulge; asymmetry of a
+ * one-sided source > 0) — never by round-tripping any renderer's parameters.
+ *
+ * PSF SELF-REFERENCE (blocker B3): the local PSF is NOT estimated from the target.
+ * `fwhmRatio` is the measured source size divided by the EXTERNAL PSF size
+ * (`psfFwhmArcsec / pixelScaleArcsec`) supplied by the caller. An isolated galaxy
+ * with no companion stars therefore still reads fwhmRatio > 1.
+ *
+ * GAPS (blocker B8): gaps are NaN cells only. A faint source on a near-zero but
+ * COVERED background is NOT a gap — `gapFraction` counts NaN cells and nothing
+ * else. NaN cells are excluded from every statistic; they never poison a result.
+ *
+ * SATURATION (blocker B9): a clipped/plateau core (a ≥2×2 contiguous block sitting
+ * at the cutout's maximum value, e.g. an 8-bit core pinned at 255/1.0) sets
+ * `saturatedCore = true` so the classifier can refuse rather than call an inflated
+ * size a galaxy.
+ */
+
+/** A small square-ish patch of honest, pre-colormap intensity around a target. */
+export interface Cutout {
+  /** Row-major intensity, length `width*height`. NaN marks a GAP (no data). */
+  data: Float32Array;
+  /** Grid width in pixels. */
+  width: number;
+  /** Grid height in pixels. */
+  height: number;
+  /** Sky sampling of one pixel, arcsec/px. */
+  pixelScaleArcsec: number;
+  /**
+   * The EXTERNAL local PSF FWHM in arcsec (caller-supplied, e.g. a survey nominal
+   * or a value measured from OTHER nearby stars) — NEVER estimated from this
+   * cutout's own target. This is the reference `fwhmRatio` is measured against.
+   */
+  psfFwhmArcsec: number;
+}
+
+/** The scalar feature vector measured from a {@link Cutout}. All finite. */
+export interface ImageFeatures {
+  /** Peak background-subtracted signal over robust noise: max(I')/σ. */
+  snr: number;
+  /** Fraction of cells that are NaN (gaps). Counts NaN ONLY — never low light. */
+  gapFraction: number;
+  /** A ≥2×2 block pinned at the cutout max — a clipped/saturated core. */
+  saturatedCore: boolean;
+  /** Measured source FWHM (px) / external PSF FWHM (px). ≈1 point, >1 extended. */
+  fwhmRatio: number;
+  /** Concentration C = 5·log10(r80/r20) of the circular curve-of-growth. */
+  concentration: number;
+  /** SExtractor-style spread: >0 ⇒ light broader than the PSF ⇒ extended. */
+  spreadModelProxy: number;
+  /** Core peakiness: (peak/3×3-core-sum) normalised by the PSF's expected value. */
+  peakSharpness: number;
+  /** Rotational asymmetry A = Σ|I−I₁₈₀|/Σ|I| about the flux centroid. */
+  asymmetry: number;
+  /** Lotz Gini coefficient of the segmented flux (0 flat … 1 all in one pixel). */
+  gini: number;
+  /** Lotz M20 (log10). NEGATIVE by construction; more negative ⇒ single nucleus. */
+  m20: number;
+  /** Second-moment ellipticity e = 1 − b/a of the flux distribution (0 = round). */
+  ellipticity: number;
+}
+
+/** FWHM = 2·√(2·ln2)·σ ⇒ this constant times σ. Pinned by a closed-form test. */
+const FWHM_PER_SIGMA = 2 * Math.sqrt(2 * Math.LN2); // 2.354820045...
+
+/** Detection threshold above noise for the segmentation used by shape features. */
+const SEG_K_SIGMA = 1.5;
+
+/** Median of a numeric array (ascending copy). Empty ⇒ NaN. */
+function median(vals: number[]): number {
+  if (vals.length === 0) return NaN;
+  const s = [...vals].sort((a, b) => a - b);
+  const m = s.length >> 1;
+  return s.length % 2 ? s[m]! : (s[m - 1]! + s[m]!) / 2;
+}
+
+/** 1.4826·MAD — a robust σ estimate. Returns 0 for a constant sample. */
+function robustSigma(vals: number[], center: number): number {
+  if (vals.length === 0) return 0;
+  const dev = vals.map((v) => Math.abs(v - center));
+  return 1.4826 * median(dev);
+}
+
+/** Border-ring (outer `ring` px) finite values — the background estimator sample. */
+function borderValues(c: Cutout, ring: number): number[] {
+  const { data, width, height } = c;
+  const out: number[] = [];
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const onRing = x < ring || y < ring || x >= width - ring || y >= height - ring;
+      if (!onRing) continue;
+      const v = data[y * width + x]!;
+      if (Number.isFinite(v)) out.push(v);
+    }
+  }
+  return out;
+}
+
+/** All finite values in the cutout (background + source), for a global fallback. */
+function finiteValues(c: Cutout): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < c.data.length; i++) {
+    const v = c.data[i]!;
+    if (Number.isFinite(v)) out.push(v);
+  }
+  return out;
+}
+
+/**
+ * Background `b` (median of the border ring) and noise `σ` (1.4826·MAD of the same
+ * ring). If the border ring is entirely NaN, or degenerate (σ ≤ 0, e.g. a
+ * perfectly flat noise-free test image), fall back to a GLOBAL robust estimate so
+ * `snr` is never NaN/Inf (blocker: "don't emit NaN into snr"). The σ is floored to
+ * a tiny positive value so a truly constant image yields a finite (large) snr
+ * rather than a divide-by-zero.
+ */
+function estimateBackground(c: Cutout): { b: number; sigma: number } {
+  const ring = c.width >= 8 && c.height >= 8 ? 2 : 1;
+  const border = borderValues(c, ring);
+  let b = median(border);
+  let sigma = robustSigma(border, b);
+  if (!Number.isFinite(b) || sigma <= 0) {
+    const all = finiteValues(c);
+    if (!Number.isFinite(b)) b = median(all);
+    if (sigma <= 0) sigma = robustSigma(all, b);
+  }
+  if (!(sigma > 0)) {
+    // Truly constant image: floor σ to a tiny fraction of the dynamic range.
+    const all = finiteValues(c);
+    const max = all.length ? Math.max(...all) : 1;
+    sigma = Math.max(1e-12, Math.abs(max - b) * 1e-6, 1e-12);
+  }
+  return { b, sigma };
+}
+
+/** Bilinear sample of a Float64 grid; NaN if any needed corner is NaN/off-grid. */
+function bilinear(grid: Float64Array, width: number, height: number, x: number, y: number): number {
+  const x0 = Math.floor(x);
+  const y0 = Math.floor(y);
+  const x1 = x0 + 1;
+  const y1 = y0 + 1;
+  if (x0 < 0 || y0 < 0 || x1 >= width || y1 >= height) return NaN;
+  const dx = x - x0;
+  const dy = y - y0;
+  const v00 = grid[y0 * width + x0]!;
+  const v10 = grid[y0 * width + x1]!;
+  const v01 = grid[y1 * width + x0]!;
+  const v11 = grid[y1 * width + x1]!;
+  if (!Number.isFinite(v00) || !Number.isFinite(v10) || !Number.isFinite(v01) || !Number.isFinite(v11)) {
+    return NaN;
+  }
+  const top = v00 * (1 - dx) + v10 * dx;
+  const bot = v01 * (1 - dx) + v11 * dx;
+  return top * (1 - dy) + bot * dy;
+}
+
+/** Detect a ≥2×2 contiguous block whose four cells all equal the finite max. */
+function detectSaturatedCore(c: Cutout): boolean {
+  const { data, width, height } = c;
+  let max = -Infinity;
+  for (let i = 0; i < data.length; i++) {
+    const v = data[i]!;
+    if (Number.isFinite(v) && v > max) max = v;
+  }
+  if (!Number.isFinite(max)) return false;
+  for (let y = 0; y < height - 1; y++) {
+    for (let x = 0; x < width - 1; x++) {
+      const a = data[y * width + x]!;
+      const b = data[y * width + x + 1]!;
+      const cc = data[(y + 1) * width + x]!;
+      const d = data[(y + 1) * width + x + 1]!;
+      if (a === max && b === max && cc === max && d === max) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * A CONNECTED-COMPONENT segmentation of the source, grown from the brightest
+ * pixel over cells above `thr`. Using a connected footprint (SExtractor-style
+ * detection) instead of a bare per-pixel threshold is essential: it excludes
+ * ISOLATED noise pixels far from the source, whose r²-weighted contribution would
+ * otherwise dominate (and wildly inflate) the second-moment size of a bright,
+ * compact star. The `mask` is the source footprint every shape feature integrates
+ * over.
+ */
+interface Segmentation {
+  /** Background-subtracted values, NaN preserved (gaps). */
+  resid: Float64Array;
+  /** 1 where the pixel belongs to the connected source footprint. */
+  mask: Uint8Array;
+  /** Centroid (x,y) in pixel coordinates (flux-weighted over the mask). */
+  cx: number;
+  cy: number;
+  /** Detection threshold used (in resid units). */
+  thr: number;
+  /** Sum of masked flux. */
+  fluxSum: number;
+}
+
+function segment(c: Cutout, b: number, sigma: number): Segmentation {
+  const { data, width, height } = c;
+  const n = width * height;
+  const resid = new Float64Array(n);
+  let peakVal = -Infinity;
+  let peakIdx = -1;
+  for (let i = 0; i < data.length; i++) {
+    const v = data[i]!;
+    const r = Number.isFinite(v) ? v - b : NaN;
+    resid[i] = r;
+    if (Number.isFinite(r) && r > peakVal) {
+      peakVal = r;
+      peakIdx = i;
+    }
+  }
+  const thr = Math.max(SEG_K_SIGMA * sigma, 0);
+  const mask = new Uint8Array(n);
+
+  if (peakIdx < 0 || peakVal <= thr) {
+    // No pixel above threshold: mask just the brightest finite pixel so the shape
+    // features still have a defined (if trivial) centre.
+    const cx = peakIdx >= 0 ? peakIdx % width : (width - 1) / 2;
+    const cy = peakIdx >= 0 ? Math.floor(peakIdx / width) : (height - 1) / 2;
+    if (peakIdx >= 0) mask[peakIdx] = 1;
+    return { resid, mask, cx, cy, thr, fluxSum: Math.max(0, peakVal) };
+  }
+
+  // 8-connected flood fill from the peak over cells above threshold.
+  const stack: number[] = [peakIdx];
+  mask[peakIdx] = 1;
+  let sw = 0;
+  let sx = 0;
+  let sy = 0;
+  while (stack.length > 0) {
+    const idx = stack.pop()!;
+    const px = idx % width;
+    const py = (idx - px) / width;
+    const r = resid[idx]!;
+    sw += r;
+    sx += r * px;
+    sy += r * py;
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        const nx = px + dx;
+        const ny = py + dy;
+        if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+        const nIdx = ny * width + nx;
+        if (mask[nIdx]) continue;
+        const nr = resid[nIdx]!;
+        if (Number.isFinite(nr) && nr > thr) {
+          mask[nIdx] = 1;
+          stack.push(nIdx);
+        }
+      }
+    }
+  }
+  return { resid, mask, cx: sx / sw, cy: sy / sw, thr, fluxSum: sw };
+}
+
+/** Second-moment size + ellipticity of the segmented flux about its centroid. */
+function secondMoments(seg: Segmentation, width: number, height: number): { fwhmPx: number; ellipticity: number } {
+  const { resid, mask, cx, cy } = seg;
+  let sw = 0;
+  let qxx = 0;
+  let qyy = 0;
+  let qxy = 0;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = y * width + x;
+      if (!mask[idx]) continue;
+      const r = resid[idx]!;
+      if (!Number.isFinite(r) || r <= 0) continue;
+      const dx = x - cx;
+      const dy = y - cy;
+      sw += r;
+      qxx += r * dx * dx;
+      qyy += r * dy * dy;
+      qxy += r * dx * dy;
+    }
+  }
+  if (sw <= 0) return { fwhmPx: 0, ellipticity: 0 };
+  qxx /= sw;
+  qyy /= sw;
+  qxy /= sw;
+  // rms radius r_rms = √(Qxx+Qyy); for a 2D Gaussian Qxx=Qyy=σ² so r_rms=√2·σ and
+  // FWHM = 2.3548·σ = 2.3548·(r_rms/√2). Pinned by the known-σ Gaussian test.
+  const rrms = Math.sqrt(Math.max(0, qxx + qyy));
+  const fwhmPx = FWHM_PER_SIGMA * (rrms / Math.SQRT2);
+  const trace = qxx + qyy;
+  const disc = Math.sqrt(Math.max(0, (qxx - qyy) * (qxx - qyy) + 4 * qxy * qxy));
+  const lam1 = (trace + disc) / 2;
+  const lam2 = (trace - disc) / 2;
+  const ellipticity = lam1 > 0 ? 1 - Math.sqrt(Math.max(0, lam2) / lam1) : 0;
+  return { fwhmPx, ellipticity };
+}
+
+/** Concentration C = 5·log10(r80/r20) from the circular curve-of-growth. */
+function concentration(seg: Segmentation, width: number, height: number): number {
+  const { resid, mask, cx, cy } = seg;
+  const pts: { d: number; f: number }[] = [];
+  let total = 0;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = y * width + x;
+      if (!mask[idx]) continue;
+      const r = resid[idx]!;
+      if (!Number.isFinite(r) || r <= 0) continue;
+      const dx = x - cx;
+      const dy = y - cy;
+      pts.push({ d: Math.sqrt(dx * dx + dy * dy), f: r });
+      total += r;
+    }
+  }
+  if (total <= 0 || pts.length < 3) return 0;
+  pts.sort((a, b) => a.d - b.d);
+  const radiusAt = (frac: number): number => {
+    const target = frac * total;
+    let cum = 0;
+    let prevD = 0;
+    for (const p of pts) {
+      const next = cum + p.f;
+      if (next >= target) {
+        // Linear interpolate the enclosing radius between the bracketing points.
+        const span = next - cum;
+        const t = span > 0 ? (target - cum) / span : 0;
+        return prevD + (p.d - prevD) * t;
+      }
+      prevD = p.d;
+      cum = next;
+    }
+    return pts[pts.length - 1]!.d;
+  };
+  const r20 = radiusAt(0.2);
+  const r80 = radiusAt(0.8);
+  if (r20 <= 0 || r80 <= 0) return 0;
+  return 5 * Math.log10(r80 / r20);
+}
+
+/**
+ * SExtractor-style spread relative to the PSF. With P a normalised PSF template
+ * and G a slightly broader ("fuzzy", PSF⊛exp) template centred on the source:
+ *   spread = (Σ I'·G)(Σ P·P) / [(Σ I'·P)(Σ P·G)] − 1
+ * For a point source I' ∝ P this is exactly 0; for light broader than the PSF the
+ * numerator ratio grows, so spread > 0 ⇒ extended.
+ */
+function spreadModel(seg: Segmentation, c: Cutout, sigmaPsfPx: number): number {
+  const { resid, cx, cy } = seg;
+  const { width, height } = c;
+  const sp = Math.max(0.5, sigmaPsfPx);
+  const sg = sp * 1.6; // fuzzier template (PSF convolved with a small exponential)
+  let sIG = 0;
+  let sIP = 0;
+  let sPP = 0;
+  let sPG = 0;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const r = resid[y * width + x]!;
+      if (!Number.isFinite(r)) continue;
+      const dx = x - cx;
+      const dy = y - cy;
+      const d2 = dx * dx + dy * dy;
+      const P = Math.exp(-0.5 * d2 / (sp * sp));
+      const G = Math.exp(-0.5 * d2 / (sg * sg));
+      sIG += r * G;
+      sIP += r * P;
+      sPP += P * P;
+      sPG += P * G;
+    }
+  }
+  if (sIP === 0 || sPG === 0) return 0;
+  return (sIG * sPP) / (sIP * sPG) - 1;
+}
+
+/** peak/3×3-core-sum normalised by the PSF's expected central fraction. */
+function peakSharpness(seg: Segmentation, c: Cutout, sigmaPsfPx: number): number {
+  const { resid, cx, cy } = seg;
+  const { width, height } = c;
+  const ix = Math.round(cx);
+  const iy = Math.round(cy);
+  let core = 0;
+  let peak = -Infinity;
+  for (let dy = -1; dy <= 1; dy++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      const x = ix + dx;
+      const y = iy + dy;
+      if (x < 0 || y < 0 || x >= width || y >= height) continue;
+      const r = resid[y * width + x]!;
+      if (!Number.isFinite(r)) continue;
+      const rr = Math.max(0, r);
+      core += rr;
+      if (rr > peak) peak = rr;
+    }
+  }
+  if (core <= 0 || !Number.isFinite(peak)) return 0;
+  const measured = peak / core;
+  // Expected peak/3×3 fraction for a Gaussian PSF sampled at pixel centres.
+  const sp = Math.max(0.5, sigmaPsfPx);
+  let ecore = 0;
+  let epeak = 0;
+  for (let dy = -1; dy <= 1; dy++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      const w = Math.exp(-0.5 * (dx * dx + dy * dy) / (sp * sp));
+      ecore += w;
+      if (w > epeak) epeak = w;
+    }
+  }
+  const expected = epeak / ecore;
+  return expected > 0 ? measured / expected : 0;
+}
+
+/** Rotational asymmetry A = Σ|I−I₁₈₀|/Σ|I| about the flux centroid (bilinear). */
+function asymmetry(seg: Segmentation, c: Cutout): number {
+  const { resid, mask, cx, cy } = seg;
+  const { width, height } = c;
+  let num = 0;
+  let den = 0;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = y * width + x;
+      if (!mask[idx]) continue;
+      const r = resid[idx]!;
+      if (!Number.isFinite(r)) continue;
+      const rx = 2 * cx - x;
+      const ry = 2 * cy - y;
+      const rot = bilinear(resid, width, height, rx, ry);
+      if (!Number.isFinite(rot)) continue;
+      num += Math.abs(r - rot);
+      den += Math.abs(r);
+    }
+  }
+  return den > 0 ? num / den : 0;
+}
+
+/** Lotz Gini over the segmented |flux| values: 0 (flat) … 1 (all in one pixel). */
+function gini(seg: Segmentation, width: number, height: number): number {
+  const { resid, mask } = seg;
+  const xs: number[] = [];
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = y * width + x;
+      if (!mask[idx]) continue;
+      const r = resid[idx]!;
+      if (Number.isFinite(r)) xs.push(Math.abs(r));
+    }
+  }
+  const n = xs.length;
+  if (n < 2) return n === 1 ? 1 : 0;
+  xs.sort((a, b) => a - b);
+  let mean = 0;
+  for (const v of xs) mean += v;
+  mean /= n;
+  if (mean <= 0) return 0;
+  let acc = 0;
+  for (let i = 0; i < n; i++) {
+    acc += (2 * (i + 1) - n - 1) * xs[i]!;
+  }
+  return acc / (mean * n * (n - 1));
+}
+
+/**
+ * Lotz M20 = log10(Σ_i M_i / M_tot) over the brightest pixels holding 20% of the
+ * total flux, with M_i = f_i·((x−x_c)²+(y−y_c)²). NEGATIVE by construction (the
+ * bright-20% subset carries a small share of the total spatial second moment); a
+ * single concentrated nucleus is more negative than scattered bright clumps.
+ */
+function m20(seg: Segmentation, width: number, height: number): number {
+  const { resid, mask, cx, cy } = seg;
+  const pix: { f: number; m: number }[] = [];
+  let ftot = 0;
+  let mtot = 0;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = y * width + x;
+      if (!mask[idx]) continue;
+      const r = resid[idx]!;
+      if (!Number.isFinite(r) || r <= 0) continue;
+      const dx = x - cx;
+      const dy = y - cy;
+      const m = r * (dx * dx + dy * dy);
+      pix.push({ f: r, m });
+      ftot += r;
+      mtot += m;
+    }
+  }
+  if (ftot <= 0 || mtot <= 0 || pix.length < 2) return 0;
+  pix.sort((a, b) => b.f - a.f); // brightest first
+  const target = 0.2 * ftot;
+  let cumF = 0;
+  let m20sum = 0;
+  for (const p of pix) {
+    m20sum += p.m;
+    cumF += p.f;
+    if (cumF >= target) break;
+  }
+  const ratio = m20sum / mtot;
+  return ratio > 0 ? Math.log10(ratio) : 0;
+}
+
+/**
+ * Compute the full feature vector for a cutout. PURE and NaN-safe: NaN cells are
+ * gaps (excluded from every statistic, counted only by `gapFraction`); no feature
+ * emits NaN/Inf. See the module header for the design-review blockers each rule
+ * satisfies (B2 independence, B3 external PSF, B8 gaps, B9 saturation).
+ */
+export function computeFeatures(c: Cutout): ImageFeatures {
+  const { width, height, pixelScaleArcsec, psfFwhmArcsec } = c;
+  const total = width * height;
+
+  // Gaps: NaN cells ONLY (blocker B8) — never low luminance.
+  let nan = 0;
+  for (let i = 0; i < c.data.length; i++) {
+    if (Number.isNaN(c.data[i]!)) nan++;
+  }
+  const gapFraction = total > 0 ? nan / total : 1;
+
+  const { b, sigma } = estimateBackground(c);
+  const saturatedCore = detectSaturatedCore(c);
+
+  // Peak signal / noise.
+  let maxResid = -Infinity;
+  for (let i = 0; i < c.data.length; i++) {
+    const v = c.data[i]!;
+    if (Number.isFinite(v)) {
+      const r = v - b;
+      if (r > maxResid) maxResid = r;
+    }
+  }
+  const snr = Number.isFinite(maxResid) ? maxResid / sigma : 0;
+
+  const seg = segment(c, b, sigma);
+  const psfFwhmPx = psfFwhmArcsec / pixelScaleArcsec;
+  const sigmaPsfPx = psfFwhmPx / FWHM_PER_SIGMA;
+
+  const { fwhmPx, ellipticity } = secondMoments(seg, width, height);
+  const fwhmRatio = psfFwhmPx > 0 ? fwhmPx / psfFwhmPx : 0;
+  const conc = concentration(seg, width, height);
+  const spread = spreadModel(seg, c, sigmaPsfPx);
+  const sharp = peakSharpness(seg, c, sigmaPsfPx);
+  const asym = asymmetry(seg, c);
+  const g = gini(seg, width, height);
+  const mm = m20(seg, width, height);
+
+  return {
+    snr,
+    gapFraction,
+    saturatedCore,
+    fwhmRatio,
+    concentration: conc,
+    spreadModelProxy: spread,
+    peakSharpness: sharp,
+    asymmetry: asym,
+    gini: g,
+    m20: mm,
+    ellipticity,
+  };
+}

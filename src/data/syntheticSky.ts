@@ -53,6 +53,23 @@ export type Variability =
   | { kind: 'transient'; peakMjd: number; riseDays: number; fadeDays: number; amplitudeMag: number }
   | { kind: 'supernova'; peakMjd: number; riseDays: number; fadeDays: number; peakMag: number };
 
+/**
+ * Optional EXTENDED morphology for a source. When absent (the default for every
+ * generated source), a source is a point source rendered as the seeing Gaussian —
+ * so all existing tiling/light-curve/cross-section behaviour is byte-identical.
+ * When present, the source is rendered as a CIRCULAR Sérsic profile (still summed
+ * onto the same background with the same flux/light-curve machinery), giving the
+ * offline cube a genuinely extended galaxy for the image-classifier (feature 123)
+ * to exercise through the real sampling seam.
+ */
+export type SourceMorphology = {
+  kind: 'sersic';
+  /** Effective (half-light) radius in arcseconds. */
+  reArcsec: number;
+  /** Sérsic index n (1 ≈ exponential disk, 4 ≈ de Vaucouleurs bulge). */
+  sersicN: number;
+};
+
 export interface SyntheticSource {
   id: number;
   /** degrees, [0,360) */
@@ -64,6 +81,8 @@ export interface SyntheticSource {
   /** point-spread FWHM in arcseconds (seeing) */
   fwhmArcsec: number;
   variability: Variability;
+  /** Optional extended morphology; absent ⇒ point source (Gaussian). */
+  morphology?: SourceMorphology;
 }
 
 export interface SyntheticSkyConfig {
@@ -113,6 +132,46 @@ export const SKY_BACKGROUND_COUNTS = 12;
 
 /** FWHM → Gaussian sigma. */
 const FWHM_TO_SIGMA = 1 / (2 * Math.sqrt(2 * Math.LN2)); // 1/2.3548...
+
+/** Sérsic b_n (Ciotti & Bertin 1999 asymptotic; accurate for n ≳ 0.36). */
+function sersicBn(n: number): number {
+  return 2 * n - 1 / 3 + 4 / (405 * n) + 46 / (25515 * n * n);
+}
+
+/**
+ * Peak-normalised radial profile amplitude in [0,1] at angular separation
+ * `sepArcsec` from a source's centre.
+ *   - Point source (no morphology): the seeing Gaussian exp(−½(θ/σ)²), σ=FWHM/2.3548.
+ *   - Extended source: a CIRCULAR Sérsic peak-normalised to 1 at the centre,
+ *     amp(r) = exp(−b_n·(r/re)^{1/n})  (I(r)/I(0) for the standard Sérsic law).
+ * Both {@link intensityAt} (ground truth) and {@link renderSyntheticIntensityFrame}
+ * (raster) call this, so displayed pixels equal the ground truth before noise.
+ */
+function profileAmplitude(source: SyntheticSource, sepArcsec: number): number {
+  const m = source.morphology;
+  if (!m) {
+    const sigma = source.fwhmArcsec * FWHM_TO_SIGMA;
+    const r = sepArcsec / sigma;
+    return r > 6 ? 0 : Math.exp(-0.5 * r * r);
+  }
+  const bn = sersicBn(m.sersicN);
+  const x = sepArcsec / m.reArcsec;
+  return Math.exp(-bn * Math.pow(x, 1 / m.sersicN));
+}
+
+/**
+ * Angular radius (arcsec) beyond which a source's profile is negligible (~1e-3 of
+ * peak) — used to prefilter sources to a tile and to skip far pixels. For a
+ * Gaussian this is 6σ (exactly the previous cutoff); for a Sérsic it is the radius
+ * where amp falls to 1e-3.
+ */
+function sourceExtentArcsec(source: SyntheticSource): number {
+  const m = source.morphology;
+  if (!m) return 6 * source.fwhmArcsec * FWHM_TO_SIGMA;
+  const bn = sersicBn(m.sersicN);
+  const xCut = Math.pow(Math.log(1000) / bn, m.sersicN); // amp(xCut) ≈ 1e-3
+  return xCut * m.reArcsec;
+}
 
 /** Deterministic PRNG (mulberry32) — copied from src/data/alerts.ts. */
 function mulberry32(seed: number): () => number {
@@ -321,11 +380,9 @@ export function intensityAt(
   const p = radecToVec(ra, dec);
   let sum = 0;
   for (const s of sky.sources) {
-    const sigmaArcsec = s.fwhmArcsec * FWHM_TO_SIGMA;
     const sep = angularSepArcsec(p, radecToVec(s.ra, s.dec));
-    const r = sep / sigmaArcsec;
-    if (r > 6) continue; // negligible beyond 6σ
-    sum += peakCounts(s, band, mjd) * Math.exp(-0.5 * r * r);
+    if (sep > sourceExtentArcsec(s)) continue; // negligible beyond the profile cutoff
+    sum += peakCounts(s, band, mjd) * profileAmplitude(s, sep);
   }
   return sum;
 }
@@ -365,21 +422,22 @@ export function renderSyntheticIntensityFrame(
   // Tile footprint: center vector + angular radius, expanded by the widest PSF.
   const centerVec = pixcoord2vec_nest(nside, pixelIndex, 0.5, 0.5);
   const tileRadiusArcsec = max_pixrad(nside) * ARCSEC_PER_RAD;
-  let maxSigmaArcsec = 0;
+  let maxExtentArcsec = 0;
   for (const s of sky.sources) {
-    const sig = s.fwhmArcsec * FWHM_TO_SIGMA;
-    if (sig > maxSigmaArcsec) maxSigmaArcsec = sig;
+    const ext = sourceExtentArcsec(s);
+    if (ext > maxExtentArcsec) maxExtentArcsec = ext;
   }
-  const marginArcsec = tileRadiusArcsec + 6 * maxSigmaArcsec;
+  const marginArcsec = tileRadiusArcsec + maxExtentArcsec;
 
   // Pre-filter sources to those that can touch this tile.
-  const local: { vec: V3; sigmaArcsec: number; counts: number }[] = [];
+  const local: { vec: V3; source: SyntheticSource; extentArcsec: number; counts: number }[] = [];
   for (const s of sky.sources) {
     const vec = radecToVec(s.ra, s.dec);
     if (angularSepArcsec(vec, centerVec) > marginArcsec) continue;
     local.push({
       vec,
-      sigmaArcsec: s.fwhmArcsec * FWHM_TO_SIGMA,
+      source: s,
+      extentArcsec: sourceExtentArcsec(s),
       counts: peakCounts(s, band, mjd),
     });
   }
@@ -395,9 +453,8 @@ export function renderSyntheticIntensityFrame(
       let signal = 0;
       for (const s of local) {
         const sep = angularSepArcsec(pv, s.vec);
-        const r = sep / s.sigmaArcsec;
-        if (r > 6) continue;
-        signal += s.counts * Math.exp(-0.5 * r * r);
+        if (sep > s.extentArcsec) continue;
+        signal += s.counts * profileAmplitude(s.source, sep);
       }
 
       let value = SKY_BACKGROUND_COUNTS + signal;

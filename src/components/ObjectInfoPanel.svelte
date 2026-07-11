@@ -10,14 +10,33 @@
    */
   import { OBJECT_TYPE_LABELS, type IdentifyInfo } from '../data/objects.js';
   import { formatSeparation, cardinalDirection } from '../utils/skyGeom.js';
+  import type { ImageClassification } from '../utils/objectClassifier.js';
 
-  let { info, onClose }: { info: IdentifyInfo | null; onClose: () => void } = $props();
+  let {
+    info,
+    imageClass = null,
+    onClose,
+  }: {
+    info: IdentifyInfo | null;
+    imageClass?: ImageClassification | null;
+    onClose: () => void;
+  } = $props();
 
   const fmtRa = (ra: number) => `${ra.toFixed(4)}°`;
   const fmtDec = (dec: number) => `${dec >= 0 ? '+' : ''}${dec.toFixed(4)}°`;
   /** Magnitude honestly: a non-finite/absent value shows "—", never a fake 0. */
   const fmtMag = (m: number | undefined) =>
     typeof m === 'number' && Number.isFinite(m) ? m.toFixed(2) : '—';
+
+  /** Human label for the inferred class (never a bare enum). */
+  const CLASS_LABEL: Record<ImageClassification['cls'], string> = {
+    star: 'Star',
+    galaxy: 'Galaxy',
+    unknown: 'Uncertain',
+  };
+  /** Format a feature number honestly: NaN/∞ → "—". */
+  const fmtFeat = (v: number, digits = 2) =>
+    typeof v === 'number' && Number.isFinite(v) ? v.toFixed(digits) : '—';
 </script>
 
 {#if info}
@@ -65,6 +84,46 @@
       <dt>Constellation</dt>
       <dd>{info.constellation}</dd>
     </dl>
+
+    <div class="image-inferred" aria-label="Image-inferred classification">
+      <div class="ii-head">
+        Image-inferred <span class="ii-tag">(from pixels)</span>
+      </div>
+      {#if imageClass}
+        {#if imageClass.cls === 'unknown'}
+          <div class="ii-class ii-uncertain" aria-label="Inferred class">
+            Uncertain — {imageClass.reason}
+          </div>
+        {:else}
+          <div class="ii-class" aria-label="Inferred class">
+            {CLASS_LABEL[imageClass.cls]}{imageClass.subtype ? ` — ${imageClass.subtype}` : ''}
+            <span class="ii-mark">(image-inferred)</span>
+          </div>
+          <div class="ii-conf" aria-label="Inferred confidence">
+            <span class="ii-conf-label">confidence {imageClass.confidence.toFixed(2)}</span>
+            <span class="ii-bar"><span class="ii-bar-fill" style="width:{Math.round(Math.max(0, Math.min(1, imageClass.confidence)) * 100)}%"></span></span>
+          </div>
+        {/if}
+        <details class="ii-features">
+          <summary aria-label="Inferred features">features</summary>
+          <dl class="fields">
+            <dt>FWHM ÷ PSF</dt><dd aria-label="fwhmRatio">{fmtFeat(imageClass.features.fwhmRatio)}</dd>
+            <dt>Concentration</dt><dd>{fmtFeat(imageClass.features.concentration)}</dd>
+            <dt>Spread</dt><dd>{fmtFeat(imageClass.features.spreadModelProxy, 3)}</dd>
+            <dt>SNR</dt><dd>{fmtFeat(imageClass.features.snr, 1)}</dd>
+            <dt>Gaps</dt><dd>{fmtFeat(imageClass.features.gapFraction * 100, 0)}%</dd>
+            {#if imageClass.features.saturatedCore}
+              <dt>Saturated</dt><dd>yes (core clipped)</dd>
+            {/if}
+          </dl>
+        </details>
+        <div class="provenance" aria-label="Image provenance">{imageClass.provenance}</div>
+      {:else}
+        <div class="ii-class ii-uncertain">
+          Cannot classify here — pixels unreadable or off image.
+        </div>
+      {/if}
+    </div>
 
     <div class="provenance" aria-label="Data provenance">
       Local bright-object catalog (offline) — not a live Rubin query
@@ -142,4 +201,51 @@
     font-size: 10px;
     line-height: 1.3;
   }
+
+  /* Image-inferred block — visually distinct from the catalog fields (amber). */
+  .image-inferred {
+    border-top: 1px solid rgba(255, 190, 120, 0.28);
+    margin-top: 6px;
+    padding-top: 6px;
+  }
+  .ii-head {
+    color: #f0b96b;
+    text-transform: uppercase;
+    font-size: 10px;
+    letter-spacing: 0.4px;
+    margin-bottom: 3px;
+  }
+  .ii-tag { color: #8a7a58; text-transform: none; letter-spacing: 0; }
+  .ii-class {
+    color: #ffd9a0;
+    font-weight: 700;
+    font-size: 13px;
+  }
+  .ii-class.ii-uncertain { color: #c9a; font-weight: 600; font-size: 12px; }
+  .ii-mark { color: #a98a5c; font-weight: 400; font-size: 10px; }
+  .ii-conf {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 3px 0;
+    color: #d8c19a;
+    font-size: 11px;
+  }
+  .ii-bar {
+    flex: 1;
+    height: 5px;
+    background: rgba(255, 190, 120, 0.15);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .ii-bar-fill { display: block; height: 100%; background: #f0b96b; }
+  .ii-features { margin: 2px 0; }
+  .ii-features summary {
+    color: #8a93b5;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    cursor: pointer;
+  }
+  .ii-features .fields { margin-top: 4px; }
 </style>

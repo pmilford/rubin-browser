@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { offlineSky, offlineTileRGBA, OFFLINE_TILE_SIZE } from '../../src/data/offlineDataset.js';
+import {
+  offlineSky,
+  offlineTileRGBA,
+  OFFLINE_TILE_SIZE,
+  OFFLINE_GALAXY,
+} from '../../src/data/offlineDataset.js';
+import { intensityAt } from '../../src/data/syntheticSky.js';
 
 describe('offline dataset', () => {
   it('generates a stable synthetic sky with sources', () => {
@@ -13,6 +19,26 @@ describe('offline dataset', () => {
       expect(s.dec).toBeGreaterThanOrEqual(-90);
       expect(s.dec).toBeLessThanOrEqual(90);
     }
+  });
+
+  it('injects the known extended galaxy (feature 123 substrate) at its documented position', () => {
+    const sky = offlineSky();
+    const galaxy = sky.sources.find((s) => s.morphology?.kind === 'sersic');
+    expect(galaxy, 'offline cube must contain the injected Sérsic galaxy').toBeDefined();
+    expect(galaxy!.ra).toBeCloseTo(OFFLINE_GALAXY.ra, 6);
+    expect(galaxy!.dec).toBeCloseTo(OFFLINE_GALAXY.dec, 6);
+
+    // It is genuinely EXTENDED: intensity is still substantial one effective radius
+    // out, unlike a star which is gone within a few arcsec.
+    const { ra, dec, reArcsec } = OFFLINE_GALAXY;
+    const centre = intensityAt(sky, ra, dec, 'r', 60000);
+    const atRe = intensityAt(sky, ra, dec + reArcsec / 3600, 'r', 60000);
+    expect(centre).toBeGreaterThan(0);
+    expect(atRe / centre).toBeGreaterThan(0.1); // ~0.187 for n=1 (plus faint neighbours)
+
+    // Peak stays below the 8-bit clip so the classifier won't (correctly) flag it
+    // saturated — the whole point of choosing mag ~19.5.
+    expect(centre).toBeLessThan(255);
   });
 
   it('renders a correctly-sized RGBA tile that is deterministic and not blank', () => {

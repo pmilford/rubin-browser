@@ -31,6 +31,7 @@
   import LightCurvePlot from '../components/LightCurvePlot.svelte';
   import { RUBIN_DATASETS, fetchDp1Datasets, type RubinDataset } from '../utils/baseLayer.js';
   import type { IdentifyInfo } from '../data/objects.js';
+  import type { ImageClassification } from '../utils/objectClassifier.js';
   import type { Band } from '../data/syntheticSky.js';
   import { temporalCrossSectionGrid, type LineProfile } from '../utils/crossSection.js';
   import { parseDs9, serializeDs9, type Ds9Region } from '../utils/ds9Regions.js';
@@ -224,11 +225,17 @@
 
   // Click-to-identify object info panel
   let identifyInfo = $state<IdentifyInfo | null>(null);
+  // Image-INFERRED classification of the pixels under the click (feature 123),
+  // shown as a separate block beside the catalog match. Null = unavailable here.
+  let imageClass = $state<ImageClassification | null>(null);
   function handleIdentify(info: IdentifyInfo) {
     identifyInfo = info;
     statusMessage = info.match
       ? `Identified: ${info.match.object.name} (${info.match.object.type}, mag ${info.match.object.magnitude.toFixed(1)})`
       : `No catalogued object within ${(info.matchRadiusDeg * 60).toFixed(0)}′ of the click`;
+  }
+  function handleClassify(result: ImageClassification | null) {
+    imageClass = result;
   }
 
   // Cross-section / line-profile tool
@@ -1164,6 +1171,7 @@
         line over epochs (temporal waterfall), derived here from crossSectionProfile
         — not ImageViewer's spatial region grid. */ }}
       onIdentify={handleIdentify}
+      onClassify={handleClassify}
       onSkyContext={handleSkyContext}
       onPerfSnapshot={(s) => { if (showPerfHud) perfSnapshot = s; }}
     />
@@ -1636,7 +1644,11 @@
            they never overlap. -->
       <div class="right-stack">
         {#if identifyInfo}
-          <ObjectInfoPanel info={identifyInfo} onClose={() => { identifyInfo = null; }} />
+          <ObjectInfoPanel
+            info={identifyInfo}
+            imageClass={imageClass}
+            onClose={() => { identifyInfo = null; imageClass = null; }}
+          />
         {/if}
         {#if simbadQuery}
           <SimbadPanel

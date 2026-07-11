@@ -75,6 +75,8 @@
   import { nearestObject, identifyAt, type IdentifyInfo } from '../data/objects.js';
   import type { Ds9Region } from '../utils/ds9Regions.js';
   import { sampleProfile, type LineProfile } from '../utils/crossSection.js';
+  import type { Cutout } from '../utils/imageFeatures.js';
+  import { classifyCutout, type ImageClassification } from '../utils/objectClassifier.js';
   import type { ViewerState, ScalingFunction, ColorMapName, InterpolationMethod } from '../types/image.js';
 
   let {
@@ -126,6 +128,7 @@
     onProfileChange,
     onSurfaceChange,
     onIdentify,
+    onClassify,
     onSkyContext,
     onAlertHover,
     onPerfSnapshot,
@@ -223,6 +226,9 @@
     onSurfaceChange?: (grid: number[][] | null) => void;
     /** Fired when the user CLICKS (not drags) to identify the object at a sky point. */
     onIdentify?: (info: IdentifyInfo) => void;
+    /** Fired alongside onIdentify with the IMAGE-INFERRED classification of the
+     *  pixels under the click (null when the cutout is unreadable/off-tile). */
+    onClassify?: (result: ImageClassification | null) => void;
     /** Fired on right-click (context menu) with the sky RA/Dec under the cursor. */
     onSkyContext?: (ra: number, dec: number) => void;
     /** Fired on hover over the alert overlay with the nearest alert (or null). */
@@ -794,6 +800,78 @@
       grid.push(row);
     }
     onSurfaceChange?.(grid);
+  }
+
+  /* --- Image-inferred object classification (feature 123) ------------------ */
+  /**
+   * Nominal local PSF FWHM (arcsec) for the active base. It is NEVER measured from
+   * the target source (that self-reference would size a lone galaxy by its own
+   * light and call it a star). Offline uses the MAX synthetic beam so every star
+   * reads point-like (fwhmRatio ≤ 1) while the injected extended galaxy reads > 1.
+   */
+  function nominalPsfArcsec(): number {
+    if (offlineActive) return 90; // offline beam range is [45,90]″ → use the max
+    if (isRubinUrl(resolvedBaseUrl)) return 0.7; // Rubin median seeing
+    return 1.5; // DSS / public CDS
+  }
+
+  /** Great-circle separation between two sky points, in degrees. */
+  function sepDeg(ra1: number, dec1: number, ra2: number, dec2: number): number {
+    const d2r = Math.PI / 180;
+    const s =
+      Math.sin(dec1 * d2r) * Math.sin(dec2 * d2r) +
+      Math.cos(dec1 * d2r) * Math.cos(dec2 * d2r) * Math.cos((ra1 - ra2) * d2r);
+    return Math.acos(Math.max(-1, Math.min(1, s))) / d2r;
+  }
+
+  /**
+   * Extract an honest PRE-colormap luminance cutout centred on a sky point for the
+   * image classifier. Sampled from base tiles drawn RAW (no scaling/colormap/invert),
+   * so the classification is invariant to display settings. Uncovered pixels → NaN
+   * (via tile alpha), never 0. Returns null if the pixels are unreadable (tainted).
+   */
+  function sampleCutoutAt(raC: number, decC: number): Cutout | null {
+    // Reuse the honest pre-colormap raster the cross-section/surface already build
+    // (base tiles drawn RAW — no scaling/colormap/invert), so classification is
+    // invariant to display settings. Uncovered pixels are pure (0,0,0); the offline
+    // cube's sky pedestal means real sky is never exactly black there, so (0,0,0)
+    // reliably marks a gap. (On DSS/Rubin the resolution gate usually declines
+    // before this matters; a coverage-mask upgrade is a noted follow-up.)
+    if (!ensureScratch() || !xsScratchData) return null;
+    const data = xsScratchData;
+
+    const view = currentView();
+    const [cx, cy] = skyToCanvas(view, raC, decC); // un-panned frame, matches the raw draw
+    if (!Number.isFinite(cx) || !Number.isFinite(cy)) return null;
+
+    // Pixel scale from two sky points 16 px apart (convention-independent, avoids
+    // small-angle precision loss of an adjacent-pixel estimate).
+    const [ra1, dec1] = canvasToSky(view, cx - 8, cy);
+    const [ra2, dec2] = canvasToSky(view, cx + 8, cy);
+    if (![ra1, dec1, ra2, dec2].every(Number.isFinite)) return null;
+    const pixelScaleArcsec = (sepDeg(ra1, dec1, ra2, dec2) / 16) * 3600;
+    if (!(pixelScaleArcsec > 0)) return null;
+
+    const psfArcsec = nominalPsfArcsec();
+    const localPsfPx = psfArcsec / pixelScaleArcsec;
+    const N = Math.max(24, Math.min(96, Math.round(6 * localPsfPx)));
+    const half = N / 2;
+    const grid = new Float32Array(N * N);
+    for (let j = 0; j < N; j++) {
+      for (let i = 0; i < N; i++) {
+        const x = Math.round(cx - half + i);
+        const y = Math.round(cy - half + j);
+        let v = NaN;
+        if (x >= 0 && y >= 0 && x < canvasWidth && y < canvasHeight) {
+          const idx = (y * canvasWidth + x) * 4;
+          const rr = data[idx]!, gg = data[idx + 1]!, bb = data[idx + 2]!;
+          // (0,0,0) = uncovered / no tile → gap (NaN), never a fabricated 0.
+          if (rr !== 0 || gg !== 0 || bb !== 0) v = (0.299 * rr + 0.587 * gg + 0.114 * bb) / 255;
+        }
+        grid[j * N + i] = v;
+      }
+    }
+    return { data: grid, width: N, height: N, pixelScaleArcsec, psfFwhmArcsec: psfArcsec };
   }
 
   function render() {
@@ -2647,6 +2725,20 @@
     const matchRadius = Math.max(1 / 60, Math.min(fov * 0.25, 1));
     const res = identifyAt(r, d, matchRadius);
     onIdentify?.({ ...res, ra: r, dec: d, constellation: constellationFor(r, d).name });
+
+    // Image-inferred classification of the pixels under the click (feature 123),
+    // independent of the catalog match. Null when the cutout is unreadable/off-tile
+    // — the panel surfaces that honestly rather than fabricating a class.
+    if (onClassify) {
+      const cut = sampleCutoutAt(r, d);
+      const classification = cut ? classifyCutout(cut) : null;
+      // Test/debug seam: expose the raw cutout meta + result (mirrors __tileCorners).
+      (window as unknown as { __lastClassify?: unknown }).__lastClassify = {
+        cutout: cut ? { width: cut.width, pixelScaleArcsec: cut.pixelScaleArcsec, psfFwhmArcsec: cut.psfFwhmArcsec } : null,
+        result: classification,
+      };
+      onClassify(classification);
+    }
   }
 
   /**

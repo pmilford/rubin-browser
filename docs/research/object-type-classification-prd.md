@@ -1,6 +1,9 @@
 # PRD — Smart image-based object-type identification under the cursor
 
-Status: DRAFT (research + product spec). Owner: Rubin Browser.
+Status: **Phase 0 + Phase 1 SHIPPED** (see TODO 123). Phases 2–3 remain (below).
+Owner: Rubin Browser. Measured results: REAL balanced acc 0.898 (calibration) /
+0.841 (different-forward-model holdout); adversarial always-galaxy 0.500 & seeded
+random 0.442 both provably below target. Original research + product spec follows.
 Backlog item: #10 (`BACKLOG.md`). Supersedes nothing; extends the catalog-lookup
 `identifyAt` path with an orthogonal **image-inferred** path.
 

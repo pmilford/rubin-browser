@@ -100,6 +100,52 @@ describe('generateSyntheticSky — determinism & bounds', () => {
   });
 });
 
+describe('extended (Sérsic) morphology', () => {
+  // Build a controlled single-source sky by replacing the generated sources.
+  function singleSourceSky(source: SyntheticSource) {
+    const sky = generateSyntheticSky(baseConfig);
+    sky.sources = [source];
+    return sky;
+  }
+  const baseMag = { g: 19.5, r: 19.5, i: 19.5, z: 19.5, y: 19.5 };
+  const at = (sky: ReturnType<typeof singleSourceSky>, ra: number, dec: number) =>
+    intensityAt(sky, ra, dec, 'r', 60000);
+
+  it('a Sérsic source is FAR more extended than a Gaussian point source of the same FWHM', () => {
+    const reArcsec = 180;
+    const offsetDeg = reArcsec / 3600; // sample exactly one effective radius away
+    const point: SyntheticSource = {
+      id: 1, ra: 50, dec: -30, baseMag, fwhmArcsec: 67, variability: { kind: 'constant' },
+    };
+    const galaxy: SyntheticSource = { ...point, id: 2, morphology: { kind: 'sersic', reArcsec, sersicN: 1 } };
+
+    const gCentre = at(singleSourceSky(galaxy), 50, -30);
+    const gAtRe = at(singleSourceSky(galaxy), 50, -30 + offsetDeg);
+    // Sérsic n=1: I(re)/I(0) = exp(-b_1) with b_1 ≈ 1.678 → ≈ 0.187 (closed form,
+    // NOT self-consistency — a wrong profile/normalisation fails this).
+    expect(gAtRe / gCentre).toBeCloseTo(Math.exp(-1.6783), 2);
+
+    // The point source (67″ FWHM) is essentially gone 180″ (≈6.3σ) out — proving
+    // the extension is the MORPHOLOGY, not just a bright pixel.
+    const pCentre = at(singleSourceSky(point), 50, -30);
+    const pAtRe = at(singleSourceSky(point), 50, -30 + offsetDeg);
+    expect(pAtRe / pCentre).toBeLessThan(1e-6);
+  });
+
+  it('a bright point source unchanged: adding morphology does not alter a star (byte-identical path)', () => {
+    // Regression guard: the shared profile refactor must leave Gaussian sources
+    // exactly as before — the extent cutoff for a Gaussian is still 6σ.
+    const star: SyntheticSource = {
+      id: 3, ra: 50, dec: -30, baseMag, fwhmArcsec: 45, variability: { kind: 'constant' },
+    };
+    const sky = singleSourceSky(star);
+    const sigma = 45 / 2.3548;
+    const centre = at(sky, 50, -30);
+    const oneSigma = at(sky, 50, -30 + sigma / 3600);
+    expect(oneSigma / centre).toBeCloseTo(Math.exp(-0.5), 3); // pure Gaussian
+  });
+});
+
 describe('flux / magnitude relationship', () => {
   const src: SyntheticSource = {
     id: 0,
