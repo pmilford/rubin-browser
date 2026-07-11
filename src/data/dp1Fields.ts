@@ -36,3 +36,11 @@ export const DP1_FIELDS: readonly Dp1Field[] = [
 
 /** Total DP1 sky area, square degrees (7 fields, ~15 deg² incl. overlap/mosaic). */
 export const DP1_TOTAL_AREA_DEG2 = 15;
+
+/**
+ * FOV (deg) to frame a DP1 field on "Jump to field". Each field is a ~1 deg²
+ * LSSTComCam coadd, so a ~1.5° FOV shows the whole field with a little context.
+ * At the default 22.5° browse FOV the field is a <1%-of-frame speck (invisible),
+ * which is why the jump must zoom in — see gotoDp1Field in TileViewer.
+ */
+export const DP1_FIELD_VIEW_FOV_DEG = 1.5;

@@ -155,6 +155,31 @@ test.describe('LIVE Rubin DP1 (requires RSP_TOKEN with DP1 rights)', () => {
       .toBeGreaterThan(1);
   });
 
+  test('Live DIA alert overlay fetches real DiaSource detections over a DP1 field', async ({
+    page,
+  }) => {
+    const rspFailures = trackRspFailures(page);
+    await page.goto('/');
+    await page.locator('select[aria-label="Base layer"]').selectOption('rubin');
+    // EDFS is DIA-rich (a live probe returned the 20k row cap of real detections).
+    await page.locator('select[aria-label="Jump to DP1 field"]').selectOption('edfs');
+    await expect(page.locator('[aria-label="Current field"]')).toBeVisible();
+
+    // Enable the overlay (loads the synthetic demo by default), then switch the
+    // source to LIVE so the app cone-searches dp1.DiaSource at the field centre.
+    const alertToggle = page.locator('button[aria-label="Toggle alert overlay"]');
+    await alertToggle.click();
+    await page.locator('select[aria-label="Alert source"]').selectOption('live');
+
+    // A real field returns real difference-image detections → the toggle label
+    // reports "(DIA, N)" with N>0. The old FORMAT=json break, an auth failure, or
+    // a parse regression would instead show 0 / an error / the demo count.
+    await expect(
+      alertToggle,
+      `Live DIA returned no detections over EDFS. RSP errors: ${rspFailures().join(' | ') || 'none'}`
+    ).toContainText(/DIA,\s*[1-9][\d,]*/, { timeout: 30000 });
+  });
+
   test('SODA FITS cutout resolves to a real image at the field centre', async ({ page }) => {
     const rspFailures = trackRspFailures(page);
     await page.goto('/');

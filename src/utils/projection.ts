@@ -143,6 +143,15 @@ export function zoomToFov(zoom: number): number {
 }
 
 /**
+ * FOV (deg) → zoom level. Exact inverse of zoomToFov (zoom = log2(180 / fov)),
+ * so fovToZoom(zoomToFov(z)) === z. Used to frame a target of a known angular
+ * size (e.g. a ~1 deg² DP1 field) at an appropriate zoom.
+ */
+export function fovToZoom(fov: number): number {
+  return Math.log2(180 / Math.max(fov, 1e-6));
+}
+
+/**
  * FOV (deg) → HiPS order, clamped to [0, maxOrder].
  *
  * A HEALPix tile at order N spans ~ (90 / Nside) degrees on a side, Nside = 2^N.

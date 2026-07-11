@@ -42,7 +42,8 @@
   import type { FilterBand } from '../constants.js';
   import { onMount } from 'svelte';
   import { readStateFromUrl, applyStateToUrl } from '../utils/urlState.js';
-  import { DP1_FIELDS } from '../data/dp1Fields.js';
+  import { DP1_FIELDS, DP1_FIELD_VIEW_FOV_DEG } from '../data/dp1Fields.js';
+  import { fovToZoom } from '../utils/projection.js';
   import { GLOSSARY } from '../data/glossary.js';
   import { getToken, isAuthenticated } from '../api/auth.js';
   import { fetchLightCurve, toLightCurvePoints } from '../api/lightcurve.js';
@@ -964,6 +965,11 @@
     if (baseLayerId === 'dss' || baseLayerId === 'offline') baseLayerId = 'auto';
     currentFieldName = f.name;
     handleSearch(f.ra, f.dec);
+    // Frame the ~1 deg² field: at the default 22.5° browse FOV the field is a
+    // <1%-of-frame speck (the user sees only black sky off-coverage). Zoom in so
+    // the Rubin imagery actually fills the view.
+    imageViewerRef?.setZoom(fovToZoom(DP1_FIELD_VIEW_FOV_DEG));
+    zoomLevel = fovToZoom(DP1_FIELD_VIEW_FOV_DEG);
     statusMessage = authenticated
       ? `DP1 field: ${f.name} — RA ${f.ra}°, Dec ${f.dec}°`
       : `DP1 field: ${f.name} (sign in with an RSP token to see Rubin data here)`;

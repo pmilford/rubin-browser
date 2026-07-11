@@ -14,6 +14,7 @@ import {
   skyToCanvas,
   canvasToSky,
   zoomToFov,
+  fovToZoom,
   fovToOrder,
   tileImageCornerVectors,
   tileSubdivision,
@@ -218,6 +219,16 @@ describe('zoomToFov / fovToOrder mapping', () => {
     }
     expect(zoomToFov(0)).toBeCloseTo(180, 6);
     expect(zoomToFov(3)).toBeCloseTo(22.5, 6);
+  });
+
+  it('fovToZoom is the exact inverse of zoomToFov (round-trip)', () => {
+    for (let z = 0; z <= 18; z++) {
+      expect(fovToZoom(zoomToFov(z))).toBeCloseTo(z, 6);
+    }
+    // A ~1 deg² DP1 field wants ~1.5° FOV → zoom ≈ 6.9 (well below MAX_ZOOM 18).
+    expect(fovToZoom(1.5)).toBeCloseTo(Math.log2(120), 6);
+    expect(fovToZoom(1.5)).toBeGreaterThan(6);
+    expect(fovToZoom(1.5)).toBeLessThan(18);
   });
 
   it('order is monotonic non-increasing as FOV grows, clamped to [0, maxOrder]', () => {
