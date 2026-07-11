@@ -17,12 +17,23 @@ service, library, or tool:
    reference, IVOA/format standards, and where limits live, the service's own
    source or deployed config. Do NOT infer an endpoint, query pattern, or auth
    model from naming conventions or from "what parses."
-2. **Capture** the correct endpoint, auth scopes, the *recommended* access pattern
+2. **VALIDATE against the REAL endpoint from the app's origin — a MOCK IS NOT
+   VALIDATION.** A mocked test proves your parser handles the shape *you invented*;
+   it proves NOTHING about reachability, CORS, redirects, auth, or whether the real
+   response shape matches. The Gaia overlay shipped fully broken in the browser for
+   ages because every test mocked the ESA endpoint: (a) ESA sends no
+   `Access-Control-Allow-Origin` → CORS-blocked ("Failed to fetch"); (b) the CORS
+   mirror returns column descriptors under `columns`, not ESA's `metadata`. Both
+   were invisible to the mock. So before wiring: `curl -H "Origin: <app-origin>"`
+   the endpoint and confirm the status, the `Access-Control-Allow-Origin` header,
+   any redirect `Location`, the auth behaviour, and the ACTUAL response field/column
+   names. Prefer a CORS-enabled endpoint (or a proxy) over a browser-blocked host.
+3. **Capture** the correct endpoint, auth scopes, the *recommended* access pattern
    (not merely one that returns data), rate limits + backoff, redirect/async
    behaviour, and any documented **anti-patterns**.
-3. **Fold those findings into the spec's data-flow + failure-modes** (below), then
-   code. A short research pass (web search + primary docs) beats guessing every
-   time.
+4. **Fold those findings into the spec's data-flow + failure-modes** (below), and
+   **encode the REAL response shape as a regression fixture** (a verbatim slice of
+   the live response, not a hand-invented mock), then code.
 
 Rubin/IVOA specifics and per-API limits are recorded in `docs/rubin-api-usage.md`
 — read it before touching `src/api/*`, and keep it current when you learn more.
