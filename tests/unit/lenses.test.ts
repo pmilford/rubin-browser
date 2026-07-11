@@ -110,7 +110,11 @@ describe('lensCatalogSet()', () => {
     for (let i = 0; i < set.count; i++) {
       expect(set.label[i]!.length).toBeGreaterThan(0);
       const rec = set.records[i]!;
-      expect(Object.keys(rec)).toEqual(['Name', 'Type', 'z_lens', 'z_source', 'Note']);
+      // The enriched row keeps the original Name/Type/z columns AND adds the four
+      // discriminating columns (diameter, image count, brightness, "most obvious").
+      expect(Object.keys(rec)).toEqual([
+        'Name', 'Type', 'z_lens', 'z_source', 'θ_E (")', 'Config', 'Mag', 'Obvious', 'Note',
+      ]);
       expect(String(rec['Name']).length).toBeGreaterThan(0);
     }
   });
@@ -120,5 +124,109 @@ describe('lensCatalogSet()', () => {
     const i = LENS_CATALOG.findIndex((l) => l.zLens === null);
     expect(i).toBeGreaterThanOrEqual(0); // catalog includes at least one honest unknown
     expect(set.records[i]!['z_lens']).toBe(CATALOG_NO_DATA);
+  });
+
+  it('renders a null angular scale / magnitude as the no-data dash', () => {
+    const set = lensCatalogSet();
+    // A cluster we could not pin to one Einstein-radius number has a dash, not 0.
+    const bullet = LENS_CATALOG.findIndex((l) => l.name.includes('Bullet'));
+    expect(bullet).toBeGreaterThanOrEqual(0);
+    expect(LENS_CATALOG[bullet]!.thetaEArcsec).toBeNull();
+    expect(set.records[bullet]!['θ_E (")']).toBe(CATALOG_NO_DATA);
+    expect(set.records[bullet]!['Mag']).toBe(CATALOG_NO_DATA); // clusters have no single mag
+  });
+});
+
+describe('LENS_CATALOG — enriched discriminating fields', () => {
+  it('every entry has a config string and a scale/mag that is a number or an honest null', () => {
+    for (const l of LENS_CATALOG) {
+      expect(typeof l.config).toBe('string');
+      expect(l.config.length).toBeGreaterThan(1);
+      expect(l.thetaEArcsec === null || (Number.isFinite(l.thetaEArcsec) && l.thetaEArcsec > 0)).toBe(true);
+      expect(l.magnitude === null || (Number.isFinite(l.magnitude) && l.magnitude > 0)).toBe(true);
+      // A magnitude without a band (or vice versa) would render nonsense — forbid it.
+      expect(l.magnitude === null).toBe(l.magBand === null);
+      expect(typeof l.prominent).toBe('boolean');
+    }
+  });
+
+  it('angular scales match the KNOWN literature values (a zeros/placeholder impl fails)', () => {
+    // θ_E is the Einstein/ring RADIUS in arcsec; max image separation ≈ 2·θ_E.
+    const cross = byName('Einstein Cross');
+    // Known max image separation ≈ 1.8″ ⇒ θ_E ≈ 0.9″.
+    expect(cross.thetaEArcsec).toBeCloseTo(0.9, 1);
+    expect(2 * cross.thetaEArcsec!).toBeCloseTo(1.8, 1); // recover the famous ~1.8″ cross
+
+    // Cosmic Horseshoe: near-complete ring of RADIUS ≈ 5.0″ (diameter ≈ 10″).
+    const horseshoe = byName('Cosmic Horseshoe');
+    expect(horseshoe.thetaEArcsec).toBeCloseTo(5.0, 1);
+    expect(2 * horseshoe.thetaEArcsec!).toBeGreaterThan(9); // ring diameter ~10″
+
+    // A big cluster arc sits at a radius of TENS of arcsec (Abell 1689 θ_E≈47″).
+    const a1689 = byName('Abell 1689');
+    expect(a1689.thetaEArcsec).toBeGreaterThan(30);
+    expect(a1689.thetaEArcsec).toBeCloseTo(47.0, 0);
+
+    // Cluster arcs are an order of magnitude larger than galaxy-scale quasar lenses.
+    expect(a1689.thetaEArcsec!).toBeGreaterThan(10 * cross.thetaEArcsec!);
+  });
+
+  it('image-configuration strings are the right kind for known systems', () => {
+    expect(byName('Einstein Cross').config).toBe('quad');
+    expect(byName('Twin Quasar').config).toBe('double');
+    expect(byName('Cosmic Horseshoe').config).toMatch(/ring/i);
+    expect(byName('SDSS J1004').config).toMatch(/five/i);
+    expect(byName('Jackpot').config).toMatch(/ring/i);
+    // Every cluster shows arcs/multiple images, never a single "double".
+    for (const l of LENS_CATALOG.filter((x) => x.type === 'group-cluster')) {
+      expect(l.config).toMatch(/arc|image/i);
+    }
+  });
+
+  it('representative magnitudes are sane where known (and clusters have none)', () => {
+    // Einstein Cross quasar V≈16.8; Cosmic Horseshoe ring g≈20.1.
+    const cross = byName('Einstein Cross');
+    expect(cross.magnitude).toBeCloseTo(16.8, 1);
+    expect(cross.magBand).toBe('V');
+    expect(byName('Cosmic Horseshoe').magnitude).toBeCloseTo(20.1, 1);
+    // No cluster has a single representative magnitude.
+    for (const l of LENS_CATALOG.filter((x) => x.type === 'group-cluster')) {
+      expect(l.magnitude).toBeNull();
+    }
+  });
+
+  it('the "most obvious" flag marks the iconic handful, not everything', () => {
+    const prominent = LENS_CATALOG.filter((l) => l.prominent);
+    // A "handful" — several, but well under half of the catalog.
+    expect(prominent.length).toBeGreaterThanOrEqual(4);
+    expect(prominent.length).toBeLessThan(LENS_CATALOG.length / 2);
+    // The iconic ones the criterion calls out are flagged...
+    expect(byName('Einstein Cross').prominent).toBe(true);
+    expect(byName('Cosmic Horseshoe').prominent).toBe(true);
+    // ...including at least two of the big giant-arc clusters.
+    const bigClusters = LENS_CATALOG.filter(
+      (l) => l.type === 'group-cluster' && l.prominent
+    );
+    expect(bigClusters.length).toBeGreaterThanOrEqual(2);
+    // ...and a plain small quad lens is NOT flagged as visually obvious.
+    expect(byName('PG 1115').prominent).toBe(false);
+    // Every flagged cluster genuinely has a large Einstein radius (or is famously
+    // striking with an unquantified scale, e.g. SMACS J0723 / JWST first deep field).
+    for (const l of bigClusters) {
+      expect(l.thetaEArcsec === null || l.thetaEArcsec >= 20).toBe(true);
+    }
+  });
+
+  it('exposes the new discriminating columns in the CatalogSet records', () => {
+    const set = lensCatalogSet();
+    const i = LENS_CATALOG.findIndex((l) => l.name.includes('Einstein Cross'));
+    const rec = set.records[i]!;
+    expect(rec['θ_E (")']).toBeCloseTo(0.9, 1);
+    expect(rec['Config']).toBe('quad');
+    expect(rec['Mag']).toBe('16.8 V'); // value + band, formatted for the table
+    expect(rec['Obvious']).toBe('yes');
+    // Columnar arrays stay parallel and consistent after enrichment.
+    expect(set.records.length).toBe(set.count);
+    expect(set.count).toBe(LENS_CATALOG.length);
   });
 });
