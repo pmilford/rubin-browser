@@ -9,10 +9,25 @@
   let {
     grid = null as number[][] | null,
     onClose,
+    title = '3D surface',
+    xLabel = '',
+    depthLabel = '',
+    caption = 'displayed relative luminance as height · not calibrated flux',
+    emptyMessage = 'no data in this region',
   }: {
-    /** rows × cols luminance grid (0..1); null when nothing sampled. */
+    /** rows × cols height grid (0..1); null when nothing sampled. */
     grid?: number[][] | null;
     onClose?: () => void;
+    /** Panel title. */
+    title?: string;
+    /** Label for the horizontal (column) axis, e.g. "position along line →". */
+    xLabel?: string;
+    /** Label for the depth (row) axis, e.g. "epoch / time →". */
+    depthLabel?: string;
+    /** Footer caption describing what height encodes. */
+    caption?: string;
+    /** Honest prompt shown when there is no grid to plot. */
+    emptyMessage?: string;
   } = $props();
 
   const W = 280;
@@ -35,7 +50,7 @@
 
 <div class="surface-plot" role="region" aria-label="3D surface plot">
   <div class="header">
-    <span class="title">3D surface</span>
+    <span class="title">{title}</span>
     <label class="z" title="Vertical exaggeration">
       z
       <input type="range" min="0.2" max="0.9" step="0.05" bind:value={zScale} aria-label="Vertical exaggeration" />
@@ -46,7 +61,7 @@
   </div>
 
   {#if !hasData || !geom}
-    <div class="no-data">no data in this region</div>
+    <div class="no-data">{emptyMessage}</div>
   {:else}
     <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} class="plot-svg" aria-label="Intensity surface">
       <rect x="0" y="0" width={W} height={H} fill="rgba(6,6,16,0.95)" />
@@ -59,8 +74,14 @@
         />
       {/each}
     </svg>
+    {#if xLabel || depthLabel}
+      <div class="axes" aria-label="Surface axes">
+        {#if depthLabel}<span class="axis-depth" aria-label="Depth axis">↙ {depthLabel}</span>{/if}
+        {#if xLabel}<span class="axis-x" aria-label="Horizontal axis">{xLabel}</span>{/if}
+      </div>
+    {/if}
   {/if}
-  <div class="foot">displayed relative luminance as height · not calibrated flux</div>
+  <div class="foot">{caption}</div>
 </div>
 
 <style>
@@ -114,6 +135,18 @@
     text-align: center;
     color: #889;
     font-style: italic;
+  }
+  .axes {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-top: 2px;
+    color: #7a8;
+    font-size: 9px;
+  }
+  .axis-x {
+    margin-left: auto;
+    color: #8ac;
   }
   .foot {
     margin-top: 3px;

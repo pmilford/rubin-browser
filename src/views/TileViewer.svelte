@@ -30,7 +30,7 @@
   import { RUBIN_DATASETS } from '../utils/baseLayer.js';
   import type { IdentifyInfo } from '../data/objects.js';
   import type { Band } from '../data/syntheticSky.js';
-  import type { LineProfile } from '../utils/crossSection.js';
+  import { temporalCrossSectionGrid, type LineProfile } from '../utils/crossSection.js';
   import type { ScalingFunction, ColorMapName, InterpolationMethod, ViewerState } from '../types/image.js';
   import { SURVEY_OVERLAYS, type SurveyInfo } from '../constants.js';
   import type { FilterBand } from '../constants.js';
@@ -455,13 +455,58 @@
     if (m) statusMessage = `Distance: ${m.text}`;
   }
 
-  // 3D surface ("mountain") plot of the central region's intensity.
+  // 3D surface plot — a TEMPORAL WATERFALL of the cross-section line: column =
+  // position along the drawn line, row = epoch (row 0 = earliest, at back → latest
+  // in front), height = intensity. This is meaningful only over the OFFLINE
+  // synthetic multi-epoch cube (DP1's HiPS is a single deep coadd — no time axis),
+  // so it draws only when the offline base is active AND a cross-section line has
+  // been drawn AND there are ≥2 epochs; otherwise it shows an honest prompt.
+  const SURFACE_SAMPLES = 48; // columns (positions) along the line for the waterfall
   let surfaceMode = $state(false);
-  let surfaceGrid = $state<number[][] | null>(null);
+  // Height grid[epoch][position] sampled by re-walking the CURRENT cross-section
+  // line across every offline epoch, using the synthetic sky's ground-truth
+  // per-point light curve (offlineLightCurve → intensityAt). Null → honest empty
+  // state (never the old spatial relief, never a fabricated surface).
+  const surfaceGrid = $derived.by((): number[][] | null => {
+    if (!surfaceMode || baseLayerId !== 'offline') return null;
+    const ep = crossSectionProfile?.endpoints;
+    if (!ep || OFFLINE_EPOCHS.length < 2) return null;
+    const lcCache = new Map<number, LightCurvePoint[]>();
+    return temporalCrossSectionGrid(
+      ep,
+      OFFLINE_EPOCHS.length,
+      SURFACE_SAMPLES,
+      (ra, dec, epochIndex, sampleIndex) => {
+        // One light curve per column (position), reused across every epoch row.
+        let lc = lcCache.get(sampleIndex);
+        if (!lc) {
+          lc = offlineLightCurve(ra, dec, offlineBand);
+          lcCache.set(sampleIndex, lc);
+        }
+        return lc[epochIndex]?.intensity ?? NaN;
+      },
+    );
+  });
+  // Honest empty-state prompt, reasoned by WHY there's nothing to plot.
+  const surfaceEmptyMessage = $derived(
+    baseLayerId !== 'offline'
+      ? 'Switch to the Offline demo layer — only it has multiple epochs to show time evolution.'
+      : crossSectionProfile?.endpoints
+        ? 'Sampling the cross-section line over epochs…'
+        : 'Draw a cross-section line over the offline multi-epoch layer to see its time evolution.'
+  );
   function toggleSurface() {
     surfaceMode = !surfaceMode;
+    if (surfaceMode) {
+      rulerMode = false;
+      // The surface IS the cross-section over time, so it needs a line: enable the
+      // cross-section tool (which seeds a default line) when offline.
+      if (baseLayerId === 'offline') crossSectionMode = true;
+    }
     statusMessage = surfaceMode
-      ? '3D surface: central-region intensity as a relief (displayed luminance)'
+      ? baseLayerId === 'offline'
+        ? '3D surface: cross-section line intensity over epochs (waterfall) — drag the line to reprofile it over time'
+        : '3D surface: draw a cross-section line over the OFFLINE multi-epoch layer to see time evolution'
       : '3D surface: off';
   }
 
@@ -848,7 +893,9 @@
       onViewerStateChange={handleViewerStateChange}
       onBaseResolved={(label) => { resolvedBaseLabel = label; }}
       onProfileChange={(p) => { crossSectionProfile = p; }}
-      onSurfaceChange={(g) => { surfaceGrid = g; }}
+      onSurfaceChange={() => { /* superseded: the surface is now the cross-section
+        line over epochs (temporal waterfall), derived here from crossSectionProfile
+        — not ImageViewer's spatial region grid. */ }}
       onIdentify={handleIdentify}
       onSkyContext={handleSkyContext}
       onPerfSnapshot={(s) => { if (showPerfHud) perfSnapshot = s; }}
@@ -1294,7 +1341,15 @@
           <CrossSectionPlot profile={crossSectionProfile} onClose={toggleCrossSection} />
         {/if}
         {#if surfaceMode}
-          <SurfacePlot grid={surfaceGrid} onClose={toggleSurface} />
+          <SurfacePlot
+            grid={surfaceGrid}
+            onClose={toggleSurface}
+            title="3D surface · line over time"
+            xLabel="position along line →"
+            depthLabel="epoch (time), earliest at back"
+            caption="cross-section line intensity vs epoch (normalised) · row = time, col = position"
+            emptyMessage={surfaceEmptyMessage}
+          />
         {/if}
         {#if lightCurveMode && baseLayerId === 'offline'}
           <LightCurvePlot curve={offlineLc} currentIndex={offlineEpochIndex} band={offlineBand} onClose={toggleLightCurve} />

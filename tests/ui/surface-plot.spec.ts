@@ -1,8 +1,10 @@
 /**
- * 3D surface ("mountain") plot OUTCOME test. Proves the plot is wired to real
- * pixels: over a centred bright source the surface has a genuine peak (large
- * vertical spread), not a flat sheet. Surface geometry itself is unit-tested in
- * tests/unit/surfacePlot.test.ts.
+ * 3D surface plot OUTCOME test. The surface is now a TEMPORAL WATERFALL of the
+ * cross-section line (col = position along the line, row = epoch/time), so it is
+ * meaningful only over the OFFLINE multi-epoch cube with a line drawn. These
+ * prove: (a) over a transient it renders a real, non-flat mesh; (b) with no
+ * offline layer it shows the honest empty prompt, not a fabricated surface.
+ * The pure position×time grid is unit-tested in tests/unit/crossSection.test.ts.
  */
 
 import { test, expect, type Page } from '@playwright/test';
@@ -23,8 +25,21 @@ async function polyYSpread(page: Page): Promise<number> {
   });
 }
 
+/** Drag a line across the canvas centre so the cross-section (and thus surface) samples content. */
+async function drawLine(page: Page, dxFrac: number, dyFrac: number): Promise<void> {
+  const canvas = page.locator('.hips-canvas').first();
+  const box = (await canvas.boundingBox())!;
+  const cx = box.x + box.width / 2;
+  const cy = box.y + box.height / 2;
+  await page.mouse.move(cx - box.width * dxFrac, cy - box.height * dyFrac);
+  await page.mouse.down();
+  await page.mouse.move(cx + box.width * dxFrac, cy + box.height * dyFrac, { steps: 8 });
+  await page.mouse.up();
+  await page.waitForTimeout(350);
+}
+
 test.describe('3D surface plot', () => {
-  test('renders a peaked relief over a centred bright source (offline)', async ({ page }: { page: Page }) => {
+  test('renders a non-flat waterfall of the line over epochs (offline)', async ({ page }: { page: Page }) => {
     await page.goto('/');
     await page.waitForTimeout(600);
     await page.locator('select[aria-label="Base layer"]').selectOption('offline');
@@ -34,30 +49,37 @@ test.describe('3D surface plot', () => {
     await page.locator('button[aria-label="Find a transient"]').click();
     await page.waitForTimeout(1300);
 
-    // Enable the 3D surface.
+    // Enable the 3D surface (this also enables the cross-section tool, seeding a line).
     await page.locator('button[aria-label="Toggle 3D surface plot"]').click();
-    await page.waitForTimeout(600);
+    await page.waitForTimeout(400);
+    // Draw a line across the transient so the waterfall samples real signal.
+    await drawLine(page, 0.3, 0);
 
     const svg = page.locator('svg[aria-label="Intensity surface"]');
     await expect(svg).toBeVisible();
-    // It has a full mesh of cells (28×28 grid → 27×27 quads).
+    // Full mesh: 12 epochs × 48 positions → 11×47 quads.
     await expect.poll(async () => svg.locator('polygon').count(), { timeout: 8000 }).toBeGreaterThan(100);
 
-    // A centred bright source lifts the middle of the mesh well above the base:
-    // the vertical spread of vertices is a large fraction of the 150px plot height.
-    // A flat region (dead wiring / empty sky) would be nearly 0.
+    // The transient rises and fades across the epoch rows, so the surface has real
+    // vertical relief — a flat sheet (dead wiring / empty sky) would be ≈0.
     await expect.poll(() => polyYSpread(page), { timeout: 8000 }).toBeGreaterThan(30);
   });
 
-  test('the 3D toggle appears and hides the plot', async ({ page }: { page: Page }) => {
+  test('non-offline base shows the honest empty prompt, not a fabricated surface', async ({ page }: { page: Page }) => {
     await page.goto('/');
     await page.waitForTimeout(600);
     const toggle = page.locator('button[aria-label="Toggle 3D surface plot"]');
-    await expect(page.locator('svg[aria-label="Intensity surface"]')).toHaveCount(0);
+    const region = page.locator('[aria-label="3D surface plot"]');
+    const svg = page.locator('svg[aria-label="Intensity surface"]');
+
+    await expect(region).toHaveCount(0);
     await toggle.click();
-    await expect(page.locator('svg[aria-label="Intensity surface"]')).toBeVisible({ timeout: 8000 });
+    // The panel appears, but there is NO rendered surface — only the honest prompt.
+    await expect(region).toBeVisible({ timeout: 8000 });
+    await expect(svg).toHaveCount(0);
+    await expect(region).toContainText('Offline');
     await toggle.click();
-    await expect(page.locator('svg[aria-label="Intensity surface"]')).toHaveCount(0);
+    await expect(region).toHaveCount(0);
   });
 
   test('light curve (offline only) plots the transient rising and fading over time', async ({ page }: { page: Page }) => {

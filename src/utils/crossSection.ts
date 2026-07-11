@@ -17,6 +17,18 @@ import { angularSeparation } from './skyGeom.js';
 /** Returns the [r,g,b] (0-255) at integer pixel (x,y), or null if out of data. */
 export type PixelGetter = (x: number, y: number) => [number, number, number] | null;
 
+/** The two sky endpoints (start → end) of a drawn cross-section line, in degrees. */
+export interface LineEndpoints {
+  /** RA (deg) of the start endpoint (t=0). */
+  ra0: number;
+  /** Dec (deg) of the start endpoint (t=0). */
+  dec0: number;
+  /** RA (deg) of the end endpoint (t=1). */
+  ra1: number;
+  /** Dec (deg) of the end endpoint (t=1). */
+  dec1: number;
+}
+
 export interface LineProfile {
   /** Fractional position 0..1 along the line for each sample. */
   t: number[];
@@ -32,6 +44,13 @@ export interface LineProfile {
   b: number[];
   /** True where the sample had no underlying data (off-canvas / no tile). */
   gap: boolean[];
+  /**
+   * The line's sky endpoints (start → end), so a downstream tool can RE-SAMPLE
+   * the same on-sky line in another data frame — e.g. the 3D surface waterfall
+   * that samples this line across every epoch. Optional so hand-built test
+   * literals stay valid; {@link sampleProfile} always populates it.
+   */
+  endpoints?: LineEndpoints;
 }
 
 /** A plottable channel of the profile: overall luminance or one colour channel. */
@@ -96,7 +115,77 @@ export function sampleProfile(
     }
   }
 
-  return { t, distanceArcmin, lum, r, g, b, gap };
+  return { t, distanceArcmin, lum, r, g, b, gap, endpoints: { ra0, dec0, ra1, dec1 } };
+}
+
+/**
+ * Build a TEMPORAL cross-section grid — a "waterfall" of the drawn line's
+ * intensity as it evolves over epochs. This is the height field for the 3D
+ * surface plot: `grid[epochIndex][sampleIndex]`.
+ *
+ *  - COLUMN (sampleIndex) = position along the line: sample 0 sits at the start
+ *    endpoint, sample n-1 at the end endpoint. Sky positions are linearly
+ *    interpolated between the endpoints (shortest-path in RA, so a line straddling
+ *    the 0/360° wrap still interpolates the short way).
+ *  - ROW (epochIndex) = TIME: row 0 = the EARLIEST epoch, row `epochCount-1` = the
+ *    LATEST. In the surface renderer row 0 is drawn at the back, so time flows
+ *    back→front (earliest behind, latest in front).
+ *  - VALUE = intensity at that (position, epoch), normalised so the grid's peak is
+ *    1.0 (unless `normalize` is false). A sample with no data returns NaN and
+ *    stays NaN (a gap), never a fabricated 0.
+ *
+ * `intensityAtEpoch(ra, dec, epochIndex, sampleIndex)` returns the raw (linear,
+ * ≥0) intensity at that sky point for that epoch, or NaN for no data. It is given
+ * the sample index too so a caller can memoise per-position work (e.g. one light
+ * curve per column). PURE: no DOM, no colormap — the source of the intensities is
+ * entirely the caller's concern.
+ */
+export function temporalCrossSectionGrid(
+  endpoints: LineEndpoints,
+  epochCount: number,
+  sampleCount: number,
+  intensityAtEpoch: (ra: number, dec: number, epochIndex: number, sampleIndex: number) => number,
+  opts: { normalize?: boolean } = {},
+): number[][] {
+  const rows = Math.floor(epochCount);
+  const cols = Math.max(2, Math.floor(sampleCount));
+  if (rows < 2) return []; // a waterfall needs ≥2 epochs to be a time axis at all
+
+  const { ra0, dec0, ra1, dec1 } = endpoints;
+  // Shortest-path RA delta so an endpoint pair straddling 0/360° interpolates the
+  // short way instead of sweeping ~360° across the sky.
+  const dRa = ((ra1 - ra0 + 540) % 360) - 180;
+  const ras = new Array<number>(cols);
+  const decs = new Array<number>(cols);
+  for (let s = 0; s < cols; s++) {
+    const f = s / (cols - 1);
+    ras[s] = ra0 + dRa * f;
+    decs[s] = dec0 + (dec1 - dec0) * f;
+  }
+
+  const grid: number[][] = new Array(rows);
+  let maxFinite = 0;
+  for (let e = 0; e < rows; e++) {
+    const row = new Array<number>(cols);
+    for (let s = 0; s < cols; s++) {
+      const v = intensityAtEpoch(ras[s]!, decs[s]!, e, s);
+      row[s] = v;
+      if (Number.isFinite(v) && v > maxFinite) maxFinite = v;
+    }
+    grid[e] = row;
+  }
+
+  const normalize = opts.normalize ?? true;
+  if (normalize && maxFinite > 0) {
+    for (let e = 0; e < rows; e++) {
+      const row = grid[e]!;
+      for (let s = 0; s < cols; s++) {
+        const v = row[s]!;
+        row[s] = Number.isNaN(v) ? NaN : v / maxFinite;
+      }
+    }
+  }
+  return grid;
 }
 
 /** Bilinear-interpolated [r,g,b] in 0..1 at floating (x,y); null if any corner is null. */
