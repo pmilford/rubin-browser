@@ -106,6 +106,19 @@ describe('TAP Client', () => {
       await expect(query('SELECT 1')).rejects.toThrow(/non-JSON response/i);
     });
 
+    it('turns an empty/unparseable 200 JSON body into an honest error (not "Unexpected end of JSON input")', async () => {
+      // Live symptom on the light-curve path: an empty 200 body makes resp.json()
+      // throw "Unexpected end of JSON input"; the client must surface an actionable
+      // message about no rows / missing DP1 data rights instead.
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        headers: { get: (h: string) => (h === 'content-type' ? 'application/json' : null) },
+        json: () => Promise.reject(new Error('Unexpected end of JSON input')),
+      });
+      setToken('test-token');
+      await expect(query('SELECT 1')).rejects.toThrow(/empty or unparseable JSON body/i);
+    });
+
     it('still parses JSON when the content-type header says json', async () => {
       globalThis.fetch = vi.fn().mockResolvedValue({
         ok: true,

@@ -61,7 +61,21 @@ export async function query(
           `First bytes: ${text.slice(0, 100).replace(/\s+/g, ' ').trim()}…`
       );
     }
-    return parseJsonResponse(await resp.json());
+    // A 200 with an EMPTY body makes resp.json() throw "Unexpected end of JSON
+    // input" — surfaced live on the light-curve path. Turn that (and any
+    // unparseable body) into an honest, actionable message instead.
+    let json: unknown;
+    try {
+      json = await resp.json();
+    } catch (err) {
+      throw new Error(
+        `TAP returned an empty or unparseable JSON body (HTTP ${resp.status}). ` +
+          'This usually means the query returned nothing or the session lacks ' +
+          'DP1 data rights — sign in with an RSP token that has DP1 access.',
+        { cause: err }
+      );
+    }
+    return parseJsonResponse(json);
   }
 
   // For VOTable/CSV, return raw text as single column
