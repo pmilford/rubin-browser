@@ -19,6 +19,9 @@
  *   response JSON shape: { metadata: [{ name, datatype, ... }], data: [[...], ...] }
  *   (columns are addressed BY metadata name — never by positional index.)
  *
+ * `source_id` is selected as TEXT (`source_id || ''`, see {@link SOURCE_ID_AS_TEXT})
+ * so the 64-bit id arrives as a JSON string and survives `JSON.parse` intact.
+ *
  * Table + columns (validated against the live GAVO `TAP_SCHEMA` — do NOT guess):
  *   - `gaia.dr3lite` — GAVO's lightweight Gaia DR3 mirror. It HAS `source_id, ra,
  *     dec, parallax, pmra, pmdec, phot_g_mean_mag, phot_bp_mean_mag,
@@ -46,6 +49,23 @@ export const GAIA_SOURCE_TABLE = 'gaia.dr3lite';
 
 /** Default row cap for a Gaia cone query (TOP N in the ADQL). */
 export const GAIA_DEFAULT_MAX_ROWS = 5000;
+
+/**
+ * SELECT expression that returns `source_id` as TEXT rather than a bare integer.
+ *
+ * A Gaia `source_id` is a 64-bit integer and every real id exceeds 2^53, so if the
+ * server emits it as a JSON *number* (`FORMAT=json`), the browser's `JSON.parse`
+ * silently rounds its low digits BEFORE any of our code runs — the `sourceId:
+ * string[]` design cannot recover a value already destroyed at the wire boundary.
+ * Casting it to text server-side makes GAVO/DaCHS emit a JSON *string*
+ * (`"4845547606170801408"`), which `JSON.parse` preserves exactly.
+ *
+ * Uses the ADQL string-concatenation idiom `source_id || ''` — VERIFIED against the
+ * live GAVO endpoint (`CAST(source_id AS VARCHAR)`/`AS TEXT` are REJECTED by DaCHS:
+ * "No VOTable type for varchar"). The result column is re-aliased `AS source_id` so
+ * the by-name column lookup in {@link parseGaiaResponse} is unaffected. Fixes TODO 134.
+ */
+export const SOURCE_ID_AS_TEXT = "source_id || '' AS source_id";
 
 export interface GaiaConeParams {
   /** Right ascension of the cone centre, degrees (ICRS). */
@@ -147,7 +167,7 @@ export function buildGaiaConeAdql(params: GaiaConeParams): string {
   }
 
   return `SELECT TOP ${top}
-  source_id, ra, dec,
+  ${SOURCE_ID_AS_TEXT}, ra, dec,
   parallax, pmra, pmdec,
   phot_g_mean_mag,
   phot_bp_mean_mag - phot_rp_mean_mag AS bp_rp,
@@ -169,7 +189,7 @@ export function buildGaiaQsoAdql(params: GaiaConeParams): string {
   const { raStr, decStr, radiusStr, top } = coneParts(params);
 
   return `SELECT TOP ${top}
-  source_id, ra, dec,
+  ${SOURCE_ID_AS_TEXT}, ra, dec,
   redshift_qsoc
 FROM gaiadr3.qso_candidates
 WHERE CONTAINS(
@@ -283,9 +303,10 @@ export function parseGaiaResponse(raw: unknown): GaiaCatalog {
       throw new Error(`parseGaiaResponse: data row ${i} is not an array`);
     }
 
-    // source_id: keep the exact decimal representation (string preferred; a numeric
-    // cell is stringified, though a 64-bit id may already have lost precision in
-    // JSON.parse — real callers should keep source_id textual end-to-end).
+    // source_id: keep the exact decimal representation. The query selects it via
+    // SOURCE_ID_AS_TEXT so the server emits a JSON string (no JSON.parse rounding).
+    // A numeric cell is still tolerated (other mirrors) and stringified — but a
+    // 64-bit id delivered as a bare number has already lost precision upstream.
     const rawId = cell(row, idIdx);
     sourceId[i] =
       rawId === null || rawId === undefined ? '' : typeof rawId === 'string' ? rawId : String(rawId);

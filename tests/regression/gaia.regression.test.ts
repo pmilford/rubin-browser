@@ -8,13 +8,14 @@ import { parseGaiaResponse } from '../../src/api/gaia.js';
  * (https://dc.zah.uni-heidelberg.de/tap/sync, table gaia.dr3lite) — the exact
  * service the app queries. Parsing it with JSON.parse (as the app does) and then
  * `parseGaiaResponse` locks in the real wire shape: the `columns` descriptor key
- * (NOT ESA's `metadata`), the server-derived `bp_rp` alias, and null-as-NaN — the
- * class of thing a hand-written mock silently got wrong (see the Gaia CORS
- * migration). Regenerate with:
+ * (NOT ESA's `metadata`), the server-derived `bp_rp` alias, `source_id` delivered
+ * as a JSON STRING (via the `source_id || ''` text cast — TODO 134, so the 64-bit id
+ * survives JSON.parse), and null-as-NaN — the class of thing a hand-written mock
+ * silently got wrong (see the Gaia CORS migration). Regenerate with:
  *   curl -sG https://dc.zah.uni-heidelberg.de/tap/sync \
  *     --data-urlencode REQUEST=doQuery --data-urlencode LANG=ADQL \
  *     --data-urlencode FORMAT=json \
- *     --data-urlencode "QUERY=SELECT TOP 3 source_id, ra, dec, parallax, pmra, pmdec, phot_g_mean_mag, phot_bp_mean_mag - phot_rp_mean_mag AS bp_rp, radial_velocity FROM gaia.dr3lite WHERE 1=CONTAINS(POINT('ICRS',ra,dec),CIRCLE('ICRS',62,-37,0.05))"
+ *     --data-urlencode "QUERY=SELECT TOP 3 source_id || '' AS source_id, ra, dec, parallax, pmra, pmdec, phot_g_mean_mag, phot_bp_mean_mag - phot_rp_mean_mag AS bp_rp, radial_velocity FROM gaia.dr3lite WHERE 1=CONTAINS(POINT('ICRS',ra,dec),CIRCLE('ICRS',62,-37,0.05))"
  */
 // vitest runs from the repo root, so a root-relative path resolves the fixture.
 const raw = JSON.parse(readFileSync('tests/fixtures/gaia-dr3lite-cone.json', 'utf-8'));
@@ -25,6 +26,10 @@ describe('Gaia GAVO dr3lite — real-response regression', () => {
     expect(Array.isArray(raw.columns)).toBe(true);
     expect(raw.metadata).toBeUndefined();
     expect(raw.columns.map((c: { name: string }) => c.name)).toContain('bp_rp');
+    // TODO 134: source_id is delivered as TEXT (`source_id || ''`) so the id survives
+    // JSON.parse — the descriptor datatype is `char`, not the raw `long`.
+    const idCol = raw.columns.find((c: { name: string }) => c.name === 'source_id');
+    expect(idCol.datatype).toBe('char');
   });
 
   it('parseGaiaResponse maps the live response to exact catalog values', () => {
@@ -43,16 +48,20 @@ describe('Gaia GAVO dr3lite — real-response regression', () => {
     expect(Number.isNaN(cat.radialVelocity[0])).toBe(true);
   });
 
-  it('documents the KNOWN source_id precision limitation (GAVO sends it as a JSON number)', () => {
-    // GAVO transmits source_id as a bare JSON NUMBER, and every Gaia id exceeds
-    // 2^53, so JSON.parse rounds it BEFORE parseGaiaResponse sees it — the stored
-    // string is the rounded value, not the true id. This assertion pins that real
-    // behaviour (self-consistent with what the browser also does) so a future
-    // big-int-safe fix (parse source_id from raw text / VOTable) will visibly
-    // flip it. Tracked as TODO 134.
+  it('preserves the full 64-bit source_id EXACTLY (TODO 134 fix — text-cast on the wire)', () => {
+    // The query now selects `source_id || '' AS source_id`, so GAVO emits the id as
+    // a JSON STRING and JSON.parse leaves it untouched. The fixture cell is therefore
+    // already a string of the TRUE id — not a rounded JS number. parseGaiaResponse
+    // keeps it verbatim, so the exact 19-digit id round-trips.
+    const trueId = '4845547606170801408';
+    // The wire cell is a string (proves the text cast survived JSON.parse)...
+    expect(typeof raw.data[0][0]).toBe('string');
+    expect(raw.data[0][0]).toBe(trueId);
+    // ...and would have been CORRUPTED had it come across as a bare JS number.
+    // eslint-disable-next-line no-loss-of-precision -- demonstrating the precision loss the text cast avoids
+    expect(String(4845547606170801408)).not.toBe(trueId);
     const cat = parseGaiaResponse(raw);
-    const rounded = String(raw.data[0][0]); // JS-number → string, precision already lost
-    expect(cat.sourceId[0]).toBe(rounded);
-    expect(rounded).toMatch(/^\d{19}$/); // still a 19-digit id, just not exact
+    expect(cat.sourceId[0]).toBe(trueId);
+    expect(cat.sourceId[0]).toMatch(/^\d{19}$/);
   });
 });
