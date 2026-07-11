@@ -47,6 +47,14 @@
   import type { CatalogSet } from '../data/catalog.js';
   import { pmVectorEndpoint } from '../utils/gaiaViz.js';
   import { touchLru, evictLru } from '../utils/tileCache.js';
+  import {
+    tileReady,
+    tileWidth,
+    tileHeight,
+    isBitmap,
+    closeTile,
+    type DecodedTile,
+  } from '../utils/decodedTile.js';
   import { PerfMetrics, type PerfSnapshot } from '../utils/perfMetrics.js';
   import { TileScheduler, type TileLoadHandle } from '../utils/tileScheduler.js';
   import type { Band } from '../data/syntheticSky.js';
@@ -321,8 +329,20 @@
   let errorMessage = $state('');
   let errorDismissTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // Tile cache: tileKey(order,pixelIndex) -> HTMLImageElement
-  const tileCache = new Map<string, HTMLImageElement>();
+  // Tile cache: tileKey(order,pixelIndex) -> a decoded tile (off-thread
+  // ImageBitmap on the fast path, HTMLImageElement on the <img> fallback path).
+  const tileCache = new Map<string, DecodedTile>();
+
+  // Whether the runtime can decode tiles OFF the main thread (createImageBitmap).
+  // false in jsdom (unit tests) and ancient browsers → every path degrades to the
+  // main-thread <img> decode, so nothing regresses where it is unavailable.
+  const canBitmap = typeof createImageBitmap === 'function';
+
+  // Test seam (Playwright only): tallies how tiles were decoded so a browser test
+  // can PROVE the off-thread createImageBitmap path is actually taken (bitmap > 0)
+  // and not silently falling back to main-thread <img> decode. Never read in prod.
+  const decodeCounts = ((globalThis as unknown as { __tileDecodeCounts?: { bitmap: number; img: number } })
+    .__tileDecodeCounts ??= { bitmap: 0, img: 0 });
 
   // --- Performance instrumentation + fetch scheduling ---
   // `perf` is a pure collector fed by the REAL fetch/cache/render events below;
@@ -373,7 +393,7 @@
   // divmod(ipix, n_tiles_in_row); tile_width = allskyWidth / n_tiles_in_row.
   const ALLSKY_TILE_ORDER = 3; // 12 * (2^3)^2 = 768 tiles
   const ALLSKY_TILES_PER_ROW = Math.floor(Math.sqrt(nside2npix(order2nside(ALLSKY_TILE_ORDER)))); // 27
-  const allskyBackdrop = new Map<number, HTMLImageElement>();
+  const allskyBackdrop = new Map<number, DecodedTile>();
 
   // Allsky backdrop: a full-sky set of low-order tiles, prefetched once per base
   // and PINNED (never LRU-evicted) so the ancestor-preview pass always has a
@@ -1395,10 +1415,7 @@
     const view = currentView();
     const visibleTiles = getVisibleTiles(ra, dec, fov, order);
 
-    const isLoaded = (key: string): boolean => {
-      const img = tileCache.get(key);
-      return !!img && img.complete && img.naturalWidth > 0;
-    };
+    const isLoaded = (key: string): boolean => tileReady(tileCache.get(key));
 
     // Pass 0 — HiPS Allsky backdrop (coarse full-sky preview) UNDER everything.
     // For each visible tile, draw the order-3 backdrop tile that covers it (its
@@ -1417,7 +1434,7 @@
       }
       for (const bpix of backdropPix) {
         const bimg = allskyBackdrop.get(bpix);
-        if (bimg && bimg.complete && bimg.naturalWidth > 0) {
+        if (tileReady(bimg)) {
           drawTile(context, bimg, { order: ALLSKY_TILE_ORDER, pixelIndex: bpix }, view);
         }
       }
@@ -1517,7 +1534,9 @@
     for (const a of drawnAncestors) drawn.add(a);
     for (const f of drawnFiner) drawn.add(f); // keep residual finer tiles (zoom-out)
     for (const p of pinnedTiles) drawn.add(p); // never evict the allsky backdrop
-    evictLru(tileCache, MAX_TILE_CACHE, drawn);
+    // Free the decoder memory of any evicted ImageBitmap (close() it). Protected
+    // by `drawn`, so this never closes a tile visible in this frame.
+    evictLru(tileCache, MAX_TILE_CACHE, drawn, (_k, v) => closeTile(v));
   }
 
   /**
@@ -1539,7 +1558,7 @@
    */
   function drawTile(
     context: CanvasRenderingContext2D,
-    img: HTMLImageElement,
+    img: DecodedTile,
     tile: TileKey,
     view: ViewParams = currentView()
   ) {
@@ -1569,8 +1588,8 @@
     }
     if (!anyOnScreen) return;
 
-    const w = img.naturalWidth || TILE_SIZE;
-    const h = img.naturalHeight || TILE_SIZE;
+    const w = tileWidth(img, TILE_SIZE);
+    const h = tileHeight(img, TILE_SIZE);
 
     // Subdivide only when the tile projects large on screen (a low-order ancestor
     // preview): a single affine map over a wide gnomonic quad warps the interior
@@ -1616,7 +1635,7 @@
    */
   function drawTexturedTriangle(
     context: CanvasRenderingContext2D,
-    img: HTMLImageElement,
+    img: DecodedTile,
     d0: [number, number],
     d1: [number, number],
     d2: [number, number],
@@ -1811,27 +1830,23 @@
       const url = buildUrl(tile.order, tile.pixelIndex, fmt, batchBaseUrl);
 
       tileScheduler.request(cacheKey, (): TileLoadHandle => {
-        const img = new Image();
-        img.crossOrigin = 'anonymous';
-        pendingLoads.add(img);
         const startToken = perf.recordFetchStart();
         let aborted = false;
-        // Detach handlers + drop the src so a cancelled load can neither paint nor
-        // fire a spurious onerror (which would be miscounted as a tile failure and
-        // could wrongly trip the auto-fallback). Called by tileScheduler.supersede.
-        const abort = (): void => {
-          aborted = true;
-          img.onload = null;
-          img.onerror = null;
-          img.src = '';
-          pendingLoads.delete(img);
-        };
+        // Set only when we (also) create an <img> — the off-thread ImageBitmap path
+        // needs no element and no handler detaching, only the `aborted` flag + the
+        // AbortController below.
+        let imgEl: HTMLImageElement | null = null;
+        let controller: AbortController | null = null;
 
-        img.onload = () => {
-          if (aborted) return;
-          pendingLoads.delete(img);
+        // A tile finished decoding (off-thread ImageBitmap OR the <img> fallback).
+        // If it was superseded while decoding, DROP it — never cache/draw a stale
+        // decode — and free the orphan bitmap so it can't leak.
+        const onDecoded = (decoded: DecodedTile): void => {
+          if (aborted) { closeTile(decoded); return; }
+          if (imgEl) pendingLoads.delete(imgEl);
           loadSuccesses++;
-          tileCache.set(cacheKey, img);
+          if (isBitmap(decoded)) decodeCounts.bitmap++; else decodeCounts.img++;
+          tileCache.set(cacheKey, decoded);
           contentVersion++;
           perf.recordFetchEnd(startToken);
           tileScheduler.settle(cacheKey);
@@ -1840,56 +1855,99 @@
           reportPerf();
         };
 
-        img.onerror = () => {
+        // A real (non-abort) load/decode failure. `status` is the HTTP status when
+        // known (fetch path) or null (<img> path / no status).
+        const onLoadError = (status: number | null): void => {
           if (aborted) return;
-          pendingLoads.delete(img);
+          if (imgEl) pendingLoads.delete(imgEl);
           perf.recordError();
           tileScheduler.settle(cacheKey);
-          recordFailure(url, null); // <img> path exposes no HTTP status
+          recordFailure(url, status);
           reportPerf();
+        };
+
+        // Detach handlers + drop the src (and abort any fetch) so a cancelled load
+        // can neither paint nor fire a spurious onerror (which would be miscounted
+        // as a failure and could wrongly trip the auto-fallback). supersede() calls
+        // this; it counts the cancel itself, so we touch no perf metrics here.
+        const abort = (): void => {
+          aborted = true;
+          if (controller) controller.abort();
+          if (imgEl) {
+            imgEl.onload = null;
+            imgEl.onerror = null;
+            imgEl.src = '';
+            pendingLoads.delete(imgEl);
+          }
+        };
+
+        // Legacy / fallback MAIN-THREAD decode via an <img> (createImageBitmap
+        // unavailable, a decode throw, or a CORS-opaque fetch). `crossOrigin` keeps
+        // the resulting canvas readable (untainted) so getImageData still works.
+        const loadViaImg = (src: string): void => {
+          if (aborted) return;
+          const img = new Image();
+          img.crossOrigin = 'anonymous';
+          imgEl = img;
+          pendingLoads.add(img);
+          img.onload = () => onDecoded(img);
+          img.onerror = () => onLoadError(null);
+          img.src = src;
+        };
+
+        // Decode an already-fetched (CORS, hence readable → untainted) blob OFF the
+        // main thread. On a createImageBitmap throw, fall back to an <img> over an
+        // object URL of the SAME blob so nothing regresses.
+        const decodeBlob = (blob: Blob): Promise<void> => {
+          if (aborted) return Promise.resolve();
+          if (canBitmap) {
+            return createImageBitmap(blob).then(
+              (bmp) => onDecoded(bmp),
+              () => loadViaImg(URL.createObjectURL(blob))
+            );
+          }
+          loadViaImg(URL.createObjectURL(blob));
+          return Promise.resolve();
         };
 
         if (offline) {
           // Synthesize the tile locally from the bundled synthetic sky — no network.
+          // Decode the raw RGBA straight to an ImageBitmap (off-thread), skipping the
+          // costly main-thread toDataURL PNG encode + <img> re-decode entirely.
           try {
             const rgba = offlineTileRGBA(tile.order, tile.pixelIndex, offlineBand, offlineMjd);
-            const oc = document.createElement('canvas');
-            oc.width = OFFLINE_TILE_SIZE;
-            oc.height = OFFLINE_TILE_SIZE;
-            const octx = oc.getContext('2d');
-            if (octx) {
-              octx.putImageData(new ImageData(rgba, OFFLINE_TILE_SIZE, OFFLINE_TILE_SIZE), 0, 0);
-              img.src = oc.toDataURL(); // fires img.onload → cache
+            const imageData = new ImageData(rgba, OFFLINE_TILE_SIZE, OFFLINE_TILE_SIZE);
+            const offlineViaImg = (): void => {
+              const oc = document.createElement('canvas');
+              oc.width = OFFLINE_TILE_SIZE;
+              oc.height = OFFLINE_TILE_SIZE;
+              const octx = oc.getContext('2d');
+              if (octx) { octx.putImageData(imageData, 0, 0); loadViaImg(oc.toDataURL()); }
+              else onLoadError(null);
+            };
+            if (canBitmap) {
+              createImageBitmap(imageData).then((bmp) => onDecoded(bmp), offlineViaImg);
             } else {
-              perf.recordError();
-              tileScheduler.settle(cacheKey);
-              recordFailure(url, null);
+              offlineViaImg();
             }
           } catch {
-            perf.recordError();
-            tileScheduler.settle(cacheKey);
-            recordFailure(url, null);
+            onLoadError(null);
           }
         } else if (useAuth) {
-          // toRequestUrl → same-origin dev proxy so the credentialed cross-origin
-          // request isn't CORS-blocked; recordFailure keeps the ORIGINAL url so the
-          // error reports the real RSP host, not the proxy path. Throttled via the
-          // fetch queue so a high-order view doesn't fire thousands of concurrent
-          // requests and exhaust the browser (net::ERR_INSUFFICIENT_RESOURCES).
+          // Authenticated Rubin tiles. toRequestUrl → same-origin dev proxy so the
+          // credentialed cross-origin request isn't CORS-blocked; recordFailure keeps
+          // the ORIGINAL url so the error reports the real RSP host, not the proxy.
+          // Throttled via the fetch queue so a high-order view doesn't fire thousands
+          // of concurrent requests and exhaust the browser (ERR_INSUFFICIENT_RESOURCES).
           // AbortController lets supersede() cancel a superseded fetch.
-          const controller = new AbortController();
-          const fetchAbort = abort;
-          const doAbort = (): void => {
-            fetchAbort();
-            controller.abort();
-          };
+          controller = new AbortController();
           runQueuedFetch(() => {
             // If this tile was superseded while queued (still-in-flight but not yet
             // started), drain the queue slot as a no-op — never open a request, and
             // never strand the tile: supersede() already settled + counted the
             // cancel, and a still-VISIBLE queued tile is left un-aborted so it runs.
             if (aborted) return Promise.resolve();
-            return fetch(toRequestUrl(url), { headers: auth, signal: controller.signal })
+            return fetch(toRequestUrl(url), { headers: auth, signal: controller!.signal })
               .then(resp => {
                 if (!resp.ok) {
                   const e = new Error(`HTTP ${resp.status}`) as Error & { status?: number };
@@ -1898,26 +1956,60 @@
                 }
                 return resp.blob();
               })
-              .then(blob => {
-                if (aborted) return; // superseded while the blob was in flight
-                const objUrl = URL.createObjectURL(blob);
-                img.src = objUrl;
-              })
+              // Free the network-concurrency slot as soon as the BYTES arrive; the
+              // off-thread createImageBitmap decode then runs OFF the fetch queue.
+              // Holding a slot through decode would serialise decoding into the
+              // 6-wide network cap and slow the whole batch's drain (and make a
+              // superseded/offline switch race with still-draining fetches). Decode
+              // errors are handled inside decodeBlob (bitmap-throw → <img> fallback).
+              .then((blob) => { void decodeBlob(blob); })
               .catch((e: Error & { status?: number }) => {
                 // An abort is NOT a tile failure — it must never count as an error
                 // or trip the auto-fallback. Metrics for the cancel were recorded
                 // by supersede(); just stop here.
                 if (aborted || e?.name === 'AbortError') return;
-                pendingLoads.delete(img);
-                perf.recordError();
-                tileScheduler.settle(cacheKey);
-                recordFailure(url, e?.status ?? null);
-                reportPerf();
+                onLoadError(e?.status ?? null);
               });
           });
-          return { abort: doAbort, cancellable: true };
+        } else if (canBitmap) {
+          // Public (e.g. CDS/DSS) tiles: fetch (CORS) → blob → off-thread
+          // createImageBitmap. The public HiPS hosts send Access-Control-Allow-Origin
+          // (the same reason the <img crossOrigin> path yields a readable canvas), so
+          // the CORS fetch succeeds and the blob is readable → the canvas is NOT
+          // tainted. On a CORS-opaque / network failure the fetch rejects (no HTTP
+          // status) and we fall back to the <img crossOrigin> path so nothing
+          // regresses.
+          //
+          // NOT routed through runQueuedFetch (unlike the single-origin auth proxy
+          // path): the fetch is issued IMMEDIATELY, exactly as the old `img.src`
+          // did, so the browser's own per-host connection cap (~6) throttles it —
+          // deferring the fetch() call behind an app queue would initiate requests
+          // LATER than the <img> path and change batch/drain timing.
+          controller = new AbortController();
+          fetch(toRequestUrl(url), { signal: controller.signal })
+            .then(resp => {
+              if (!resp.ok) {
+                const e = new Error(`HTTP ${resp.status}`) as Error & { status?: number };
+                e.status = resp.status;
+                throw e;
+              }
+              return resp.blob();
+            })
+            // Off-thread createImageBitmap decode (errors handled inside decodeBlob:
+            // bitmap-throw → <img> fallback → onLoadError).
+            .then((blob) => { void decodeBlob(blob); })
+            .catch((e: Error & { status?: number }) => {
+              if (aborted || e?.name === 'AbortError') return;
+              // No HTTP status ⇒ a network/CORS error, not a real 4xx/5xx: retry
+              // once via the browser's own <img crossOrigin> loader before counting
+              // a failure (some hosts serve <img> but reject a raw CORS fetch).
+              if (e?.status == null) { loadViaImg(toRequestUrl(url)); return; }
+              onLoadError(e.status);
+            });
         } else {
-          img.src = toRequestUrl(url);
+          // No createImageBitmap (jsdom / old browsers): the original main-thread
+          // <img> decode. Also the path taken in unit tests (so no real fetch fires).
+          loadViaImg(toRequestUrl(url));
         }
 
         return { abort, cancellable: true };
@@ -2730,7 +2822,7 @@
     tileScheduler.clear();
     perf.reset();
     for (const key of tileCache.keys()) {
-      if (!key.startsWith('overlay-')) tileCache.delete(key);
+      if (!key.startsWith('overlay-')) { closeTile(tileCache.get(key)); tileCache.delete(key); }
     }
     scheduleRender();
     loadTiles();
@@ -2828,7 +2920,7 @@
     // Remove overlay tiles from cache
     const prefix = `overlay-${id}-`;
     for (const key of tileCache.keys()) {
-      if (key.startsWith(prefix)) tileCache.delete(key);
+      if (key.startsWith(prefix)) { closeTile(tileCache.get(key)); tileCache.delete(key); }
     }
     scheduleRender();
   }
@@ -3114,7 +3206,7 @@
     tileScheduler.clear();
     perf.reset();
     for (const key of tileCache.keys()) {
-      if (!key.startsWith('overlay-')) tileCache.delete(key);
+      if (!key.startsWith('overlay-')) { closeTile(tileCache.get(key)); tileCache.delete(key); }
     }
     clearError();
     scheduleRender();

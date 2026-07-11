@@ -24,15 +24,27 @@ export function touchLru<K, V>(map: Map<K, V>, key: K): void {
  * `protect`. Returns the evicted keys. If everything over the cap is protected,
  * the map is left above the cap (correctness beats the bound — we never drop a
  * visible tile). `cap` should therefore exceed the largest possible visible set.
+ *
+ * `onEvict(key, value)` is invoked for each dropped entry BEFORE it is any use to
+ * the caller (the value is already removed from the map) — the ImageViewer uses it
+ * to `close()` an evicted `ImageBitmap` and free its decoder memory. It is only
+ * ever called for a non-protected key, so it can never fire for a visible tile.
  */
-export function evictLru<K, V>(map: Map<K, V>, cap: number, protect: ReadonlySet<K>): K[] {
+export function evictLru<K, V>(
+  map: Map<K, V>,
+  cap: number,
+  protect: ReadonlySet<K>,
+  onEvict?: (key: K, value: V) => void
+): K[] {
   const evicted: K[] = [];
   if (cap < 0 || map.size <= cap) return evicted;
   for (const k of map.keys()) {
     if (map.size <= cap) break;
     if (protect.has(k)) continue;
+    const v = map.get(k) as V;
     map.delete(k);
     evicted.push(k);
+    onEvict?.(k, v);
   }
   return evicted;
 }

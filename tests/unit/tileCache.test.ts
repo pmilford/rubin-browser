@@ -54,4 +54,20 @@ describe('evictLru', () => {
     expect(evictLru(m, 5, new Set())).toEqual([]);
     expect(m.size).toBe(2);
   });
+
+  it('invokes onEvict(key,value) for each dropped entry, never for a protected one', () => {
+    // The ImageBitmap-freeing hook: onEvict must fire once per EVICTED entry with
+    // its value (so the caller can close() the bitmap) and never for a still-visible
+    // (protected) tile — closing a visible tile would blank it.
+    const m = new Map<number, string>();
+    for (let i = 0; i < 6; i++) m.set(i, `v${i}`);
+    const protectedVisible = new Set([1]); // oldest-but-visible, must survive
+    const seen: Array<[number, string]> = [];
+    const evicted = evictLru(m, 3, protectedVisible, (k, v) => seen.push([k, v]));
+    // Drops the oldest UNPROTECTED keys (0,2,3) — skips protected 1.
+    expect(evicted).toEqual([0, 2, 3]);
+    expect(seen).toEqual([[0, 'v0'], [2, 'v2'], [3, 'v3']]);
+    expect(m.has(1)).toBe(true); // protected, and onEvict never saw it
+    expect(seen.some(([k]) => k === 1)).toBe(false);
+  });
 });
