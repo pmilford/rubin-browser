@@ -187,6 +187,53 @@ test.describe('LIVE Rubin DP1 (requires RSP_TOKEN with DP1 rights)', () => {
     });
   });
 
+  test('Visit-image blink loads real multi-epoch frames at a covered position', async ({
+    page,
+  }) => {
+    // Fetching up to 12 per-epoch SODA cutouts sequentially is inherently slow;
+    // give this live test more than the 45s default.
+    test.setTimeout(180_000);
+    const rspFailures = trackRspFailures(page);
+    await page.goto('/');
+    await page.locator('select[aria-label="Base layer"]').selectOption('rubin');
+    // A covered EDFS position with many per-visit images (a live probe returned
+    // ~200 lsst.visit_image epochs across 6 bands over ~23 days here).
+    const search = page.locator('input[aria-label="Search coordinates"]');
+    await search.fill('59.28107, -48.98508');
+    await search.press('Enter');
+    await page.waitForTimeout(1500);
+
+    await page.locator('button[aria-label="Toggle Rubin visit-image time series"]').click();
+
+    // Real per-epoch cutouts decode → the blink frame canvas paints real pixels.
+    const frame = page.locator('[aria-label="Visit image frame"]');
+    await expect(
+      frame,
+      `Visit-image blink never rendered a frame. RSP errors: ${rspFailures().join(' | ') || 'none'}`
+    ).toBeVisible({ timeout: 60000 });
+    await expect
+      .poll(
+        () =>
+          frame.evaluate((el: HTMLCanvasElement) => {
+            const ctx = el.getContext('2d');
+            if (!ctx) return 0;
+            const { data } = ctx.getImageData(0, 0, el.width, el.height);
+            let lit = 0;
+            for (let i = 0; i < data.length; i += 4) if (data[i + 3]! > 0 && data[i]! > 4) lit++;
+            return lit / (data.length / 4);
+          }),
+        { timeout: 60000, message: 'blink frame canvas stayed black' }
+      )
+      .toBeGreaterThan(0.01);
+
+    // More than one epoch means it is a genuine TIME SERIES, not a single cutout —
+    // the slider spans multiple frames.
+    const slider = page.locator('[aria-label="Visit image epoch"]');
+    await expect(slider).toBeVisible();
+    const maxAttr = await slider.getAttribute('max');
+    expect(Number(maxAttr)).toBeGreaterThan(1);
+  });
+
   test('SODA FITS cutout resolves to a real image at the field centre', async ({ page }) => {
     const rspFailures = trackRspFailures(page);
     await page.goto('/');

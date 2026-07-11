@@ -17,6 +17,7 @@
   import DiffPanel from '../components/DiffPanel.svelte';
   import VariabilityPanel from '../components/VariabilityPanel.svelte';
   import CutoutPanel from '../components/CutoutPanel.svelte';
+  import VisitImageBlink from '../components/VisitImageBlink.svelte';
   import RgbCompositePanel from '../components/RgbCompositePanel.svelte';
   import { fetchCutoutAt } from '../api/soda.js';
   import { type FitsImage } from '../utils/fits.js';
@@ -49,6 +50,7 @@
   import { fetchLightCurve, toLightCurvePoints } from '../api/lightcurve.js';
   import { fetchGaiaLightCurves } from '../api/gaiaLightCurve.js';
   import { fetchDiaAlerts } from '../api/diaSource.js';
+  import { fetchVisitImageSeries, type EpochImage } from '../api/visitImageSeries.js';
   import type { LightCurvePoint } from '../data/offlineDataset.js';
   import { lookupObject, type AstroObject } from '../data/objects.js';
   import {
@@ -388,6 +390,48 @@
       cutoutMeta = null;
       statusMessage = 'FITS cutout: off';
     }
+  }
+
+  // Visit-image time series (feature 136): blink a position through the REAL
+  // per-visit DP1 science images (ivoa.ObsCore lsst.visit_image → per-epoch SODA
+  // cutout). Validated live: ~200 epochs / 6 bands over ~23 days at an EDFS point.
+  let blinkOpen = $state(false);
+  let blinkLoading = $state(false);
+  let blinkError = $state<string | null>(null);
+  let blinkEpochs = $state<EpochImage[]>([]);
+  let blinkTruncated = $state(false);
+  let blinkTotalEpochs = $state(0);
+  let blinkFailedEpochs = $state(0);
+
+  async function loadVisitImageBlink() {
+    blinkLoading = true;
+    blinkError = null;
+    blinkEpochs = [];
+    const ra = currentRa;
+    const dec = currentDec;
+    statusMessage = `Fetching visit-image epochs at ${ra.toFixed(3)}, ${dec.toFixed(3)}…`;
+    try {
+      const series = await fetchVisitImageSeries({ ra, dec });
+      blinkEpochs = series.epochs;
+      blinkTruncated = series.truncated;
+      blinkTotalEpochs = series.totalEpochs;
+      blinkFailedEpochs = series.failedEpochs;
+      statusMessage =
+        series.totalEpochs === 0
+          ? 'Visit-image blink: no per-visit images here (DP1 covers only a few small fields — try a DP1 field).'
+          : `Visit-image blink: ${series.epochs.length} of ${series.totalEpochs} epochs${series.truncated ? ' (capped)' : ''}${series.failedEpochs ? `, ${series.failedEpochs} failed` : ''}`;
+    } catch (e) {
+      blinkError = e instanceof Error ? e.message : String(e);
+      statusMessage = `Visit-image blink: ${blinkError}`;
+    } finally {
+      blinkLoading = false;
+    }
+  }
+
+  function toggleVisitImageBlink() {
+    blinkOpen = !blinkOpen;
+    if (blinkOpen) void loadVisitImageBlink();
+    else statusMessage = 'Visit-image blink: off';
   }
 
   // RGB band-mixing composite (feature 120): fetch three per-band DP1 SODA cutouts
@@ -1570,6 +1614,17 @@
 
         <button
           class="xsection-toggle"
+          class:on={blinkOpen}
+          aria-pressed={blinkOpen}
+          aria-label="Toggle Rubin visit-image time series"
+          title="Blink this position through the real per-visit DP1 science images over time (ivoa.ObsCore lsst.visit_image → per-epoch SODA cutout; requires an RSP token with DP1 rights)"
+          onclick={toggleVisitImageBlink}
+        >
+          🎞 Blink
+        </button>
+
+        <button
+          class="xsection-toggle"
           class:on={rgbOpen}
           aria-pressed={rgbOpen}
           aria-label="Toggle RGB composite"
@@ -1734,7 +1789,7 @@
       </div>
     {/if}
 
-    {#if uiVisible && (identifyInfo || simbadQuery || showCatalog || showLenses || showRubinObjects || crossSectionMode || surfaceMode || lightCurveMode || gaiaLcMode || cutoutOpen || rgbOpen || (diffMode && baseLayerId === 'offline') || (varMode && baseLayerId === 'offline'))}
+    {#if uiVisible && (identifyInfo || simbadQuery || showCatalog || showLenses || showRubinObjects || crossSectionMode || surfaceMode || lightCurveMode || gaiaLcMode || cutoutOpen || rgbOpen || blinkOpen || (diffMode && baseLayerId === 'offline') || (varMode && baseLayerId === 'offline'))}
       <!-- Right-side stack: the object-ID popup sits ABOVE the analysis plots so
            they never overlap. -->
       <div class="right-stack">
@@ -1839,6 +1894,17 @@
               {/if}
             </div>
           {/if}
+        {/if}
+        {#if blinkOpen}
+          <VisitImageBlink
+            epochs={blinkEpochs}
+            loading={blinkLoading}
+            error={blinkError}
+            truncated={blinkTruncated}
+            totalEpochs={blinkTotalEpochs}
+            failedEpochs={blinkFailedEpochs}
+            onClose={() => (blinkOpen = false)}
+          />
         {/if}
         {#if rgbOpen}
           {#if rgbStatus === 'loaded' && rgbImages && rgbMeta}
