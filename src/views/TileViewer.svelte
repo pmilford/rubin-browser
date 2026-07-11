@@ -13,6 +13,9 @@
   import SimbadPanel from '../components/SimbadPanel.svelte';
   import { objectsNear, type SimbadObject } from '../api/simbad.js';
   import DiffPanel from '../components/DiffPanel.svelte';
+  import CutoutPanel from '../components/CutoutPanel.svelte';
+  import { fetchCutoutAt } from '../api/soda.js';
+  import { readFits, type FitsImage } from '../utils/fits.js';
   import { radecToTileIndex } from '../api/hips.js';
   import CatalogTable from '../components/CatalogTable.svelte';
   import { fetchGaiaCone } from '../api/gaia.js';
@@ -274,6 +277,65 @@
       statusMessage = 'Differencing: faint vs bright epoch of the synthetic transient';
     } else {
       statusMessage = 'Differencing: off';
+    }
+  }
+
+  // FITS cutout (feature 109): fetch a real DP1 SODA image cutout at the view
+  // centre and display honest linear-float pixels with a calibrated WCS readout.
+  // Auth-gated (cutouts REQUIRE an RSP token with DP1 rights) — the offline / no-
+  // token path surfaces the thrown error VERBATIM, never a blank/black panel.
+  const CUTOUT_SIZE_ARCSEC = 30;
+  let cutoutOpen = $state(false);
+  let cutoutStatus = $state<'idle' | 'loading' | 'loaded' | 'error'>('idle');
+  let cutoutImage = $state<FitsImage | null>(null);
+  let cutoutError = $state<string | null>(null);
+  let cutoutMeta = $state<{ ra: number; dec: number; band: string; datasetId: string } | null>(null);
+
+  // The single ugrizy band to cut: an explicit single-band Rubin dataset picks
+  // that band; in the offline cube use its band; otherwise default to r (the
+  // deep-coadd reference band). Always a valid ugrizy band for the SODA discovery.
+  const cutoutBand = $derived(
+    rubinDataset.startsWith('band_')
+      ? rubinDataset.slice('band_'.length)
+      : baseLayerId === 'offline'
+        ? offlineBand
+        : 'r'
+  );
+
+  async function fetchCutout() {
+    cutoutStatus = 'loading';
+    cutoutError = null;
+    cutoutImage = null;
+    const ra = currentRa;
+    const dec = currentDec;
+    const band = cutoutBand;
+    statusMessage = `Fetching FITS cutout at ${ra.toFixed(3)}, ${dec.toFixed(3)} (band ${band})…`;
+    try {
+      const { fits, id } = await fetchCutoutAt({ ra, dec, sizeArcsec: CUTOUT_SIZE_ARCSEC, band });
+      const parsed = readFits(fits);
+      cutoutImage = parsed;
+      cutoutMeta = { ra, dec, band, datasetId: id };
+      cutoutStatus = 'loaded';
+      statusMessage = `FITS cutout: ${parsed.width}×${parsed.height} px from ${id}`;
+    } catch (e) {
+      // Surface the thrown message VERBATIM (e.g. "requires sign-in", "No DP1
+      // image covers this position") — never a silent/blank failure.
+      cutoutError = e instanceof Error ? e.message : String(e);
+      cutoutStatus = 'error';
+      statusMessage = `Cutout: ${cutoutError}`;
+    }
+  }
+
+  function toggleCutout() {
+    cutoutOpen = !cutoutOpen;
+    if (cutoutOpen) {
+      void fetchCutout();
+    } else {
+      cutoutStatus = 'idle';
+      cutoutImage = null;
+      cutoutError = null;
+      cutoutMeta = null;
+      statusMessage = 'FITS cutout: off';
     }
   }
 
@@ -975,6 +1037,17 @@
 
         <button
           class="xsection-toggle"
+          class:on={cutoutOpen}
+          aria-pressed={cutoutOpen}
+          aria-label="Toggle FITS cutout"
+          title="Fetch a real DP1 SODA image cutout at the view centre — linear-float FITS pixels with a calibrated RA/Dec readout (requires an RSP token with DP1 rights)"
+          onclick={toggleCutout}
+        >
+          🔬 Cutout
+        </button>
+
+        <button
+          class="xsection-toggle"
           aria-label="Save PNG screenshot"
           title="Download the current view (base + overlays + grid) as a PNG image"
           onclick={() => { imageViewerRef?.exportPng(); statusMessage = 'Saved PNG screenshot of the current view'; }}
@@ -1077,7 +1150,7 @@
         <span class="ai-note">synthetic demo event</span>
       </div>
     {/if}
-    {#if uiVisible && (identifyInfo || simbadQuery || showCatalog || showLenses || crossSectionMode || surfaceMode || lightCurveMode || (diffMode && baseLayerId === 'offline'))}
+    {#if uiVisible && (identifyInfo || simbadQuery || showCatalog || showLenses || crossSectionMode || surfaceMode || lightCurveMode || cutoutOpen || (diffMode && baseLayerId === 'offline'))}
       <!-- Right-side stack: the object-ID popup sits ABOVE the analysis plots so
            they never overlap. -->
       <div class="right-stack">
@@ -1125,6 +1198,31 @@
             onBChange={(i) => { diffBIndex = i; }}
             onClose={toggleDiff}
           />
+        {/if}
+        {#if cutoutOpen}
+          {#if cutoutStatus === 'loaded' && cutoutImage && cutoutMeta}
+            <CutoutPanel
+              image={cutoutImage}
+              ra={cutoutMeta.ra}
+              dec={cutoutMeta.dec}
+              band={cutoutMeta.band}
+              datasetId={cutoutMeta.datasetId}
+              onClose={toggleCutout}
+            />
+          {:else}
+            <div class="cutout-status" aria-label="FITS cutout status">
+              <div class="cs-header">
+                <span class="cs-title">FITS cutout</span>
+                <button class="cs-close" aria-label="Close cutout" onclick={toggleCutout}>×</button>
+              </div>
+              {#if cutoutStatus === 'loading'}
+                <div class="cs-loading" aria-label="Cutout loading">Fetching cutout…</div>
+              {:else if cutoutStatus === 'error'}
+                <div class="cs-error" aria-label="Cutout error">{cutoutError}</div>
+                <button class="cs-retry" aria-label="Retry cutout" onclick={fetchCutout}>Retry at view centre</button>
+              {/if}
+            </div>
+          {/if}
         {/if}
         {#if crossSectionMode}
           <CrossSectionPlot profile={crossSectionProfile} onClose={toggleCrossSection} />
@@ -1413,5 +1511,45 @@
 
   .ui-hidden .viewer-area {
     height: 100vh;
+  }
+
+  .cutout-status {
+    background: rgba(12, 14, 22, 0.97);
+    border: 1px solid rgba(120, 200, 255, 0.5);
+    border-radius: 8px;
+    padding: 8px 10px;
+    color: #d8e2f0;
+    font-size: 11px;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    width: 300px;
+  }
+  .cutout-status .cs-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+  }
+  .cutout-status .cs-title { color: #9cf; font-weight: 700; }
+  .cutout-status .cs-close {
+    background: none;
+    border: none;
+    color: #aaa;
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .cutout-status .cs-close:hover { color: #fff; }
+  .cutout-status .cs-loading { color: #9cf; }
+  .cutout-status .cs-error { color: #f99; white-space: pre-wrap; line-height: 1.4; }
+  .cutout-status .cs-retry {
+    margin-top: 8px;
+    background: rgba(20, 40, 60, 0.9);
+    border: 1px solid rgba(120, 200, 255, 0.5);
+    border-radius: 5px;
+    color: #bdf;
+    font: inherit;
+    font-size: 10px;
+    padding: 3px 8px;
+    cursor: pointer;
   }
 </style>
