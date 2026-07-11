@@ -15,6 +15,7 @@
     "test:geometry": "vitest run tests/unit/projection.test.ts",
     "test:regression": "vitest run tests/regression",
     "test:ui": "playwright test",
+    "test:live": "playwright test tests/ui/live-dp1-token.spec.ts",
     "test:visual": "playwright test tests/ui/visual-regression.spec.ts tests/ui/interaction-outcomes.spec.ts",
     "test:visual:update": "playwright test tests/ui/visual-regression.spec.ts --update-snapshots",
     "lint": "eslint src/ tests/",
