@@ -95,6 +95,8 @@
     showMagnifier = false,
     catalog = null,
     selectedCatalogIndex = -1,
+    lensCatalog = null,
+    selectedLensIndex = -1,
     rulerMode = false,
     onRulerChange,
     offlineBand = 'r' as Band,
@@ -155,6 +157,11 @@
     catalog?: CatalogSet | null;
     /** Index of the selected catalog source (highlighted marker), or -1. */
     selectedCatalogIndex?: number;
+    /** Gravitational-lens overlay (feature 130) — an INDEPENDENT labelled layer,
+     *  drawn on top of (and never replacing) the `catalog` layer; null = none. */
+    lensCatalog?: CatalogSet | null;
+    /** Index of the selected lens (highlighted marker), or -1. */
+    selectedLensIndex?: number;
     /** When true, dragging measures a great-circle distance instead of panning. */
     rulerMode?: boolean;
     /** Fired with the current ruler measurement (or null when cleared). */
@@ -691,6 +698,7 @@
     renderGraticule();
     renderCoverage();
     renderCatalog();
+    renderLensCatalog();
     renderAlerts();
     renderCrossSection();
     renderRuler();
@@ -726,6 +734,59 @@
         ctx.arc(x, y, 4, 0, Math.PI * 2);
         ctx.stroke();
       }
+    }
+    ctx.restore();
+  }
+
+  /**
+   * Draw the gravitational-lens overlay (feature 130) as LABELLED markers on the
+   * main canvas: a gold diamond per lens with its name beside it, the selected
+   * lens highlighted with a ring + crosshair. This is a separate layer from
+   * {@link renderCatalog} (which is cyan, unlabelled) so a lens overlay and a
+   * Gaia overlay can be shown at the same time without either wiping the other.
+   * Lenses off-canvas or on the far hemisphere (non-finite projection) are skipped.
+   */
+  function renderLensCatalog() {
+    if (!ctx || !lensCatalog || lensCatalog.count === 0) return;
+    const view = currentView();
+    ctx.save();
+    ctx.lineWidth = 1.4;
+    ctx.font = '11px monospace';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    for (let i = 0; i < lensCatalog.count; i++) {
+      const [x, y] = skyToCanvas(view, lensCatalog.ra[i]!, lensCatalog.dec[i]!);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      if (x < -8 || y < -8 || x > canvasWidth + 8 || y > canvasHeight + 8) continue;
+
+      const selected = i === selectedLensIndex;
+      const r = selected ? 8 : 5;
+      // Diamond marker (rotated square) so lenses read differently from the round
+      // Gaia markers even for a colour-blind viewer.
+      ctx.strokeStyle = selected ? '#fff27a' : 'rgba(255,190,60,0.9)';
+      ctx.beginPath();
+      ctx.moveTo(x, y - r);
+      ctx.lineTo(x + r, y);
+      ctx.lineTo(x, y + r);
+      ctx.lineTo(x - r, y);
+      ctx.closePath();
+      ctx.stroke();
+      if (selected) {
+        ctx.beginPath();
+        ctx.moveTo(x - r - 5, y); ctx.lineTo(x - r - 1, y);
+        ctx.moveTo(x + r + 1, y); ctx.lineTo(x + r + 5, y);
+        ctx.stroke();
+      }
+
+      // Name label, with a dark backing stroke so it stays legible over imagery.
+      const label = lensCatalog.label[i] ?? '';
+      const lx = x + r + 4;
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = 'rgba(0,0,0,0.75)';
+      ctx.strokeText(label, lx, y);
+      ctx.fillStyle = selected ? '#fff6b0' : 'rgba(255,214,140,0.95)';
+      ctx.fillText(label, lx, y);
+      ctx.lineWidth = 1.4;
     }
     ctx.restore();
   }
@@ -917,6 +978,8 @@
     void rulerMode;
     void catalog;
     void selectedCatalogIndex;
+    void lensCatalog;
+    void selectedLensIndex;
     scheduleRender();
   });
 

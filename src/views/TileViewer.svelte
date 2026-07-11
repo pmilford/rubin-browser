@@ -17,6 +17,7 @@
   import CatalogTable from '../components/CatalogTable.svelte';
   import { fetchGaiaCone } from '../api/gaia.js';
   import { gaiaToCatalogSet, type CatalogSet } from '../data/catalog.js';
+  import { lensCatalogSet } from '../data/lenses.js';
   import SurfacePlot from '../components/SurfacePlot.svelte';
   import { OFFLINE_EPOCHS, OFFLINE_BANDS, brightestOfflineVariable, offlineLightCurve } from '../data/offlineDataset.js';
   import LightCurvePlot from '../components/LightCurvePlot.svelte';
@@ -313,6 +314,32 @@
     currentDec = dec;
     imageViewerRef?.panTo(ra, dec);
     statusMessage = `Gaia: ${catalog.label[i]} at ${ra.toFixed(4)}, ${dec.toFixed(4)}`;
+  }
+
+  // Gravitational-lens overlay + linked table (feature 130). A bundled, curated
+  // set of ~19 web-verified strong lenses — an INDEPENDENT layer from the Gaia
+  // overlay above (both can be on at once; neither wipes the other). Clicking a
+  // lens row recenters the view and reports its name / type / redshift.
+  let showLenses = $state(false);
+  let lensCatalog = $state<CatalogSet | null>(null);
+  let selectedLensIndex = $state(-1);
+  function toggleLenses() {
+    showLenses = !showLenses;
+    if (showLenses && !lensCatalog) lensCatalog = lensCatalogSet();
+    statusMessage = showLenses
+      ? `Gravitational lenses: ${lensCatalog!.count} known strong lenses overlaid`
+      : 'Gravitational lenses: off';
+  }
+  function handleLensSelect(i: number) {
+    if (!lensCatalog || i < 0 || i >= lensCatalog.count) return;
+    selectedLensIndex = i;
+    const ra = lensCatalog.ra[i]!;
+    const dec = lensCatalog.dec[i]!;
+    currentRa = ra;
+    currentDec = dec;
+    imageViewerRef?.panTo(ra, dec);
+    const rec = lensCatalog.records[i]!;
+    statusMessage = `Lens: ${rec['Name']} — ${rec['Type']} · z_lens ${rec['z_lens']} · z_source ${rec['z_source']}`;
   }
 
   // Magnifier loupe of the pixels under the cursor.
@@ -717,6 +744,8 @@
       {showMagnifier}
       catalog={showCatalog ? catalog : null}
       {selectedCatalogIndex}
+      lensCatalog={showLenses ? lensCatalog : null}
+      {selectedLensIndex}
       {rulerMode}
       onRulerChange={handleRulerChange}
       {rubinDataset}
@@ -913,6 +942,17 @@
 
         <button
           class="xsection-toggle"
+          class:on={showLenses}
+          aria-pressed={showLenses}
+          aria-label="Toggle gravitational lens catalog"
+          title="Overlay known strong gravitational lenses (bundled, web-verified) + a linked table — click a lens to recenter and see its type/redshift"
+          onclick={toggleLenses}
+        >
+          ⬦ Lenses{#if showLenses && lensCatalog} ({lensCatalog.count}){/if}
+        </button>
+
+        <button
+          class="xsection-toggle"
           class:on={rulerMode}
           aria-pressed={rulerMode}
           aria-label="Toggle distance ruler"
@@ -1037,7 +1077,7 @@
         <span class="ai-note">synthetic demo event</span>
       </div>
     {/if}
-    {#if uiVisible && (identifyInfo || simbadQuery || showCatalog || crossSectionMode || surfaceMode || lightCurveMode || (diffMode && baseLayerId === 'offline'))}
+    {#if uiVisible && (identifyInfo || simbadQuery || showCatalog || showLenses || crossSectionMode || surfaceMode || lightCurveMode || (diffMode && baseLayerId === 'offline'))}
       <!-- Right-side stack: the object-ID popup sits ABOVE the analysis plots so
            they never overlap. -->
       <div class="right-stack">
@@ -1062,6 +1102,15 @@
             status={catalogLoading ? 'Loading…' : catalogStatus}
             onSelect={handleCatalogSelect}
             onClose={toggleCatalog}
+          />
+        {/if}
+        {#if showLenses}
+          <CatalogTable
+            catalog={lensCatalog}
+            selectedIndex={selectedLensIndex}
+            title="Gravitational lenses"
+            onSelect={handleLensSelect}
+            onClose={toggleLenses}
           />
         {/if}
         {#if diffMode && baseLayerId === 'offline'}
