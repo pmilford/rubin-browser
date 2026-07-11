@@ -1,5 +1,32 @@
 # CLAUDE.md — Rubin Browser
 
+## MANDATORY: Research the API/tool BEFORE coding against it
+
+A whole cluster of bugs here shared ONE root cause — **guessing an external API
+instead of reading its docs**: the wrong TAP endpoint (`/api/dp1` vs
+`/api/tap/sync`), the UWS 303-redirect CORS failure, a guessed SODA cutout
+endpoint, `ForcedSource` cone-searched by coordinates (Rubin requires querying by
+`objectId`), a "dangerous" `ORDER BY … TOP` on `DiaSource`, opaque `gt-` tokens
+treated as JWTs, and no `429`/`Retry-After` handling. Every one was avoidable by
+reading the docs first. **The process, not the individual bug, is what matters.**
+
+Before writing (or substantially changing) any client for an external API,
+service, library, or tool:
+
+1. **Read the authoritative docs first** — official tutorials, the schema /
+   reference, IVOA/format standards, and where limits live, the service's own
+   source or deployed config. Do NOT infer an endpoint, query pattern, or auth
+   model from naming conventions or from "what parses."
+2. **Capture** the correct endpoint, auth scopes, the *recommended* access pattern
+   (not merely one that returns data), rate limits + backoff, redirect/async
+   behaviour, and any documented **anti-patterns**.
+3. **Fold those findings into the spec's data-flow + failure-modes** (below), then
+   code. A short research pass (web search + primary docs) beats guessing every
+   time.
+
+Rubin/IVOA specifics and per-API limits are recorded in `docs/rubin-api-usage.md`
+— read it before touching `src/api/*`, and keep it current when you learn more.
+
 ## MANDATORY: Design review before coding (non-trivial features)
 
 Most bugs caught by the user here were "obvious in hindsight" — a reflected tile,

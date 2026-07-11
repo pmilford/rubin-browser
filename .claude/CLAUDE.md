@@ -58,6 +58,14 @@ Keep this math here — do not re-inline it into the component.
 
 ## Rubin Data Access
 
+> **Read the docs before coding against these.** The endpoints, quotas, scopes,
+> the *recommended* access patterns, and documented anti-patterns for every RSP/
+> IVOA API are captured in `docs/rubin-api-usage.md` (with source URLs). Consult
+> it — and the primary docs (dp1.lsst.io, the IVOA standards, the service source)
+> — before touching `src/api/*`. Guessing an endpoint/query/auth model from
+> naming was the root cause of this project's biggest bug cluster. See the root
+> CLAUDE.md "MANDATORY: Research the API/tool BEFORE coding against it."
+
 - **TAP (sync)**: `https://data.lsst.cloud/api/tap/sync` (POST, ADQL). NOTE: `dp1`
   is the SCHEMA (`FROM dp1.Object`), NOT a URL path — the old `/api/dp1/sync` is an
   unregistered route and returned the RSP portal SPA HTML. Verified: dp1.lsst.io.
