@@ -469,13 +469,27 @@ export function formatScaleLabel(deg: number): string {
 }
 
 /**
- * A scale bar whose length reflects the REAL projected pixels-per-degree at the
- * view center (measured by projecting the center and a small Dec offset), with a
- * "nice" angular length chosen so its projected length lands near ~80px — not
- * the old "assume 400px" constant. Doubling the FOV halves pixels-per-degree, so
- * the picker climbs the nice ladder while the projected px stays in-band.
+ * A "relevant-sized" scale bar: the LARGEST astronomer-friendly (1/2/5×10ⁿ)
+ * angular length that is still ≤ a fraction (`maxFovFraction`, default 1/5) of
+ * the view's FOV, labelled in its natural unit (″/′/°). This gives a predictable
+ * clean fraction of the view — e.g. a 1° FOV yields a 10′ bar (15′ = 0.25° would
+ * exceed 1/5), a 22.5° FOV yields 2° (5° too big).
+ *
+ * The drawn LENGTH is the chosen angle times the REAL projected pixels-per-degree
+ * at the view center (measured by projecting the center and a small Dec offset),
+ * so the bar is physically correct — a visual test can verify its px length
+ * against the projection. Doubling the FOV halves pixels-per-degree.
+ *
+ * `targetPx` is retained for signature compatibility (older ~80px-target callers)
+ * but no longer drives selection; `maxFovFraction` is the primary selector.
  */
-export function scaleBar(view: GraticuleView, targetPx = 80): ScaleBar {
+export function scaleBar(
+  view: GraticuleView,
+  targetPx = 80,
+  maxFovFraction = 0.2,
+): ScaleBar {
+  void targetPx; // kept for backward-compatible signature; not used for selection
+
   const c = skyToCanvas(view, view.ra, view.dec);
   // Probe a small Dec offset toward the interior (flip near the pole).
   const dProbe = Math.max(view.fov * 1e-3, 1e-6);
@@ -484,17 +498,17 @@ export function scaleBar(view: GraticuleView, targetPx = 80): ScaleBar {
   const p = skyToCanvas(view, view.ra, d2);
   const pxPerDeg = Math.hypot(p[0] - c[0], p[1] - c[1]) / dProbe;
 
-  const target = targetPx / Math.max(pxPerDeg, 1e-9); // target length in deg
-  // Pick the nice length whose projected px is closest to target (log space).
+  // Largest nice angle whose length is ≤ maxFovFraction of the FOV. NICE_ANGLES_DEG
+  // is ascending, so the last qualifying entry is the largest. If none qualifies
+  // (FOV smaller than the smallest nice angle / fraction), fall back to the
+  // smallest nice angle so the bar is never empty.
+  const bound = maxFovFraction * view.fov;
   let best = NICE_ANGLES_DEG[0]!;
-  let bestErr = Infinity;
   for (const cand of NICE_ANGLES_DEG) {
-    const err = Math.abs(Math.log(cand / target));
-    if (err < bestErr) {
-      bestErr = err;
-      best = cand;
-    }
+    if (cand <= bound) best = cand;
+    else break;
   }
+
   return {
     lengthPx: best * pxPerDeg,
     labelDeg: best,

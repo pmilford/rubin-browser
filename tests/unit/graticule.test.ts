@@ -21,6 +21,7 @@ import {
   type GraticuleView,
   type GraticuleLine,
 } from '../../src/utils/graticule.js';
+import { skyToCanvas } from '../../src/utils/projection.js';
 
 const view = (over: Partial<GraticuleView> = {}): GraticuleView => ({
   ra: 62,
@@ -126,7 +127,9 @@ describe('scaleBar: length from REAL pixels-per-degree, not an assumed width', (
     for (const fov of [0.1, 0.5, 2, 5, 22.5, 45, 60]) {
       const bar = scaleBar(view({ fov }));
       expect(bar.lengthPx).toBeGreaterThan(40);
-      expect(bar.lengthPx).toBeLessThan(160);
+      // Upper bound is now the relevant-sizing cap: length ≤ 1/5 of the FOV, and
+      // pxPerDeg ≈ canvasWidth/fov, so lengthPx ≤ 0.2·800 = 160 (fov=5 hits it).
+      expect(bar.lengthPx).toBeLessThanOrEqual(160 + 1e-3);
     }
   });
 
@@ -149,6 +152,121 @@ describe('scaleBar: length from REAL pixels-per-degree, not an assumed width', (
       const deg = scaleBar(view({ fov })).labelDeg;
       expect(deg).toBeGreaterThanOrEqual(prev);
       prev = deg;
+    }
+  });
+});
+
+describe('scaleBar relevant sizing (TODO 137: largest 1/2/5×10ⁿ ≤ 1/5 FOV)', () => {
+  const ARCSEC = 1 / 3600;
+  const ARCMIN = 1 / 60;
+  // Mirror the module's ascending nice ladder so the test has an INDEPENDENT
+  // ground truth for "the largest nice value under the bound" (an impl that
+  // hardcodes or picks the closest-px value cannot satisfy this).
+  const NICE: number[] = [
+    1 * ARCSEC, 2 * ARCSEC, 5 * ARCSEC, 10 * ARCSEC, 15 * ARCSEC, 30 * ARCSEC,
+    1 * ARCMIN, 2 * ARCMIN, 5 * ARCMIN, 10 * ARCMIN, 15 * ARCMIN, 30 * ARCMIN,
+    1, 2, 5, 10, 20, 30, 45,
+  ];
+  const EPS = 1e-9;
+
+  it('picks the LARGEST nice value ≤ 1/5·FOV — kills closest-px and too-small impls', () => {
+    for (const fov of [0.02, 0.05, 0.1, 0.5, 1, 5, 22.5, 45, 90, 180]) {
+      const { labelDeg } = scaleBar(view({ fov }));
+      const bound = 0.2 * fov;
+      // (a) never exceeds 1/5 of the FOV (unless the fallback for tiny FOV kicked
+      //     in — handled separately below; here every FOV ≥ smallest/0.2).
+      const smallest = NICE[0]!;
+      if (bound >= smallest - EPS) {
+        expect(labelDeg).toBeLessThanOrEqual(bound + EPS);
+        // (b) it is the LARGEST such nice value: no bigger nice value also fits.
+        const expected = NICE.filter((n) => n <= bound + EPS).reduce((a, b) => Math.max(a, b));
+        expect(labelDeg).toBeCloseTo(expected, 12);
+        // Adversarial: assert nothing strictly larger in the ladder would have fit.
+        const larger = NICE.filter((n) => n > labelDeg + EPS);
+        for (const n of larger) expect(n).toBeGreaterThan(bound + EPS);
+      }
+    }
+  });
+
+  it('matches the exact worked examples', () => {
+    // FOV 1°: 1/5 = 0.2°; largest nice ≤ 0.2° is 10′ (15′ = 0.25° too big).
+    expect(scaleBar(view({ fov: 1 })).labelDeg).toBeCloseTo(10 * ARCMIN, 12);
+    expect(scaleBar(view({ fov: 1 })).label).toBe('10′');
+    // FOV 22.5°: 1/5 = 4.5°; largest nice ≤ 4.5° is 2° (5° too big).
+    expect(scaleBar(view({ fov: 22.5 })).labelDeg).toBeCloseTo(2, 12);
+    expect(scaleBar(view({ fov: 22.5 })).label).toBe('2°');
+    // FOV 0.05° (3′): 1/5 = 36″; largest nice ≤ 36″ is 30″.
+    expect(scaleBar(view({ fov: 0.05 })).labelDeg).toBeCloseTo(30 * ARCSEC, 12);
+    expect(scaleBar(view({ fov: 0.05 })).label).toBe('30″');
+    // FOV 180°: 1/5 = 36°; largest nice ≤ 36° is 30°.
+    expect(scaleBar(view({ fov: 180 })).labelDeg).toBeCloseTo(30, 12);
+    expect(scaleBar(view({ fov: 180 })).label).toBe('30°');
+  });
+
+  it('lengthPx is finite, > 0, and equals labelDeg × the SAME measured pxPerDeg', () => {
+    // Construct a view where we can measure pxPerDeg independently by probing the
+    // projection the way the impl does, then assert lengthPx = labelDeg·pxPerDeg.
+    // This kills a hardcoded/constant lengthPx: the ratio must equal pxPerDeg AND
+    // be identical across two different chosen bar lengths (proportional to angle).
+    const measurePxPerDeg = (fov: number): number => {
+      const v = view({ fov });
+      const c = skyToCanvas(v, v.ra, v.dec);
+      const dProbe = Math.max(v.fov * 1e-3, 1e-6);
+      let d2 = v.dec + dProbe;
+      if (d2 > 90) d2 = v.dec - dProbe;
+      const p = skyToCanvas(v, v.ra, d2);
+      return Math.hypot(p[0] - c[0], p[1] - c[1]) / dProbe;
+    };
+    for (const fov of [0.05, 0.5, 5, 45, 180]) {
+      const bar = scaleBar(view({ fov }));
+      const pxPerDeg = measurePxPerDeg(fov);
+      expect(Number.isFinite(bar.lengthPx)).toBe(true);
+      expect(bar.lengthPx).toBeGreaterThan(0);
+      expect(bar.lengthPx).toBeCloseTo(bar.labelDeg * pxPerDeg, 6);
+      // px-per-degree recovered from the bar equals the real measured scale — not
+      // a fixed 80px target or an "assume 400px" constant.
+      expect(bar.lengthPx / bar.labelDeg).toBeCloseTo(pxPerDeg, 6);
+    }
+  });
+
+  it('labels in the natural unit: ″ below 1′, ′ below 1°, ° at/above 1°', () => {
+    // FOV 0.03° → bound 21.6″ → 15″ → arcsec label.
+    expect(scaleBar(view({ fov: 0.03 })).label.endsWith('″')).toBe(true);
+    // FOV 3° → bound 0.6° = 36′ → 30′ → arcmin label.
+    expect(scaleBar(view({ fov: 3 })).label.endsWith('′')).toBe(true);
+    // FOV 30° → bound 6° → 5° → degree label.
+    expect(scaleBar(view({ fov: 30 })).label.endsWith('°')).toBe(true);
+    // Boundary: labelDeg < 1/60 must be arcsec, < 1 arcmin, ≥ 1 degree.
+    for (const fov of [0.01, 0.05, 0.5, 3, 30, 180]) {
+      const { labelDeg, label } = scaleBar(view({ fov }));
+      if (labelDeg < ARCMIN - EPS) expect(label.endsWith('″')).toBe(true);
+      else if (labelDeg < 1 - EPS) expect(label.endsWith('′')).toBe(true);
+      else expect(label.endsWith('°')).toBe(true);
+    }
+  });
+
+  it('a degenerate / tiny FOV never returns an empty or NaN bar (falls back to smallest nice)', () => {
+    // 1/5·FOV below the smallest nice angle (1″ = 1/3600°) → fallback to 1″, not
+    // empty/NaN. Fallback triggers for FOV < 1″/0.2 ≈ 0.00139°.
+    for (const fov of [1e-6, 1e-4, 0.001, 0.0012]) {
+      const bar = scaleBar(view({ fov }));
+      expect(Number.isFinite(bar.labelDeg)).toBe(true);
+      expect(bar.labelDeg).toBeGreaterThan(0);
+      expect(bar.labelDeg).toBeCloseTo(NICE[0]!, 12); // 1″ fallback
+      expect(bar.label).toBe('1″');
+      expect(Number.isFinite(bar.lengthPx)).toBe(true);
+      expect(bar.lengthPx).toBeGreaterThan(0);
+    }
+  });
+
+  it('maxFovFraction param is honoured (a smaller fraction never picks a larger bar)', () => {
+    // Independent lever: tightening the fraction can only keep or shrink the bar.
+    for (const fov of [0.5, 5, 45]) {
+      const wide = scaleBar(view({ fov }), 80, 0.2).labelDeg;
+      const tight = scaleBar(view({ fov }), 80, 0.1).labelDeg;
+      expect(tight).toBeLessThanOrEqual(wide + EPS);
+      // And 0.1 fraction stays within its own bound.
+      expect(tight).toBeLessThanOrEqual(0.1 * fov + EPS);
     }
   });
 });
