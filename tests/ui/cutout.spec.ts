@@ -151,7 +151,7 @@ test('FITS cutout: panel renders non-black pixels and a plausible RA/Dec readout
   await expect(readout).toContainText(/RA\s*1\d\d\.\d/, { timeout: 5000 });
   const text = (await readout.textContent()) ?? '';
   const raMatch = text.match(/RA\s*([\d.]+)/);
-  const decMatch = text.match(/Dec\s*([+\-]?[\d.]+)/);
+  const decMatch = text.match(/Dec\s*([+-]?[\d.]+)/);
   expect(raMatch).not.toBeNull();
   expect(decMatch).not.toBeNull();
   expect(Number(raMatch![1])).toBeGreaterThan(149.9);

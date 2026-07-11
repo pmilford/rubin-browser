@@ -18,7 +18,8 @@
   import { readFits, type FitsImage } from '../utils/fits.js';
   import { radecToTileIndex } from '../api/hips.js';
   import CatalogTable from '../components/CatalogTable.svelte';
-  import { fetchGaiaCone } from '../api/gaia.js';
+  import ColorMagnitudeDiagram from '../components/ColorMagnitudeDiagram.svelte';
+  import { fetchGaiaCone, type GaiaCatalog } from '../api/gaia.js';
   import { gaiaToCatalogSet, type CatalogSet } from '../data/catalog.js';
   import { lensCatalogSet } from '../data/lenses.js';
   import SurfacePlot from '../components/SurfacePlot.svelte';
@@ -339,20 +340,30 @@
     }
   }
 
-  // Gaia catalog overlay + linked table (public ESA Gaia TAP — no RSP token).
+  // Gaia catalog overlay + linked table + colour–magnitude diagram (public ESA
+  // Gaia TAP — no RSP token). `gaiaRaw` keeps the rich columnar catalog (BP−RP,
+  // parallax, PM) so the CMD can plot real data; `catalog` is the overlay/table
+  // adapter. Their indices are 1:1, so one `selectedCatalogIndex` links the sky
+  // marker, the table row, AND the CMD point.
   let showCatalog = $state(false);
   let catalog = $state<CatalogSet | null>(null);
+  let gaiaRaw = $state<GaiaCatalog | null>(null);
   let catalogStatus = $state<string | null>(null);
   let catalogLoading = $state(false);
   let selectedCatalogIndex = $state(-1);
+  // Proper-motion arrows on the Gaia markers (default off — off by default so the
+  // overlay stays uncluttered until the user asks for the vectors).
+  let showPmVectors = $state(false);
 
   async function loadGaiaCatalog() {
     catalogLoading = true;
     catalog = null;
+    gaiaRaw = null;
     selectedCatalogIndex = -1;
     catalogStatus = `Querying Gaia DR3 near ${currentRa.toFixed(3)}, ${currentDec.toFixed(3)}…`;
     try {
       const cat = await fetchGaiaCone({ ra: currentRa, dec: currentDec, radiusDeg: 0.2, maxRows: 2000 });
+      gaiaRaw = cat;
       catalog = gaiaToCatalogSet(cat);
       catalogStatus = catalog.count > 0 ? null : 'No Gaia sources in this 12′ cone.';
       statusMessage = `Gaia DR3: ${catalog.count.toLocaleString()} sources near the view centre`;
@@ -366,6 +377,12 @@
     showCatalog = !showCatalog;
     if (showCatalog && !catalog) void loadGaiaCatalog();
     statusMessage = showCatalog ? 'Gaia catalog: on' : 'Gaia catalog: off';
+  }
+  function togglePmVectors() {
+    showPmVectors = !showPmVectors;
+    statusMessage = showPmVectors
+      ? 'Gaia proper-motion vectors: on (arrow = μα*, μδ direction)'
+      : 'Gaia proper-motion vectors: off';
   }
   function handleCatalogSelect(i: number) {
     if (!catalog || i < 0 || i >= catalog.count) return;
@@ -806,6 +823,7 @@
       {showMagnifier}
       catalog={showCatalog ? catalog : null}
       {selectedCatalogIndex}
+      {showPmVectors}
       lensCatalog={showLenses ? lensCatalog : null}
       {selectedLensIndex}
       {rulerMode}
@@ -1002,6 +1020,19 @@
           ◎ Gaia{#if showCatalog && catalog} ({catalog.count.toLocaleString()}){/if}
         </button>
 
+        {#if showCatalog}
+          <button
+            class="xsection-toggle"
+            class:on={showPmVectors}
+            aria-pressed={showPmVectors}
+            aria-label="Toggle Gaia proper-motion vectors"
+            title="Draw proper-motion arrows (μα*, μδ) from each Gaia marker — direction + length show the star's motion on the sky"
+            onclick={togglePmVectors}
+          >
+            ↗ PM vectors
+          </button>
+        {/if}
+
         <button
           class="xsection-toggle"
           class:on={showLenses}
@@ -1176,6 +1207,14 @@
             onSelect={handleCatalogSelect}
             onClose={toggleCatalog}
           />
+          {#if gaiaRaw && gaiaRaw.count > 0}
+            <ColorMagnitudeDiagram
+              catalog={gaiaRaw}
+              selectedIndex={selectedCatalogIndex}
+              onSelect={handleCatalogSelect}
+              onClose={toggleCatalog}
+            />
+          {/if}
         {/if}
         {#if showLenses}
           <CatalogTable

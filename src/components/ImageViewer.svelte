@@ -45,6 +45,7 @@
   import { offlineTileRGBA, OFFLINE_TILE_SIZE, OFFLINE_MJD } from '../data/offlineDataset.js';
   import { dp1CoverageCircles, coverageCirclePoints } from '../data/footprint.js';
   import type { CatalogSet } from '../data/catalog.js';
+  import { pmVectorEndpoint } from '../utils/gaiaViz.js';
   import { touchLru, evictLru } from '../utils/tileCache.js';
   import type { Band } from '../data/syntheticSky.js';
   import { constellationFor } from '../utils/constellation.js';
@@ -95,6 +96,7 @@
     showMagnifier = false,
     catalog = null,
     selectedCatalogIndex = -1,
+    showPmVectors = false,
     lensCatalog = null,
     selectedLensIndex = -1,
     rulerMode = false,
@@ -157,6 +159,9 @@
     catalog?: CatalogSet | null;
     /** Index of the selected catalog source (highlighted marker), or -1. */
     selectedCatalogIndex?: number;
+    /** When true, draw proper-motion arrows from each catalog marker that has a
+     *  finite (pmRA*, pmDec) in `catalog.pmRaMasYr`/`pmDecMasYr`. */
+    showPmVectors?: boolean;
     /** Gravitational-lens overlay (feature 130) — an INDEPENDENT labelled layer,
      *  drawn on top of (and never replacing) the `catalog` layer; null = none. */
     lensCatalog?: CatalogSet | null;
@@ -710,17 +715,62 @@
    * source highlighted. Sources off-canvas or on the far hemisphere are skipped.
    * Bounded by the cone's row cap, so a per-frame projection sweep is cheap.
    */
+  // Pixels drawn per mas/yr of proper motion. Real stellar PM is a few to tens of
+  // mas/yr, so this makes the arrows visibly scale with PM at any zoom (a fast
+  // mover gets a long arrow) without swamping the 12′ overlay cone. Screen-space
+  // (fixed length regardless of zoom) so arrows never vanish when zoomed out.
+  const PM_ARROW_PX_PER_MASYR = 6;
+
   function renderCatalog() {
     if (!ctx || !catalog || catalog.count === 0) return;
     const view = currentView();
+    const colorRgb = catalog.colorRgb;
+    const pmRa = catalog.pmRaMasYr;
+    const pmDec = catalog.pmDecMasYr;
     ctx.save();
     ctx.lineWidth = 1.2;
     for (let i = 0; i < catalog.count; i++) {
       const [x, y] = skyToCanvas(view, catalog.ra[i]!, catalog.dec[i]!);
       if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
       if (x < -8 || y < -8 || x > canvasWidth + 8 || y > canvasHeight + 8) continue;
+
+      // Per-source colour from BP−RP (hot=blue → cool=red; NaN=grey) when the
+      // catalog provides it; otherwise the legacy cyan marker.
+      const fill = colorRgb
+        ? `rgb(${colorRgb[i * 3]},${colorRgb[i * 3 + 1]},${colorRgb[i * 3 + 2]})`
+        : 'rgba(90,220,255,0.85)';
+
+      // Proper-motion arrow (optional) along (pmRA*, pmDec) — drawn UNDER the
+      // marker so the coloured disc stays readable. Skipped for a NaN PM.
+      if (showPmVectors && pmRa && pmDec) {
+        const end = pmVectorEndpoint(x, y, pmRa[i]!, pmDec[i]!, PM_ARROW_PX_PER_MASYR);
+        if (end && (Math.abs(end.x - x) > 0.5 || Math.abs(end.y - y) > 0.5)) {
+          ctx.strokeStyle = 'rgba(255,255,255,0.92)';
+          ctx.lineWidth = 1.4;
+          ctx.beginPath();
+          ctx.moveTo(x, y);
+          ctx.lineTo(end.x, end.y);
+          ctx.stroke();
+          // Small arrowhead at the tip.
+          const ang = Math.atan2(end.y - y, end.x - x);
+          const h = 4;
+          ctx.beginPath();
+          ctx.moveTo(end.x, end.y);
+          ctx.lineTo(end.x - h * Math.cos(ang - 0.5), end.y - h * Math.sin(ang - 0.5));
+          ctx.moveTo(end.x, end.y);
+          ctx.lineTo(end.x - h * Math.cos(ang + 0.5), end.y - h * Math.sin(ang + 0.5));
+          ctx.stroke();
+        }
+      }
+
       if (i === selectedCatalogIndex) {
+        // Filled coloured core + a bright yellow selection ring + crosshair.
+        ctx.fillStyle = fill;
+        ctx.beginPath();
+        ctx.arc(x, y, 4.5, 0, Math.PI * 2);
+        ctx.fill();
         ctx.strokeStyle = '#ff3';
+        ctx.lineWidth = 1.6;
         ctx.beginPath();
         ctx.arc(x, y, 8, 0, Math.PI * 2);
         ctx.stroke();
@@ -729,9 +779,14 @@
         ctx.moveTo(x + 5, y); ctx.lineTo(x + 12, y);
         ctx.stroke();
       } else {
-        ctx.strokeStyle = 'rgba(90,220,255,0.85)';
+        // Filled coloured disc (so a pixel sample at the marker reads its colour)
+        // with a thin dark edge for contrast over bright imagery.
+        ctx.fillStyle = fill;
         ctx.beginPath();
         ctx.arc(x, y, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+        ctx.lineWidth = 1;
         ctx.stroke();
       }
     }
@@ -978,6 +1033,7 @@
     void rulerMode;
     void catalog;
     void selectedCatalogIndex;
+    void showPmVectors;
     void lensCatalog;
     void selectedLensIndex;
     scheduleRender();

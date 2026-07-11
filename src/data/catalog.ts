@@ -19,11 +19,20 @@
 
 import { angularSeparation } from '../utils/skyGeom.js';
 import type { GaiaCatalog } from '../api/gaia.js';
+import { bpRpToRgb, parallaxToDistancePc } from '../utils/gaiaViz.js';
 
 /**
  * Columnar catalog store. `ra`/`dec`/`label`/`records` are all parallel arrays
  * indexed 0..count-1: source i is at (ra[i], dec[i]), draws marker `label[i]`,
  * and lists attribute map `records[i]` in the table.
+ *
+ * The trailing OPTIONAL columns carry richer per-source presentation the overlay
+ * renderer can use when a catalog provides it (Gaia does; the lens set does not):
+ *   - `colorRgb[i*3..i*3+2]` — the marker's RGB (Gaia colours markers by BP−RP).
+ *   - `pmRaMasYr[i]` / `pmDecMasYr[i]` — proper motion (μα*, μδ) in mas/yr for the
+ *     optional PM-vector arrows; NaN where a source has no measured proper motion.
+ * A catalog that omits these is drawn with the default marker style (unchanged),
+ * so adding them NEVER breaks the existing Gaia table or the lens overlay.
  */
 export interface CatalogSet {
   count: number;
@@ -31,6 +40,9 @@ export interface CatalogSet {
   dec: Float32Array; // degrees, [-90,90]
   label: string[]; // short marker/id per source
   records: Record<string, string | number>[]; // full attribute map per source (table row)
+  colorRgb?: Uint8ClampedArray; // optional per-source marker RGB (length count*3)
+  pmRaMasYr?: Float32Array; // optional per-source pmRA* (μα*, mas/yr), NaN if unknown
+  pmDecMasYr?: Float32Array; // optional per-source pmDec (μδ, mas/yr), NaN if unknown
 }
 
 /**
@@ -216,12 +228,25 @@ export function gaiaToCatalogSet(cat: GaiaCatalog): CatalogSet {
   const dec = new Float32Array(count);
   const label: string[] = new Array<string>(count);
   const records: Record<string, string | number>[] = new Array(count);
+  // Rich presentation columns: per-source marker colour (from BP−RP) and proper
+  // motion (for the optional PM arrows). A NaN BP−RP yields the neutral grey via
+  // bpRpToRgb, so every source gets a colour and none is dropped.
+  const colorRgb = new Uint8ClampedArray(count * 3);
+  const pmRaMasYr = new Float32Array(count);
+  const pmDecMasYr = new Float32Array(count);
 
   for (let i = 0; i < count; i++) {
     ra[i] = cat.ra[i]!;
     dec[i] = cat.dec[i]!;
     const sourceId = cat.sourceId[i] ?? '';
     label[i] = sourceId;
+
+    const [r, g, b] = bpRpToRgb(cat.bpRp[i]!);
+    colorRgb[i * 3] = r;
+    colorRgb[i * 3 + 1] = g;
+    colorRgb[i * 3 + 2] = b;
+    pmRaMasYr[i] = cat.pmRa[i]!;
+    pmDecMasYr[i] = cat.pmDec[i]!;
 
     const rec: Record<string, string | number> = {
       Catalog: 'Gaia DR3',
@@ -232,8 +257,13 @@ export function gaiaToCatalogSet(cat: GaiaCatalog): CatalogSet {
     numField(rec, 'pmRA (mas/yr)', cat.pmRa[i]!);
     numField(rec, 'pmDec (mas/yr)', cat.pmDec[i]!);
     numField(rec, 'Parallax (mas)', cat.parallax[i]!);
+    // Distance from parallax (1000/ϖ pc) — only for ϖ > 0; a non-positive parallax
+    // is real and unusable, so it shows the "no data" dash, never a bogus/negative
+    // distance. Rounded to whole parsecs for a compact readout.
+    const dpc = parallaxToDistancePc(cat.parallax[i]!);
+    rec['Distance (pc)'] = dpc === null ? CATALOG_NO_DATA : Math.round(dpc);
     records[i] = rec;
   }
 
-  return { count, ra, dec, label, records };
+  return { count, ra, dec, label, records, colorRgb, pmRaMasYr, pmDecMasYr };
 }
