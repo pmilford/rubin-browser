@@ -46,6 +46,7 @@
   import { GLOSSARY } from '../data/glossary.js';
   import { getToken, isAuthenticated } from '../api/auth.js';
   import { fetchLightCurve, toLightCurvePoints } from '../api/lightcurve.js';
+  import { fetchGaiaLightCurves } from '../api/gaiaLightCurve.js';
   import { fetchDiaAlerts } from '../api/diaSource.js';
   import type { LightCurvePoint } from '../data/offlineDataset.js';
   import { lookupObject, type AstroObject } from '../data/objects.js';
@@ -823,6 +824,38 @@
     statusMessage = lightCurveMode ? 'Light curve: on' : 'Light curve: off';
   }
 
+  // Gaia DR2 variable-star light curve (public GAVO epoch photometry, NO auth) —
+  // works on any base. Only ~550k DR2 variables exist, so most positions have none.
+  let gaiaLcMode = $state(false);
+  let gaiaLcCurve = $state<LightCurvePoint[] | null>(null);
+  let gaiaLcStatus = $state<string | null>(null);
+  let gaiaLcSourceId = $state<string | null>(null);
+  async function fetchGaiaLc() {
+    gaiaLcCurve = null;
+    gaiaLcSourceId = null;
+    gaiaLcStatus = `Searching Gaia DR2 variables at ${currentRa.toFixed(3)}, ${currentDec.toFixed(3)}…`;
+    try {
+      const vars = await fetchGaiaLightCurves({ ra: currentRa, dec: currentDec, radiusArcsec: 6 });
+      const withG = vars.filter((v) => v.g.length >= 2);
+      if (withG.length === 0) {
+        gaiaLcStatus =
+          'No Gaia DR2 variable here (only ~550k published variables have epoch photometry — try a known variable star).';
+        return;
+      }
+      const v = withG[0]!;
+      gaiaLcSourceId = v.sourceId;
+      gaiaLcCurve = v.g.map((p) => ({ mjd: p.mjd, intensity: p.intensity }));
+      gaiaLcStatus = null;
+    } catch (e) {
+      gaiaLcStatus = e instanceof Error ? e.message : 'Gaia light-curve fetch failed.';
+    }
+  }
+  function toggleGaiaLc() {
+    gaiaLcMode = !gaiaLcMode;
+    if (gaiaLcMode) void fetchGaiaLc();
+    statusMessage = gaiaLcMode ? 'Gaia variable light curve: on' : 'Gaia variable light curve: off';
+  }
+
   // Rubin DP1 multi-filter: switch the active HiPS dataset (gri/ugri/… colour
   // composites or a single ugrizy band). Shown when the Rubin base is active.
   let rubinDataset = $state(seed.rubinDataset ?? 'color_gri');
@@ -1551,6 +1584,16 @@
           >
             ⌇ Light curve
           </button>
+          <button
+            class="xsection-toggle"
+            class:on={gaiaLcMode}
+            aria-pressed={gaiaLcMode}
+            aria-label="Toggle Gaia variable light curve"
+            title="Gaia DR2 epoch-photometry light curve of a variable star at the view centre (public, no token)"
+            onclick={toggleGaiaLc}
+          >
+            ✧ Gaia var
+          </button>
 
         {#if baseLayerId === 'offline'}
           <button
@@ -1672,7 +1715,7 @@
       </div>
     {/if}
 
-    {#if uiVisible && (identifyInfo || simbadQuery || showCatalog || showLenses || showRubinObjects || crossSectionMode || surfaceMode || lightCurveMode || cutoutOpen || rgbOpen || (diffMode && baseLayerId === 'offline') || (varMode && baseLayerId === 'offline'))}
+    {#if uiVisible && (identifyInfo || simbadQuery || showCatalog || showLenses || showRubinObjects || crossSectionMode || surfaceMode || lightCurveMode || gaiaLcMode || cutoutOpen || rgbOpen || (diffMode && baseLayerId === 'offline') || (varMode && baseLayerId === 'offline'))}
       <!-- Right-side stack: the object-ID popup sits ABOVE the analysis plots so
            they never overlap. -->
       <div class="right-stack">
@@ -1835,6 +1878,19 @@
             <div class="lc-nosource-msg">{rubinLcStatus ?? 'No epoch source at this position.'}</div>
             <button class="lc-nosource-close" aria-label="Close light curve" onclick={toggleLightCurve}>Dismiss</button>
           </div>
+        {/if}
+        {#if gaiaLcMode}
+          <LightCurvePlot
+            curve={gaiaLcCurve}
+            band="G"
+            title="Gaia DR2 variable"
+            status={gaiaLcStatus}
+            footNote={gaiaLcSourceId
+              ? `Gaia DR2 ${gaiaLcSourceId} · G-band flux (e⁻/s) vs time · epoch photometry (GAVO)`
+              : 'Gaia DR2 epoch photometry (public GAVO mirror) · variable stars only'}
+            onRefresh={fetchGaiaLc}
+            onClose={toggleGaiaLc}
+          />
         {/if}
       </div>
     {/if}
