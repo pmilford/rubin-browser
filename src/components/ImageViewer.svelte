@@ -47,6 +47,8 @@
   import type { CatalogSet } from '../data/catalog.js';
   import { pmVectorEndpoint } from '../utils/gaiaViz.js';
   import { touchLru, evictLru } from '../utils/tileCache.js';
+  import { PerfMetrics, type PerfSnapshot } from '../utils/perfMetrics.js';
+  import { TileScheduler, type TileLoadHandle } from '../utils/tileScheduler.js';
   import type { Band } from '../data/syntheticSky.js';
   import { constellationFor } from '../utils/constellation.js';
   import {
@@ -110,6 +112,7 @@
     onIdentify,
     onSkyContext,
     onAlertHover,
+    onPerfSnapshot,
   }: {
     /** Explicit base URL override (mainly for tests). When empty, `baseMode` + token drive resolution. */
     hipsBaseUrl?: string;
@@ -190,6 +193,8 @@
     onSkyContext?: (ra: number, dec: number) => void;
     /** Fired on hover over the alert overlay with the nearest alert (or null). */
     onAlertHover?: (hit: AlertHit | null) => void;
+    /** Fired (throttled) with a live performance snapshot for the Perf HUD. */
+    onPerfSnapshot?: (snapshot: PerfSnapshot) => void;
   } = $props();
 
   const DEFAULT_FORMAT = 'jpg';
@@ -280,6 +285,57 @@
 
   // Tile cache: tileKey(order,pixelIndex) -> HTMLImageElement
   const tileCache = new Map<string, HTMLImageElement>();
+
+  // --- Performance instrumentation + fetch scheduling ---
+  // `perf` is a pure collector fed by the REAL fetch/cache/render events below;
+  // its snapshot drives the (default-off) Perf HUD in TileViewer. `tileScheduler`
+  // provides in-flight DEDUP (never fetch the same tile twice concurrently) and
+  // CANCELLATION (abort loads for tiles a newer view superseded).
+  const perf = new PerfMetrics();
+  const tileScheduler = new TileScheduler();
+
+  // Throttled perf reporting: push at most ~10 Hz, plus a trailing flush so the
+  // final idle snapshot (in-flight back to 0) always reaches the HUD.
+  let lastPerfReport = 0;
+  let perfReportTimer: ReturnType<typeof setTimeout> | null = null;
+  function reportPerf(force = false): void {
+    if (!onPerfSnapshot) return;
+    const now = performance.now();
+    if (!force && now - lastPerfReport < 100) {
+      if (!perfReportTimer) {
+        perfReportTimer = setTimeout(() => {
+          perfReportTimer = null;
+          reportPerf(true);
+        }, 120);
+      }
+      return;
+    }
+    lastPerfReport = now;
+    onPerfSnapshot(perf.snapshot());
+  }
+
+  /**
+   * Abort every in-flight tile load AND reconcile the perf in-flight gauge for the
+   * aborted ones. tileScheduler.clear() only detaches the loads; without counting a
+   * cancel per aborted load, perf.inFlight would leak (stay > 0) — which happens
+   * when the mount $effect re-runs (its cleanup aborts loads that a later re-run
+   * re-requests). Used wherever loads are torn down without a full perf.reset().
+   */
+  function abortInFlightLoads(): void {
+    const n = tileScheduler.inFlightCount();
+    tileScheduler.clear();
+    for (let i = 0; i < n; i++) perf.recordFetchCancel();
+  }
+
+  // HiPS Allsky backdrop: the survey's single Norder3/Allsky.<ext> preview, sliced
+  // into its 768 order-3 tiles and kept HERE (NOT in tileCache) so a backdrop tile
+  // can never collide with — and block the load of — the sharp same-order tile.
+  // drawAllTiles Pass 0 paints these UNDER every sharp pass. IVOA HiPS Allsky
+  // packing: n_tiles_in_row = int(sqrt(nTiles)); tile ipix at (row,col) =
+  // divmod(ipix, n_tiles_in_row); tile_width = allskyWidth / n_tiles_in_row.
+  const ALLSKY_TILE_ORDER = 3; // 12 * (2^3)^2 = 768 tiles
+  const ALLSKY_TILES_PER_ROW = Math.floor(Math.sqrt(nside2npix(order2nside(ALLSKY_TILE_ORDER)))); // 27
+  const allskyBackdrop = new Map<number, HTMLImageElement>();
 
   // Allsky backdrop: a full-sky set of low-order tiles, prefetched once per base
   // and PINNED (never LRU-evicted) so the ancestor-preview pass always has a
@@ -684,6 +740,7 @@
 
   function render() {
     if (!ctx) return;
+    const renderStart = performance.now();
 
     const needsPostProcessing =
       scaling !== 'linear' ||
@@ -707,6 +764,10 @@
     renderAlerts();
     renderCrossSection();
     renderRuler();
+
+    // Time the full frame → FPS + last-render for the HUD, then push a snapshot.
+    perf.recordRender(performance.now() - renderStart);
+    reportPerf();
   }
 
   /**
@@ -1104,6 +1165,29 @@
       return !!img && img.complete && img.naturalWidth > 0;
     };
 
+    // Pass 0 — HiPS Allsky backdrop (coarse full-sky preview) UNDER everything.
+    // For each visible tile, draw the order-3 backdrop tile that covers it (its
+    // order-3 ancestor when target order ≥ 3; at wider zoom, every present backdrop
+    // tile that projects on-screen — drawTile culls the rest). The sharp passes
+    // below overwrite it wherever real tiles have loaded, so this only shows through
+    // gaps / not-yet-loaded regions — no black flash when jumping to a new area.
+    if (allskyBackdrop.size > 0) {
+      const backdropPix = new Set<number>();
+      if (order >= ALLSKY_TILE_ORDER) {
+        for (const t of visibleTiles) {
+          backdropPix.add(Math.floor(t.pixelIndex / Math.pow(4, t.order - ALLSKY_TILE_ORDER)));
+        }
+      } else {
+        for (const p of allskyBackdrop.keys()) backdropPix.add(p);
+      }
+      for (const bpix of backdropPix) {
+        const bimg = allskyBackdrop.get(bpix);
+        if (bimg && bimg.complete && bimg.naturalWidth > 0) {
+          drawTile(context, bimg, { order: ALLSKY_TILE_ORDER, pixelIndex: bpix }, view);
+        }
+      }
+    }
+
     // Pass 1 — ancestor (lower-order) backdrop. For every target tile that hasn't
     // loaded yet, draw the nearest already-cached NESTED-parent tile (pix >> 2k)
     // upscaled underneath. This is what makes zoom/pan feel instant: a blurry but
@@ -1468,81 +1552,144 @@
       }
     };
 
-    // Drop any not-yet-started fetches queued for a SUPERSEDED view (rapid
-    // pan/zoom) so the queue can't grow without bound; in-flight ones finish.
-    fetchQueue = [];
+    // CANCELLATION: this batch is the new set of needed tiles. Abort any in-flight
+    // load whose tile is no longer visible so a stale decode can't paint over the
+    // new view and the browser isn't starved by superseded work. A cancelled tile
+    // is removed from the in-flight set → it re-fetches if it reappears (no gap).
+    const visibleKeys = new Set(visibleTiles.map((t) => tileKey(t.order, t.pixelIndex)));
+    const cancelledKeys = tileScheduler.supersede(visibleKeys);
+    for (let i = 0; i < cancelledKeys.length; i++) perf.recordFetchCancel();
+    if (cancelledKeys.length > 0) reportPerf();
 
     for (const tile of visibleTiles) {
       const cacheKey = tileKey(tile.order, tile.pixelIndex);
-      if (tileCache.has(cacheKey)) continue;
+      // Already decoded → a cache hit (no network). Counted for the HUD hit-rate.
+      if (tileCache.has(cacheKey)) {
+        perf.recordCacheHit();
+        continue;
+      }
+      // In-flight DEDUP: a load for this tile is already running — attach to it
+      // (it will populate the cache + repaint on resolve) instead of a 2nd request.
+      if (tileScheduler.isInFlight(cacheKey)) continue;
 
       loadAttempts++;
       const url = buildUrl(tile.order, tile.pixelIndex, fmt, batchBaseUrl);
 
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
-      pendingLoads.add(img);
+      tileScheduler.request(cacheKey, (): TileLoadHandle => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        pendingLoads.add(img);
+        const startToken = perf.recordFetchStart();
+        let aborted = false;
+        // Detach handlers + drop the src so a cancelled load can neither paint nor
+        // fire a spurious onerror (which would be miscounted as a tile failure and
+        // could wrongly trip the auto-fallback). Called by tileScheduler.supersede.
+        const abort = (): void => {
+          aborted = true;
+          img.onload = null;
+          img.onerror = null;
+          img.src = '';
+          pendingLoads.delete(img);
+        };
 
-      img.onload = () => {
-        pendingLoads.delete(img);
-        loadSuccesses++;
-        tileCache.set(cacheKey, img);
-        contentVersion++;
-        clearError();
-        scheduleRender();
-      };
+        img.onload = () => {
+          if (aborted) return;
+          pendingLoads.delete(img);
+          loadSuccesses++;
+          tileCache.set(cacheKey, img);
+          contentVersion++;
+          perf.recordFetchEnd(startToken);
+          tileScheduler.settle(cacheKey);
+          clearError();
+          scheduleRender();
+          reportPerf();
+        };
 
-      img.onerror = () => {
-        pendingLoads.delete(img);
-        recordFailure(url, null); // <img> path exposes no HTTP status
-      };
+        img.onerror = () => {
+          if (aborted) return;
+          pendingLoads.delete(img);
+          perf.recordError();
+          tileScheduler.settle(cacheKey);
+          recordFailure(url, null); // <img> path exposes no HTTP status
+          reportPerf();
+        };
 
-      if (offline) {
-        // Synthesize the tile locally from the bundled synthetic sky — no network.
-        try {
-          const rgba = offlineTileRGBA(tile.order, tile.pixelIndex, offlineBand, offlineMjd);
-          const oc = document.createElement('canvas');
-          oc.width = OFFLINE_TILE_SIZE;
-          oc.height = OFFLINE_TILE_SIZE;
-          const octx = oc.getContext('2d');
-          if (octx) {
-            octx.putImageData(new ImageData(rgba, OFFLINE_TILE_SIZE, OFFLINE_TILE_SIZE), 0, 0);
-            img.src = oc.toDataURL(); // fires img.onload → cache
-          } else {
+        if (offline) {
+          // Synthesize the tile locally from the bundled synthetic sky — no network.
+          try {
+            const rgba = offlineTileRGBA(tile.order, tile.pixelIndex, offlineBand, offlineMjd);
+            const oc = document.createElement('canvas');
+            oc.width = OFFLINE_TILE_SIZE;
+            oc.height = OFFLINE_TILE_SIZE;
+            const octx = oc.getContext('2d');
+            if (octx) {
+              octx.putImageData(new ImageData(rgba, OFFLINE_TILE_SIZE, OFFLINE_TILE_SIZE), 0, 0);
+              img.src = oc.toDataURL(); // fires img.onload → cache
+            } else {
+              perf.recordError();
+              tileScheduler.settle(cacheKey);
+              recordFailure(url, null);
+            }
+          } catch {
+            perf.recordError();
+            tileScheduler.settle(cacheKey);
             recordFailure(url, null);
           }
-        } catch {
-          recordFailure(url, null);
+        } else if (useAuth) {
+          // toRequestUrl → same-origin dev proxy so the credentialed cross-origin
+          // request isn't CORS-blocked; recordFailure keeps the ORIGINAL url so the
+          // error reports the real RSP host, not the proxy path. Throttled via the
+          // fetch queue so a high-order view doesn't fire thousands of concurrent
+          // requests and exhaust the browser (net::ERR_INSUFFICIENT_RESOURCES).
+          // AbortController lets supersede() cancel a superseded fetch.
+          const controller = new AbortController();
+          const fetchAbort = abort;
+          const doAbort = (): void => {
+            fetchAbort();
+            controller.abort();
+          };
+          runQueuedFetch(() => {
+            // If this tile was superseded while queued (still-in-flight but not yet
+            // started), drain the queue slot as a no-op — never open a request, and
+            // never strand the tile: supersede() already settled + counted the
+            // cancel, and a still-VISIBLE queued tile is left un-aborted so it runs.
+            if (aborted) return Promise.resolve();
+            return fetch(toRequestUrl(url), { headers: auth, signal: controller.signal })
+              .then(resp => {
+                if (!resp.ok) {
+                  const e = new Error(`HTTP ${resp.status}`) as Error & { status?: number };
+                  e.status = resp.status;
+                  throw e;
+                }
+                return resp.blob();
+              })
+              .then(blob => {
+                if (aborted) return; // superseded while the blob was in flight
+                const objUrl = URL.createObjectURL(blob);
+                img.src = objUrl;
+              })
+              .catch((e: Error & { status?: number }) => {
+                // An abort is NOT a tile failure — it must never count as an error
+                // or trip the auto-fallback. Metrics for the cancel were recorded
+                // by supersede(); just stop here.
+                if (aborted || e?.name === 'AbortError') return;
+                pendingLoads.delete(img);
+                perf.recordError();
+                tileScheduler.settle(cacheKey);
+                recordFailure(url, e?.status ?? null);
+                reportPerf();
+              });
+          });
+          return { abort: doAbort, cancellable: true };
+        } else {
+          img.src = toRequestUrl(url);
         }
-      } else if (useAuth) {
-        // toRequestUrl → same-origin dev proxy so the credentialed cross-origin
-        // request isn't CORS-blocked; recordFailure keeps the ORIGINAL url so the
-        // error reports the real RSP host, not the proxy path. Throttled via the
-        // fetch queue so a high-order view doesn't fire thousands of concurrent
-        // requests and exhaust the browser (net::ERR_INSUFFICIENT_RESOURCES).
-        runQueuedFetch(() =>
-          fetch(toRequestUrl(url), { headers: auth })
-            .then(resp => {
-              if (!resp.ok) {
-                const e = new Error(`HTTP ${resp.status}`) as Error & { status?: number };
-                e.status = resp.status;
-                throw e;
-              }
-              return resp.blob();
-            })
-            .then(blob => {
-              const objUrl = URL.createObjectURL(blob);
-              img.src = objUrl;
-            })
-            .catch((e: Error & { status?: number }) => {
-              pendingLoads.delete(img);
-              recordFailure(url, e?.status ?? null);
-            })
-        );
-      } else {
-        img.src = toRequestUrl(url);
-      }
+
+        return { abort, cancellable: true };
+      });
     }
+
+    reportPerf();
 
     // Also load overlay tiles for current view
     if (overlays.size > 0) {
@@ -1551,30 +1698,122 @@
   }
 
   /**
-   * Prefetch the full-sky ALLSKY_ORDER backdrop once per base (and per offline
-   * band/mjd). Pins the keys so they survive LRU eviction, giving the ancestor
-   * preview a guaranteed coarse image everywhere. A missing backdrop tile is
-   * silently skipped — it must NEVER trip the auto-fallback (it's just a backdrop).
+   * Prefetch the coarse full-sky backdrop once per base (and per offline band/mjd),
+   * so the ancestor/backdrop preview always has an image — no black flash when
+   * jumping to an unvisited region. PRIMARY path: fetch the survey's SINGLE HiPS
+   * `Norder3/Allsky.<ext>` preview (one request + one quota unit) and slice it into
+   * its 768 order-3 tiles. FALLBACK (Allsky 404 / taint / too small): the previous
+   * behaviour — enumerate the 48 order-1 tiles. Either way, a failure NEVER trips
+   * the auto-fallback (it's just a backdrop).
    */
   function prefetchAllsky() {
     const baseUrl = resolvedBaseUrl;
     if (!baseUrl) return;
     // Offline tiles synthesize locally with no network, so there is no black flash
-    // to hide; prefetching a full-sky order-1 set for offline is pure cost (48
-    // synths per band/epoch change, which would jank blinking) with no benefit —
-    // and order-1 offline tiles show no sources anyway. Backdrop is network-only.
-    if (isOfflineUrl(baseUrl)) { allskySig = ''; pinnedTiles.clear(); return; }
+    // to hide; a full-sky backdrop for offline is pure cost with no benefit.
+    if (isOfflineUrl(baseUrl)) { allskySig = ''; pinnedTiles.clear(); allskyBackdrop.clear(); return; }
     const sig = `${baseUrl}|${layerSignature}`;
     if (sig === allskySig) return;
     allskySig = sig;
-    pinnedTiles.clear(); // previous base pins are no longer protected
+    pinnedTiles.clear();      // previous base's order-1 fallback pins
+    allskyBackdrop.clear();   // previous base's sliced Allsky tiles
 
     const isRub = isRubinUrl(baseUrl);
     const useA = !!rspToken && isRub;
     const auth = useA ? getAuthHeader() : {};
     const fmt = resolveFormat();
-    const npix = nside2npix(order2nside(ALLSKY_ORDER));
+    const cleanBase = baseUrl.replace(/\/properties$/, '').replace(/\/$/, '');
+    const allskyUrl = `${cleanBase}/Norder${ALLSKY_TILE_ORDER}/Allsky.${fmt}`;
 
+    const onFail = () => { if (sig === allskySig) prefetchAllskyLowOrder(baseUrl, sig, useA, auth, fmt); };
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => { if (sig === allskySig) sliceAllsky(img, sig, onFail); };
+    img.onerror = onFail;
+
+    if (useA) {
+      runQueuedFetch(() =>
+        fetch(toRequestUrl(allskyUrl), { headers: auth })
+          .then((r) => (r.ok ? r.blob() : Promise.reject(new Error('allsky'))))
+          .then((b) => { img.src = URL.createObjectURL(b); })
+          .catch(onFail)
+      );
+    } else {
+      img.src = toRequestUrl(allskyUrl);
+    }
+  }
+
+  /**
+   * Slice a loaded HiPS Allsky preview into its 768 order-3 tiles → allskyBackdrop.
+   * Chunked across timers so 768 encodes don't block the main thread; guarded by
+   * `sig` so a base change mid-slice aborts. Empty (transparent/black) tiles — the
+   * norm for a sparse survey like DP1 — are skipped to save memory. On taint or a
+   * degenerate (too-small) image, falls back to the order-1 enumeration.
+   */
+  function sliceAllsky(allskyImg: HTMLImageElement, sig: string, onFail: () => void) {
+    const w = allskyImg.naturalWidth;
+    const tw = Math.floor(w / ALLSKY_TILES_PER_ROW);
+    if (tw <= 0) { onFail(); return; } // image too small to be a real Allsky mosaic
+    const npix = nside2npix(order2nside(ALLSKY_TILE_ORDER)); // 768
+    const scratch = document.createElement('canvas');
+    scratch.width = tw;
+    scratch.height = tw;
+    const sctx = scratch.getContext('2d', { willReadFrequently: true });
+    if (!sctx) { onFail(); return; }
+
+    const CHUNK = 96;
+    let pix = 0;
+    const sliceChunk = () => {
+      if (sig !== allskySig) return; // base changed → abort remaining slices
+      const end = Math.min(pix + CHUNK, npix);
+      for (; pix < end; pix++) {
+        const col = pix % ALLSKY_TILES_PER_ROW;
+        const row = Math.floor(pix / ALLSKY_TILES_PER_ROW);
+        sctx.clearRect(0, 0, tw, tw);
+        sctx.drawImage(allskyImg, col * tw, row * tw, tw, tw, 0, 0, tw, tw);
+        let hasContent = false;
+        try {
+          const d = sctx.getImageData(0, 0, tw, tw).data;
+          for (let i = 0; i < d.length; i += 16) {
+            if (d[i + 3]! > 10 && d[i]! + d[i + 1]! + d[i + 2]! > 6) { hasContent = true; break; }
+          }
+          if (!hasContent) continue; // empty backdrop tile — don't cache it
+          const dataUrl = scratch.toDataURL();
+          const timg = new Image();
+          const p = pix;
+          timg.onload = () => {
+            if (sig !== allskySig) return;
+            allskyBackdrop.set(p, timg);
+            contentVersion++;
+            scheduleRender();
+          };
+          timg.src = dataUrl;
+        } catch {
+          // Cross-origin taint (no CORS) → readback/encode blocked. Fall back to
+          // the order-1 enumeration, which draws fine without any pixel readback.
+          onFail();
+          return;
+        }
+      }
+      if (pix < npix) setTimeout(sliceChunk, 0);
+    };
+    sliceChunk();
+  }
+
+  /**
+   * FALLBACK backdrop: enumerate the 48 order-1 tiles into the tile cache, pinned
+   * against LRU eviction. Used only when the single Allsky preview is unavailable.
+   * A missing tile is skipped silently — it must NEVER trip the auto-fallback.
+   */
+  function prefetchAllskyLowOrder(
+    baseUrl: string,
+    sig: string,
+    useA: boolean,
+    auth: Record<string, string>,
+    fmt: string
+  ) {
+    if (sig !== allskySig) return;
+    const npix = nside2npix(order2nside(ALLSKY_ORDER));
     for (let pix = 0; pix < npix; pix++) {
       const key = tileKey(ALLSKY_ORDER, pix);
       pinnedTiles.add(key);
@@ -2144,6 +2383,11 @@
     autoFellBack = false;
     autoFallbackReason = '';
     clearError();
+    // Abort in-flight loads so a stale (old-base) tile can't resolve into the
+    // freshly cleared cache under the same key. reset() clears the (now-aborted)
+    // in-flight count and starts per-survey perf counters fresh.
+    tileScheduler.clear();
+    perf.reset();
     for (const key of tileCache.keys()) {
       if (!key.startsWith('overlay-')) tileCache.delete(key);
     }
@@ -2400,6 +2644,14 @@
         clearTimeout(loadTilesTimer);
         loadTilesTimer = null;
       }
+      if (perfReportTimer) {
+        clearTimeout(perfReportTimer);
+        perfReportTimer = null;
+      }
+      // Abort any in-flight tile loads (also detaches their img handlers) and
+      // reconcile the perf in-flight gauge — this cleanup also fires when the
+      // effect merely RE-RUNS, so a bare clear() would leak in-flight counts.
+      abortInFlightLoads();
       for (const img of pendingLoads) {
         img.onload = null;
         img.onerror = null;
@@ -2514,6 +2766,11 @@
     }
     if (url === lastLoadedBaseUrl) return;
     lastLoadedBaseUrl = url;
+    // Abort in-flight loads for the old base before clearing its cache, so a stale
+    // tile can't resolve into the new base's cache under the same key. reset()
+    // clears the (now-aborted) in-flight count + starts per-survey counters fresh.
+    tileScheduler.clear();
+    perf.reset();
     for (const key of tileCache.keys()) {
       if (!key.startsWith('overlay-')) tileCache.delete(key);
     }

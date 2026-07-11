@@ -1,5 +1,7 @@
 <script lang="ts">
   import ImageViewer from '../components/ImageViewer.svelte';
+  import PerfHud from '../components/PerfHud.svelte';
+  import type { PerfSnapshot } from '../utils/perfMetrics.js';
   import CompactToolbar from '../components/CompactToolbar.svelte';
   import SidePanel from '../components/SidePanel.svelte';
   import ColorBar from '../components/ColorBar.svelte';
@@ -428,6 +430,15 @@
     statusMessage = showMagnifier ? 'Magnifier: on — move the cursor over the image' : 'Magnifier: off';
   }
 
+  // Performance HUD (default OFF): live FPS / render / cache-hit-rate / in-flight
+  // fetches driven by ImageViewer's real fetch + render path.
+  let showPerfHud = $state(false);
+  let perfSnapshot = $state<PerfSnapshot | null>(null);
+  function togglePerfHud() {
+    showPerfHud = !showPerfHud;
+    statusMessage = showPerfHud ? 'Performance HUD: on' : 'Performance HUD: off';
+  }
+
   // Distance ruler: drag between two sky points → great-circle separation + PA.
   let rulerMode = $state(false);
   let rulerReadout = $state<string | null>(null);
@@ -840,7 +851,12 @@
       onSurfaceChange={(g) => { surfaceGrid = g; }}
       onIdentify={handleIdentify}
       onSkyContext={handleSkyContext}
+      onPerfSnapshot={(s) => { if (showPerfHud) perfSnapshot = s; }}
     />
+
+    {#if showPerfHud && perfSnapshot}
+      <PerfHud snapshot={perfSnapshot} />
+    {/if}
 
     {#if uiVisible}
       <!-- Active layers: base survey + overlays, always visible -->
@@ -1064,6 +1080,17 @@
           onclick={toggleMagnifier}
         >
           🔍 Loupe
+        </button>
+
+        <button
+          class="xsection-toggle"
+          class:on={showPerfHud}
+          aria-pressed={showPerfHud}
+          aria-label="Toggle performance HUD"
+          title="Live performance HUD: FPS, render time, tiles loaded vs cache hit-rate, in-flight fetches, tile load time, errors"
+          onclick={togglePerfHud}
+        >
+          ⏱ Perf
         </button>
 
         <button

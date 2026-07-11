@@ -221,6 +221,7 @@ describe('parseGaiaResponse', () => {
         { name: 'bp_rp', datatype: 'float' },
         { name: 'radial_velocity', datatype: 'float' },
       ],
+      // eslint-disable-next-line no-loss-of-precision -- Gaia source_id fixture; parsed lossily as a JS number, exactly as in production.
       data: [[4845546850256555392, 62.026148678589, -37.07564387135609, 0.44069237, 8.680595, -6.3714776, 18.55878, 0.7495556, null]],
     };
     const cat = parseGaiaResponse(gavo);
