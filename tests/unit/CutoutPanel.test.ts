@@ -90,6 +90,21 @@ describe('CutoutPanel (feature 109)', () => {
     expect(screen.getByLabelText('Cutout note').textContent).toContain('BLANK');
   });
 
+  it('toggles measure mode, revealing the aperture-radius control and a measure hint', async () => {
+    render(CutoutPanel, {
+      props: { image: makeImage(), ra: 150, dec: 2, band: 'r', datasetId: 'id' },
+    });
+    // Measure mode is off initially → no radius slider, no aperture overlay.
+    expect(screen.queryByLabelText('Aperture radius')).toBeNull();
+    expect(screen.queryByLabelText('Aperture overlay')).toBeNull();
+    await fireEvent.click(screen.getByLabelText('Toggle measure mode'));
+    // Now the aperture-radius control appears and a hint prompts for a click.
+    expect(screen.getByLabelText('Aperture radius')).toBeTruthy();
+    expect(screen.getByLabelText('Measure hint')).toBeTruthy();
+    // A click runs (jsdom geometry is zero → no aperture set, but no crash).
+    await fireEvent.click(screen.getByLabelText('FITS cutout image'));
+  });
+
   it('exposes scale / colormap / invert controls and fires close', async () => {
     const onClose = vi.fn();
     render(CutoutPanel, {

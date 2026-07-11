@@ -15,6 +15,8 @@
   import { renderCutout } from '../utils/cutoutRender.js';
   import { parseWcs, pixelToWorld } from '../utils/wcs.js';
   import { getColorMapNames } from '../utils/colormap.js';
+  import { aperturePhotometry, radialProfile } from '../utils/photometry.js';
+  import RadialProfilePlot from './RadialProfilePlot.svelte';
   import type { ScalingFunction, ColorMapName } from '../types/image.js';
 
   let {
@@ -89,6 +91,55 @@
     readout = null;
   }
 
+  // --- Measure mode (feature 122): click → aperture photometry + radial profile ---
+  // Aperture centre is stored in 1-based FITS pixel coords (col+1, row+1) — the
+  // SAME convention as the WCS readout and src/utils/photometry.ts, so a click is
+  // passed through with no off-by-one.
+  let measureMode = $state(false);
+  let aperture = $state<{ cx: number; cy: number } | null>(null);
+  // Aperture radius (pixels); the background annulus is derived from it. Bounded
+  // so the annulus fits inside a small cutout.
+  let rAper = $state(5);
+  const rInner = $derived(rAper + 3);
+  const rOuter = $derived(rAper + 8);
+
+  /** Map a mouse event to 0-based (col,row) data pixel, or null if off-image. */
+  function eventToPixel(e: MouseEvent): { col: number; row: number } | null {
+    const canvas = canvasEl;
+    if (!canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return null;
+    const col = Math.floor(((e.clientX - rect.left) / rect.width) * image.width);
+    const row = Math.floor(((e.clientY - rect.top) / rect.height) * image.height);
+    if (col < 0 || col >= image.width || row < 0 || row >= image.height) return null;
+    return { col, row };
+  }
+
+  function handleCanvasClick(e: MouseEvent) {
+    if (!measureMode) return;
+    const p = eventToPixel(e);
+    if (!p) return;
+    aperture = { cx: p.col + 1, cy: p.row + 1 };
+  }
+
+  function toggleMeasure() {
+    measureMode = !measureMode;
+    if (!measureMode) aperture = null;
+  }
+
+  // Photometry + radial profile at the clicked aperture (null until a click).
+  const photometry = $derived(
+    aperture ? aperturePhotometry(image, aperture.cx, aperture.cy, { rAper, rInner, rOuter }) : null
+  );
+  const profile = $derived(
+    aperture
+      ? radialProfile(image, aperture.cx, aperture.cy, {
+          maxRadius: rOuter,
+          nBins: Math.max(4, Math.round(rOuter)),
+        })
+      : null
+  );
+
   /** Short dataset id for the header (full id shown in the title attribute). */
   const shortId = $derived(
     datasetId.length > 22 ? `${datasetId.slice(0, 10)}…${datasetId.slice(-8)}` : datasetId
@@ -118,15 +169,67 @@
     centre RA {ra.toFixed(5)}°, Dec {dec >= 0 ? '+' : ''}{dec.toFixed(5)}°
   </div>
 
-  <canvas
-    bind:this={canvasEl}
-    width={image.width}
-    height={image.height}
-    class="cp-canvas"
-    aria-label="FITS cutout image"
-    onmousemove={handleMouseMove}
-    onmouseleave={handleMouseLeave}
-  ></canvas>
+  <div class="cp-canvas-wrap" class:measuring={measureMode}>
+    <canvas
+      bind:this={canvasEl}
+      width={image.width}
+      height={image.height}
+      class="cp-canvas"
+      aria-label="FITS cutout image"
+      onmousemove={handleMouseMove}
+      onmouseleave={handleMouseLeave}
+      onclick={handleCanvasClick}
+    ></canvas>
+    {#if aperture}
+      <!-- Aperture + annulus overlay, in data-pixel coordinates (viewBox spans the
+           image) so it scales with the displayed canvas. Pixel (col,row) centre is
+           at SVG (cx-0.5, cy-0.5) since cx/cy are 1-based FITS coords. -->
+      <svg
+        class="cp-aperture"
+        aria-label="Aperture overlay"
+        viewBox={`0 0 ${image.width} ${image.height}`}
+        preserveAspectRatio="none"
+      >
+        <circle class="ap-aper" aria-label="Aperture circle" cx={aperture.cx - 0.5} cy={aperture.cy - 0.5} r={rAper} fill="none" />
+        <circle class="ap-annin" cx={aperture.cx - 0.5} cy={aperture.cy - 0.5} r={rInner} fill="none" />
+        <circle class="ap-annout" cx={aperture.cx - 0.5} cy={aperture.cy - 0.5} r={rOuter} fill="none" />
+      </svg>
+    {/if}
+  </div>
+
+  <div class="cp-measure">
+    <button
+      class="cp-measure-toggle"
+      class:on={measureMode}
+      aria-pressed={measureMode}
+      aria-label="Toggle measure mode"
+      title="Measure mode: click a point on the cutout to run aperture photometry + a radial profile"
+      onclick={toggleMeasure}
+    >⊕ Measure</button>
+    {#if measureMode}
+      <label class="cp-raper">r<sub>ap</sub>
+        <input
+          type="range" min="1" max={Math.max(2, Math.floor(Math.min(image.width, image.height) / 2) - 8)} step="1"
+          bind:value={rAper} aria-label="Aperture radius"
+        />
+        <span class="cp-raper-val">{rAper}px</span>
+      </label>
+    {/if}
+  </div>
+
+  {#if measureMode}
+    {#if photometry && aperture}
+      <div class="cp-photom" aria-label="Photometry readout">
+        <span>net flux <b>{fmtValue(photometry.netFlux)}</b>{#if image.header.bunit}&nbsp;{image.header.bunit}{/if}</span>
+        <span>ap Σ {fmtValue(photometry.apertureSum)} · n={photometry.nPixels}</span>
+        <span>bkg/px {fmtValue(photometry.backgroundPerPixel)}{#if image.header.bunit}&nbsp;{image.header.bunit}{/if}</span>
+        {#if photometry.snr !== null}<span>SNR {photometry.snr.toFixed(1)}</span>{/if}
+      </div>
+      <RadialProfilePlot {profile} />
+    {:else}
+      <div class="cp-photom-hint" aria-label="Measure hint">Click a point on the cutout to measure aperture flux + a radial profile.</div>
+    {/if}
+  {/if}
 
   <div class="cp-readout" aria-label="Cutout readout">
     {#if readout}
@@ -186,6 +289,12 @@
   .cp-object { color: #cef; font-weight: 700; }
   .cp-dataset { color: #789; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .cp-pos { color: #89a; margin-bottom: 6px; }
+  .cp-canvas-wrap {
+    position: relative;
+    width: 280px;
+    height: 280px;
+  }
+  .cp-canvas-wrap.measuring { cursor: crosshair; }
   .cp-canvas {
     width: 280px;
     height: 280px;
@@ -194,6 +303,33 @@
     background: #000;
     display: block;
   }
+  .cp-aperture {
+    position: absolute;
+    inset: 0;
+    width: 280px;
+    height: 280px;
+    pointer-events: none;
+  }
+  .ap-aper { stroke: #6f6; stroke-width: 0.4; }
+  .ap-annin, .ap-annout { stroke: #fc6; stroke-width: 0.3; stroke-dasharray: 1 1; }
+  .cp-measure { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+  .cp-measure-toggle {
+    background: rgba(10, 10, 30, 0.8);
+    border: 1px solid rgba(120, 200, 255, 0.35);
+    border-radius: 5px;
+    color: #9cf;
+    font: inherit;
+    font-size: 10px;
+    padding: 3px 8px;
+    cursor: pointer;
+  }
+  .cp-measure-toggle.on { background: rgba(20, 40, 60, 0.9); color: #bdf; border-color: rgba(120, 200, 255, 0.7); }
+  .cp-raper { display: inline-flex; align-items: center; gap: 4px; color: #9ab; }
+  .cp-raper input { width: 80px; accent-color: #6cf; }
+  .cp-raper-val { color: #cef; }
+  .cp-photom { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; color: #bdf; }
+  .cp-photom b { color: #cef; }
+  .cp-photom-hint { color: #778; margin-top: 6px; }
   .cp-readout { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; min-height: 15px; color: #bdf; }
   .cp-radec { color: #cef; }
   .cp-nowcs, .cp-hint { color: #778; }

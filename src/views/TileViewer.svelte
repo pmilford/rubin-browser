@@ -16,6 +16,7 @@
   import { objectsNear, type SimbadObject } from '../api/simbad.js';
   import DiffPanel from '../components/DiffPanel.svelte';
   import CutoutPanel from '../components/CutoutPanel.svelte';
+  import RgbCompositePanel from '../components/RgbCompositePanel.svelte';
   import { fetchCutoutAt } from '../api/soda.js';
   import { readFits, type FitsImage } from '../utils/fits.js';
   import { radecToTileIndex } from '../api/hips.js';
@@ -339,6 +340,57 @@
       cutoutError = null;
       cutoutMeta = null;
       statusMessage = 'FITS cutout: off';
+    }
+  }
+
+  // RGB band-mixing composite (feature 120): fetch three per-band DP1 SODA cutouts
+  // at the SAME position/size and composite them with the Lupton asinh recipe.
+  // Auth-gated like the single-band cutout — offline / no-token surfaces the
+  // thrown error VERBATIM, never a fake colour image. Longer wavelength → red.
+  const RGB_BANDS = ['i', 'r', 'g'] as const;
+  let rgbOpen = $state(false);
+  let rgbStatus = $state<'idle' | 'loading' | 'loaded' | 'error'>('idle');
+  let rgbImages = $state<Record<string, FitsImage> | null>(null);
+  let rgbError = $state<string | null>(null);
+  let rgbMeta = $state<{ ra: number; dec: number } | null>(null);
+
+  async function fetchRgb() {
+    rgbStatus = 'loading';
+    rgbError = null;
+    rgbImages = null;
+    const ra = currentRa;
+    const dec = currentDec;
+    statusMessage = `Fetching RGB cutouts (${RGB_BANDS.join(', ')}) at ${ra.toFixed(3)}, ${dec.toFixed(3)}…`;
+    try {
+      const images: Record<string, FitsImage> = {};
+      // Fetch each band's cutout at the identical position/size so they align.
+      for (const band of RGB_BANDS) {
+        const { fits } = await fetchCutoutAt({ ra, dec, sizeArcsec: CUTOUT_SIZE_ARCSEC, band });
+        images[band] = readFits(fits);
+      }
+      rgbImages = images;
+      rgbMeta = { ra, dec };
+      rgbStatus = 'loaded';
+      statusMessage = `RGB composite: ${RGB_BANDS.join('/')} cutouts ready`;
+    } catch (e) {
+      // Surface the thrown message VERBATIM (e.g. "requires sign-in", "No DP1
+      // image covers this position") — never a silent/blank/fake failure.
+      rgbError = e instanceof Error ? e.message : String(e);
+      rgbStatus = 'error';
+      statusMessage = `RGB composite: ${rgbError}`;
+    }
+  }
+
+  function toggleRgb() {
+    rgbOpen = !rgbOpen;
+    if (rgbOpen) {
+      void fetchRgb();
+    } else {
+      rgbStatus = 'idle';
+      rgbImages = null;
+      rgbError = null;
+      rgbMeta = null;
+      statusMessage = 'RGB composite: off';
     }
   }
 
@@ -1153,6 +1205,17 @@
 
         <button
           class="xsection-toggle"
+          class:on={rgbOpen}
+          aria-pressed={rgbOpen}
+          aria-label="Toggle RGB composite"
+          title="Fetch three per-band DP1 SODA cutouts (i, r, g) at the view centre and composite them with the Lupton asinh recipe — a true colour image (requires an RSP token with DP1 rights)"
+          onclick={toggleRgb}
+        >
+          🌈 RGB
+        </button>
+
+        <button
+          class="xsection-toggle"
           aria-label="Save PNG screenshot"
           title="Download the current view (base + overlays + grid) as a PNG image"
           onclick={() => { imageViewerRef?.exportPng(); statusMessage = 'Saved PNG screenshot of the current view'; }}
@@ -1255,7 +1318,7 @@
         <span class="ai-note">synthetic demo event</span>
       </div>
     {/if}
-    {#if uiVisible && (identifyInfo || simbadQuery || showCatalog || showLenses || crossSectionMode || surfaceMode || lightCurveMode || cutoutOpen || (diffMode && baseLayerId === 'offline'))}
+    {#if uiVisible && (identifyInfo || simbadQuery || showCatalog || showLenses || crossSectionMode || surfaceMode || lightCurveMode || cutoutOpen || rgbOpen || (diffMode && baseLayerId === 'offline'))}
       <!-- Right-side stack: the object-ID popup sits ABOVE the analysis plots so
            they never overlap. -->
       <div class="right-stack">
@@ -1333,6 +1396,29 @@
               {:else if cutoutStatus === 'error'}
                 <div class="cs-error" aria-label="Cutout error">{cutoutError}</div>
                 <button class="cs-retry" aria-label="Retry cutout" onclick={fetchCutout}>Retry at view centre</button>
+              {/if}
+            </div>
+          {/if}
+        {/if}
+        {#if rgbOpen}
+          {#if rgbStatus === 'loaded' && rgbImages && rgbMeta}
+            <RgbCompositePanel
+              images={rgbImages}
+              ra={rgbMeta.ra}
+              dec={rgbMeta.dec}
+              onClose={toggleRgb}
+            />
+          {:else}
+            <div class="cutout-status" aria-label="RGB composite status">
+              <div class="cs-header">
+                <span class="cs-title">RGB composite</span>
+                <button class="cs-close" aria-label="Close RGB composite" onclick={toggleRgb}>×</button>
+              </div>
+              {#if rgbStatus === 'loading'}
+                <div class="cs-loading" aria-label="RGB composite loading">Fetching i / r / g cutouts…</div>
+              {:else if rgbStatus === 'error'}
+                <div class="cs-error" aria-label="RGB composite error">{rgbError}</div>
+                <button class="cs-retry" aria-label="Retry RGB composite" onclick={fetchRgb}>Retry at view centre</button>
               {/if}
             </div>
           {/if}
