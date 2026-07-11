@@ -15,6 +15,7 @@
   import SimbadPanel from '../components/SimbadPanel.svelte';
   import { objectsNear, type SimbadObject } from '../api/simbad.js';
   import DiffPanel from '../components/DiffPanel.svelte';
+  import VariabilityPanel from '../components/VariabilityPanel.svelte';
   import CutoutPanel from '../components/CutoutPanel.svelte';
   import RgbCompositePanel from '../components/RgbCompositePanel.svelte';
   import { fetchCutoutAt } from '../api/soda.js';
@@ -290,6 +291,25 @@
       statusMessage = 'Differencing: faint vs bright epoch of the synthetic transient';
     } else {
       statusMessage = 'Differencing: off';
+    }
+  }
+
+  // Variability map (feature 124 display): per-pixel temporal variability across
+  // ALL offline epochs for the tile at the view centre, over the pure variability.ts
+  // pipeline. Offline-only (a single Rubin coadd has no time axis).
+  let varMode = $state(false);
+  function toggleVariability() {
+    varMode = !varMode;
+    if (varMode) {
+      // Jump to the brightest transient so the tile actually contains variability.
+      const t = brightestOfflineVariable(offlineBand);
+      currentRa = t.ra;
+      currentDec = t.dec;
+      imageViewerRef?.panTo(t.ra, t.dec);
+      imageViewerRef?.setZoom(7);
+      statusMessage = 'Variability: per-pixel temporal σ across all synthetic epochs';
+    } else {
+      statusMessage = 'Variability: off';
     }
   }
 
@@ -1540,6 +1560,16 @@
           >
             ⧉ Diff
           </button>
+          <button
+            class="xsection-toggle"
+            class:on={varMode}
+            aria-pressed={varMode}
+            aria-label="Toggle variability map"
+            title="Per-pixel temporal variability across ALL epochs of the synthetic cube (offline ground truth)"
+            onclick={toggleVariability}
+          >
+            ⚡ Variability
+          </button>
         {/if}
 
         {#if showAlerts}
@@ -1639,7 +1669,7 @@
       </div>
     {/if}
 
-    {#if uiVisible && (identifyInfo || simbadQuery || showCatalog || showLenses || showRubinObjects || crossSectionMode || surfaceMode || lightCurveMode || cutoutOpen || rgbOpen || (diffMode && baseLayerId === 'offline'))}
+    {#if uiVisible && (identifyInfo || simbadQuery || showCatalog || showLenses || showRubinObjects || crossSectionMode || surfaceMode || lightCurveMode || cutoutOpen || rgbOpen || (diffMode && baseLayerId === 'offline') || (varMode && baseLayerId === 'offline'))}
       <!-- Right-side stack: the object-ID popup sits ABOVE the analysis plots so
            they never overlap. -->
       <div class="right-stack">
@@ -1709,6 +1739,15 @@
             onAChange={(i) => { diffAIndex = i; }}
             onBChange={(i) => { diffBIndex = i; }}
             onClose={toggleDiff}
+          />
+        {/if}
+        {#if varMode && baseLayerId === 'offline'}
+          <VariabilityPanel
+            order={DIFF_ORDER}
+            pixelIndex={diffPix}
+            band={offlineBand}
+            epochs={OFFLINE_EPOCHS}
+            onClose={toggleVariability}
           />
         {/if}
         {#if cutoutOpen}
