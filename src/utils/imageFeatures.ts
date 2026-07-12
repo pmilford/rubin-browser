@@ -92,6 +92,16 @@ export interface ImageFeatures {
    */
   concentrationRatio: number;
   /**
+   * Tight-core concentration: enclosed flux within 1·PSF-FWHM ÷ within 3·PSF-FWHM. The
+   * discriminant for the WELL-SAMPLED regime (a big-beam offline cube or high-res
+   * imagery where the PSF spans many pixels and sources are NOT undersampled). There a
+   * point source sits entirely inside 1·PSF (ratio HIGH ≈0.7–0.8) while a resolved
+   * galaxy leaks past it (ratio LOW ≈0.3). In the UNDERSAMPLED, asinh-stretched HiPS
+   * regime this saturates (both classes ~0.1–0.2) so `concentrationRatio` is used
+   * instead — see objectClassifier's regime split on localPsfPx.
+   */
+  coreConcentration: number;
+  /**
    * Fraction of the robust-sky-subtracted patch flux contained within 1.5·PSF-FWHM of
    * the peak. High ⇒ compact (star); low ⇒ light spread across the patch (galaxy).
    */
@@ -596,14 +606,14 @@ function percentileSorted(sorted: number[], q: number): number {
 function concentrationFeatures(
   c: Cutout,
   psfFwhmPx: number,
-): { concentrationRatio: number; coreFluxFraction: number; fillFraction: number } {
+): { concentrationRatio: number; coreConcentration: number; coreFluxFraction: number; fillFraction: number } {
   const { data, width, height } = c;
   const finite: number[] = [];
   for (let i = 0; i < data.length; i++) {
     const v = data[i]!;
     if (Number.isFinite(v)) finite.push(v);
   }
-  if (finite.length === 0) return { concentrationRatio: 0, coreFluxFraction: 0, fillFraction: 0 };
+  if (finite.length === 0) return { concentrationRatio: 0, coreConcentration: 0, coreFluxFraction: 0, fillFraction: 0 };
   finite.sort((a, b) => a - b);
   const sky = percentileSorted(finite, 0.2);
 
@@ -616,7 +626,7 @@ function concentrationFeatures(
       if (r > peak) peak = r;
     }
   }
-  if (!(peak > 0)) return { concentrationRatio: 0, coreFluxFraction: 0, fillFraction: 0 };
+  if (!(peak > 0)) return { concentrationRatio: 0, coreConcentration: 0, coreFluxFraction: 0, fillFraction: 0 };
 
   // Flux-weighted centroid over the bright core (r > 0.1·peak), so faint asymmetric
   // wing noise cannot drag the centre off the source.
@@ -635,15 +645,19 @@ function concentrationFeatures(
       }
     }
   }
-  if (!(sw > 0)) return { concentrationRatio: 0, coreFluxFraction: 0, fillFraction: 0 };
+  if (!(sw > 0)) return { concentrationRatio: 0, coreConcentration: 0, coreFluxFraction: 0, fillFraction: 0 };
   const cx = scx / sw;
   const cy = scy / sw;
 
   const rInner = 1.5 * psfFwhmPx; // core aperture for coreFluxFraction
-  const rC2 = 2 * psfFwhmPx; // concentration numerator aperture
-  const rC6 = 6 * psfFwhmPx; // concentration denominator aperture
+  const rC1 = 1 * psfFwhmPx; // tight core aperture (coreConcentration numerator)
+  const rC2 = 2 * psfFwhmPx; // concentrationRatio numerator aperture
+  const rC3 = 3 * psfFwhmPx; // coreConcentration denominator aperture
+  const rC6 = 6 * psfFwhmPx; // concentrationRatio denominator aperture
   let encInner = 0;
+  let encC1 = 0;
   let encC2 = 0;
+  let encC3 = 0;
   let encC6 = 0;
   let total = 0;
   let border = 0;
@@ -656,15 +670,18 @@ function concentrationFeatures(
       total += r;
       const d = Math.hypot(x - cx, y - cy);
       if (d <= rInner) encInner += r;
+      if (d <= rC1) encC1 += r;
       if (d <= rC2) encC2 += r;
+      if (d <= rC3) encC3 += r;
       if (d <= rC6) encC6 += r;
       if (x < 2 || y < 2 || x >= width - 2 || y >= height - 2) border += r;
     }
   }
   const concentrationRatio = encC6 > 0 ? encC2 / encC6 : 0;
+  const coreConcentration = encC3 > 0 ? encC1 / encC3 : 0;
   const coreFluxFraction = total > 0 ? encInner / total : 0;
   const fillFraction = total > 0 ? border / total : 0;
-  return { concentrationRatio, coreFluxFraction, fillFraction };
+  return { concentrationRatio, coreConcentration, coreFluxFraction, fillFraction };
 }
 
 /**
@@ -710,7 +727,7 @@ export function computeFeatures(c: Cutout): ImageFeatures {
   const asym = asymmetry(seg, c);
   const g = gini(seg, width, height);
   const mm = m20(seg, width, height);
-  const { concentrationRatio, coreFluxFraction, fillFraction } = concentrationFeatures(c, psfFwhmPx);
+  const { concentrationRatio, coreConcentration, coreFluxFraction, fillFraction } = concentrationFeatures(c, psfFwhmPx);
 
   return {
     snr,
@@ -725,6 +742,7 @@ export function computeFeatures(c: Cutout): ImageFeatures {
     m20: mm,
     ellipticity,
     concentrationRatio,
+    coreConcentration,
     coreFluxFraction,
     fillFraction,
   };

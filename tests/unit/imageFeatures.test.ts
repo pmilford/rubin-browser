@@ -316,12 +316,34 @@ describe('computeFeatures — scale/stretch-robust concentration features (retun
     expect(fe.fillFraction).toBeGreaterThan(fp.fillFraction + 0.05);
   });
 
+  it('coreConcentration (1·PSF ÷ 3·PSF) is HIGH for a sub-PSF point, LOW for a resolved blob', () => {
+    // Well-sampled geometry: a real many-pixel PSF (psfFwhmPx = 12). A point source
+    // sits inside 1·PSF (ratio→1); an exponential blob several PSF across leaks past it.
+    const bigW = 96;
+    const c0 = (bigW - 1) / 2;
+    const psfArc = 12;
+    const ptData = new Float32Array(bigW * bigW).fill(5);
+    for (let y = 0; y < bigW; y++) for (let x = 0; x < bigW; x++)
+      ptData[y * bigW + x] = 5 + 240 * Math.exp(-0.5 * ((x - c0) ** 2 + (y - c0) ** 2) / (5 * 5));
+    const pt = computeFeatures({ data: ptData, width: bigW, height: bigW, pixelScaleArcsec: 1, psfFwhmArcsec: psfArc });
+
+    const gxData = new Float32Array(bigW * bigW).fill(5);
+    for (let y = 0; y < bigW; y++) for (let x = 0; x < bigW; x++)
+      gxData[y * bigW + x] = 5 + 240 * Math.exp(-Math.hypot(x - c0, y - c0) / 18);
+    const gx = computeFeatures({ data: gxData, width: bigW, height: bigW, pixelScaleArcsec: 1, psfFwhmArcsec: psfArc });
+
+    expect(pt.coreConcentration).toBeGreaterThan(0.5);
+    expect(gx.coreConcentration).toBeLessThan(0.5);
+    expect(pt.coreConcentration).toBeGreaterThan(gx.coreConcentration);
+  });
+
   it('degenerate inputs yield ZERO concentration features (guards), never NaN', () => {
     // All-NaN patch (no finite pixels) and a perfectly constant patch (no peak above
     // sky) must both return 0 for the concentration features rather than NaN/Inf.
     const allNaN = new Float32Array(16 * 16).fill(NaN);
     const fN = computeFeatures({ data: allNaN, width: 16, height: 16, pixelScaleArcsec: 1, psfFwhmArcsec: 2.5 });
     expect(fN.concentrationRatio).toBe(0);
+    expect(fN.coreConcentration).toBe(0);
     expect(fN.coreFluxFraction).toBe(0);
     expect(fN.fillFraction).toBe(0);
 

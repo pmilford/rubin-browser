@@ -862,8 +862,12 @@
     const psfArcsec = Math.max(nominalPsfArcsec(), MIN_DISPLAY_PSF_PX * pixelScaleArcsec);
     const localPsfPx = psfArcsec / pixelScaleArcsec; // ≥ MIN_DISPLAY_PSF_PX
     // Box big enough to hold the source AND a background ring (a too-small box sits
-    // entirely inside a bright source → uniform → SNR 0 → false "too faint").
-    const N = Math.max(32, Math.min(128, Math.round(6 * localPsfPx)));
+    // entirely inside a bright source → uniform → SNR 0 → false "too faint"). The
+    // classifier's outer aperture is 6·PSF (radius), so the patch half-width must
+    // clear that with margin — a 48-px floor (vs the old 32) gives the 6·PSF
+    // aperture clean background and matches the 64-px regime the classifier's real
+    // DSS holdout was fit on (TODO 138). 8·localPsfPx keeps that margin as we zoom.
+    const N = Math.max(48, Math.min(128, Math.round(8 * localPsfPx)));
     const half = N / 2;
     const grid = new Float32Array(N * N);
     for (let j = 0; j < N; j++) {

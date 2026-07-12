@@ -56,26 +56,43 @@ export interface ImageClassification {
  */
 export const CLASSIFIER_THRESHOLDS: {
   concentrationRatioStar: number;
+  coreConcentrationStar: number;
+  wellSampledPsfPx: number;
   fillMax: number;
   snrMin: number;
+  snrMinWellSampled: number;
   minPsfPx: number;
   gapMax: number;
 } = {
-  // concentrationRatio (enclosed flux 2·PSF ÷ 6·PSF) AT OR ABOVE this ⇒ compact ⇒ star;
-  // below ⇒ light spread to large radii ⇒ galaxy. FIT on the real DSS/SIMBAD holdout
-  // (tests/regression/objectClassifier.regression.test.ts): galaxy recall 1.0 and
-  // overall accuracy ~0.84 at this value, well clear of the 0.5 baselines. Ratchet up.
+  // ── UNDERSAMPLED / asinh-stretched HiPS regime (DSS, browse-zoom Rubin) ──────────
+  // localPsfPx ≈ 2.5 (the display-resolution floor dominates). Sources are haloed by
+  // the plate/atmosphere and the aggressive stretch, so light spreads well past the
+  // PSF core. concentrationRatio (2·PSF ÷ 6·PSF) AT OR ABOVE this ⇒ star; below ⇒
+  // galaxy. FIT on the real DSS/SIMBAD holdout (tests/regression/): galaxy recall 1.0,
+  // accuracy ~0.84, well clear of the 0.5 baselines. Ratchet up.
   concentrationRatioStar: 0.18,
+  // ── WELL-SAMPLED regime (offline big-beam cube, high-res imagery) ────────────────
+  // localPsfPx ≫ 2.5 (a real, many-pixel PSF; sources are NOT undersampled). There the
+  // asinh-stretched concentrationRatio saturates (both classes ~0.65), so the tight-core
+  // ratio coreConcentration (1·PSF ÷ 3·PSF) carries the call: a point source packs its
+  // light inside 1·PSF (HIGH) while a resolved galaxy leaks past it (LOW). Star iff ≥ τ.
+  coreConcentrationStar: 0.5,
+  // localPsfPx AT OR ABOVE this selects the well-sampled branch. The DSS holdout sits at
+  // 2.5 (floored) and the offline cube at ~11; 5 is a safe divider between them.
+  wellSampledPsfPx: 5,
   // fillFraction above this ⇒ the source (or a saturated stellar halo) overruns the
   // FOV: the curve-of-growth is untrustworthy, so cap confidence (degeneracy, §8).
   fillMax: 0.3,
-  // Below this peak-SNR, refuse rather than guess. On 8-bit asinh-stretched pixels the
-  // robust sky lands INSIDE a patch-filling galaxy, so a real diffuse galaxy's peak-SNR
-  // is only ~1.2–2.5 (peak-SNR is a linear-flux concept that degrades under a stretch);
-  // this floor therefore sits far below the old value of 7 — just high enough to still
-  // gate a genuinely blank/near-noise-floor synthetic patch, without gating real
-  // galaxies. The concentrationRatio, not peak-SNR, carries the star/galaxy call.
+  // Peak-SNR floor for the UNDERSAMPLED/stretched regime. On 8-bit asinh-stretched pixels
+  // the robust sky lands INSIDE a patch-filling galaxy, so a real diffuse galaxy's
+  // peak-SNR is only ~1.2–2.5 (peak-SNR is a linear-flux concept that degrades under a
+  // stretch). This floor sits far below the old value of 7 so real faint DSS galaxies
+  // are not gated; the concentrationRatio, not peak-SNR, carries the call there.
   snrMin: 1.1,
+  // Peak-SNR floor for the WELL-SAMPLED/linear regime, where peak-SNR IS meaningful:
+  // a genuine linear source stands many σ above sky (offline sources ~25σ) while empty
+  // sky is only a few σ (~2.7σ). This restores honest empty-sky rejection there.
+  snrMinWellSampled: 7,
   // Below this local PSF (px) the cutout cannot resolve star vs galaxy.
   minPsfPx: 2,
   // Above this NaN fraction the cutout is mostly gaps → refuse.
@@ -126,22 +143,39 @@ export function classifyCutout(c: Cutout): ImageClassification {
   if (features.saturatedCore) {
     return unknown('saturated core — class uncertain', features);
   }
-  if (features.snr < t.snrMin) {
+
+  // REGIME SPLIT (retune TODO 138): the same absolute concentration means different
+  // things on an undersampled, asinh-stretched HiPS patch (DSS: haloed sources, PSF
+  // floored to ~2.5 px) versus a well-sampled LINEAR patch (offline big-beam cube: a
+  // real many-pixel PSF, sharp sources). localPsfPx = PSF-FWHM ÷ pixel-scale cleanly
+  // separates them (DSS ≈ 2.5, offline ≈ 11), so each regime uses the discriminant and
+  // SNR floor that actually work there. This is NOT reading the display — localPsfPx is
+  // a geometry ratio the caller already supplies.
+  const wellSampled = localPsfPx >= t.wellSampledPsfPx;
+
+  // Faint/empty-sky gate. In the well-sampled LINEAR regime peak-SNR is meaningful, so a
+  // higher floor honestly rejects empty sky (a few σ) while passing real sources (≫σ). In
+  // the stretched regime peak-SNR collapses for diffuse galaxies, so the floor is low.
+  const snrFloor = wellSampled ? t.snrMinWellSampled : t.snrMin;
+  if (features.snr < snrFloor) {
     return unknown('too faint to classify', features);
   }
-  // A degenerate concentrationRatio (no measurable curve of growth — e.g. a patch with
-  // no real source above sky) cannot be classified. concentrationRatio is 0 only when
-  // there is effectively no flux to integrate.
-  if (!(features.concentrationRatio > 0)) {
+
+  // The discriminant (and its boundary τ) is regime-specific.
+  const value = wellSampled ? features.coreConcentration : features.concentrationRatio;
+  const tau = wellSampled ? t.coreConcentrationStar : t.concentrationRatioStar;
+  // A degenerate discriminant (no measurable curve of growth — no real source above sky)
+  // cannot be classified honestly.
+  if (!(value > 0)) {
     return unknown('no measurable source — class uncertain', features);
   }
 
-  // Signed distance from the star/galaxy boundary: >0 ⇒ light packed inside the inner
-  // aperture (compact ⇒ star); <0 ⇒ spread to large radii (extended ⇒ galaxy).
-  const margin = features.concentrationRatio - t.concentrationRatioStar;
+  // Signed distance from the star/galaxy boundary: ≥0 ⇒ light packed in the core
+  // (compact ⇒ star); <0 ⇒ spread to large radii (extended ⇒ galaxy).
+  const margin = value - tau;
   const cls: InferredClass = margin >= 0 ? 'star' : 'galaxy';
 
-  const boundaryConf = Math.tanh((Math.abs(margin) / t.concentrationRatioStar) * CONF_BOUNDARY_K);
+  const boundaryConf = Math.tanh((Math.abs(margin) / tau) * CONF_BOUNDARY_K);
   let confidence = clamp01(boundaryConf * snrConfidence(features.snr));
   // A source that overruns the FOV (or a saturated stellar halo reaching the border)
   // has an untrustworthy curve of growth — honest low confidence (degeneracy §8).
@@ -151,7 +185,10 @@ export function classifyCutout(c: Cutout): ImageClassification {
     degenerate = ' — source overruns FOV, low confidence';
   }
 
-  const shape = `concentrationRatio ${features.concentrationRatio.toFixed(3)} vs τ ${t.concentrationRatioStar}, coreFlux ${features.coreFluxFraction.toFixed(3)}, fill ${features.fillFraction.toFixed(2)}`;
+  const drv = wellSampled
+    ? `coreConcentration ${features.coreConcentration.toFixed(3)} vs τ ${tau}`
+    : `concentrationRatio ${features.concentrationRatio.toFixed(3)} vs τ ${tau}`;
+  const shape = `${drv}, coreFlux ${features.coreFluxFraction.toFixed(3)}, fill ${features.fillFraction.toFixed(2)}`;
   const reason = (cls === 'star' ? `compact core (${shape})` : `extended — light spread to large radii (${shape})`) + degenerate;
 
   return { cls, subtype: null, confidence, reason, features, provenance: PROVENANCE };

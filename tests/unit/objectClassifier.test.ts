@@ -213,6 +213,72 @@ describe('classifyCutout — an extended source reads galaxy; a compact one read
   });
 });
 
+/**
+ * WELL-SAMPLED / LINEAR regime (retune TODO 138 — offline synthetic cube).
+ *
+ * This is the regime the Playwright spec `tests/ui/image-classification.spec.ts`
+ * drives through the REAL sampleCutoutAt→classifyCutout seam: a big-beam (PSF ≫ 1 px)
+ * LINEAR cube with a KNOWN extended galaxy (Sérsic re=180″) and point star (Gaussian
+ * FWHM 67″). Here the asinh-stretched concentrationRatio saturates (both classes ~0.65)
+ * so the classifier switches to coreConcentration on localPsfPx ≥ wellSampledPsfPx.
+ * A constant/swapped classifier gives the two the same label — these tests forbid that.
+ */
+function makeWellSampled(kind: 'star' | 'galaxy' | 'empty', seed: number, pixScale = 8): Cutout {
+  const psfArcsec = Math.max(90, 2.5 * pixScale); // offline nominal beam (localPsfPx ≈ 11)
+  const N = Math.max(48, Math.min(128, Math.round((8 * psfArcsec) / pixScale)));
+  const cx = (N - 1) / 2;
+  const rand = mulberry32(seed);
+  const data = new Float32Array(N * N);
+  const sky = 12;
+  const peak = 158.5; // mag 19.5 at the cube's zero point
+  const sigStar = (67 / FWHM_PER_SIGMA); // arcsec (FWHM 67″)
+  const bn1 = 1.678; // Sérsic n=1
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
+      const rArc = Math.hypot(x - cx, y - cx) * pixScale;
+      let s = 0;
+      if (kind === 'star') s = peak * Math.exp(-0.5 * (rArc / sigStar) ** 2);
+      else if (kind === 'galaxy') s = peak * Math.exp(-bn1 * (rArc / 180)); // re=180″
+      const v = sky + s + (rand() - 0.5) * 4;
+      data[y * N + x] = Math.max(0, Math.min(255, v)) / 255;
+    }
+  }
+  return { data, width: N, height: N, pixelScaleArcsec: pixScale, psfFwhmArcsec: psfArcsec };
+}
+
+describe('classifyCutout — WELL-SAMPLED linear regime (offline cube seam, TODO 138)', () => {
+  it('the extended galaxy → galaxy, the point star → star (labels DIFFER)', () => {
+    for (const ps of [6, 8, 10]) {
+      const star = classifyCutout(makeWellSampled('star', 200 + ps, ps));
+      const gal = classifyCutout(makeWellSampled('galaxy', 300 + ps, ps));
+      expect(star.cls, `star @ ${ps}″/px`).toBe('star');
+      expect(gal.cls, `galaxy @ ${ps}″/px`).toBe('galaxy');
+      expect(star.cls).not.toBe(gal.cls); // a constant/swapped classifier fails here
+      // it took the well-sampled branch (coreConcentration), not the DSS branch.
+      expect(star.features.coreConcentration).toBeGreaterThanOrEqual(CLASSIFIER_THRESHOLDS.coreConcentrationStar);
+      expect(gal.features.coreConcentration).toBeLessThan(CLASSIFIER_THRESHOLDS.coreConcentrationStar);
+    }
+  });
+
+  it('empty sky in the linear regime is honestly UNKNOWN (peak-SNR gate), never a fabricated class', () => {
+    for (const ps of [6, 8, 10]) {
+      const r = classifyCutout(makeWellSampled('empty', 400 + ps, ps));
+      expect(r.cls, `empty @ ${ps}″/px`).toBe('unknown');
+      expect(r.confidence).toBeLessThanOrEqual(0.25);
+    }
+  });
+
+  it('adversarial: always-galaxy and always-star each mislabel exactly one of the pair', () => {
+    const star = makeWellSampled('star', 7);
+    const gal = makeWellSampled('galaxy', 8);
+    // always-galaxy gets the star wrong; always-star gets the galaxy wrong; the real
+    // classifier gets both right — so a constant baseline cannot match it.
+    expect(alwaysGalaxyClassify(star).cls).toBe('galaxy');
+    expect(classifyCutout(star).cls).toBe('star');
+    expect(classifyCutout(gal).cls).toBe('galaxy');
+  });
+});
+
 describe('classifyCutout — confidence calibration (blocker B7)', () => {
   const pop = buildPopulation(42, 200);
 
