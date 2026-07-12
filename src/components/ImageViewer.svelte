@@ -111,6 +111,7 @@
     showCenterReticle = true,
     targetMarker = null as { ra: number; dec: number; label?: string } | null,
     identifyMarker = null as { ra: number; dec: number; label: string } | null,
+    bottomInset = 0,
     catalog = null,
     selectedCatalogIndex = -1,
     showPmVectors = false,
@@ -194,6 +195,11 @@
      *  was identified there (name + final class + confidence). Sky-anchored (tracks
      *  pan). null = no active identification. */
     identifyMarker?: { ra: number; dec: number; label: string } | null;
+    /** Pixels of chrome overlapping the BOTTOM of the viewer (the collapsed Object
+     *  Browser bar). Every bottom-anchored HUD element — the canvas scale bar, the
+     *  FOV info box, the minimap, the offline banner — is lifted by this so it is not
+     *  occluded by that bar. */
+    bottomInset?: number;
     /** Catalog overlay (e.g. Gaia cone-search) to draw as markers; null = none. */
     catalog?: CatalogSet | null;
     /** Index of the selected catalog source (highlighted marker), or -1. */
@@ -1427,9 +1433,12 @@
     if (!ctx) return;
     const bar = scaleBar(currentView());
     if (!(bar.lengthPx > 0) || !Number.isFinite(bar.lengthPx)) return;
-    const bx2 = canvasWidth - 24;
+    // Anchor to the LEFT of the bottom-right FOV info box / minimap column (~130px
+    // wide) so the bar doesn't overlap them, and lift it above the bottom chrome
+    // (collapsed Object Browser bar) so it isn't occluded.
+    const bx2 = canvasWidth - 150;
     const bx1 = bx2 - bar.lengthPx;
-    const by = canvasHeight - 26;
+    const by = canvasHeight - 22 - bottomInset;
     // Dark halo under the bar + ticks so it reads over a bright field.
     ctx.lineCap = 'round';
     ctx.strokeStyle = 'rgba(0,0,0,0.6)';
@@ -1658,6 +1667,7 @@
     void showCenterReticle;
     void targetMarker;
     void identifyMarker;
+    void bottomInset;
     scheduleRender();
   });
 
@@ -3977,7 +3987,7 @@
   {/if}
 
   {#if baseMode === 'offline'}
-    <div class="synthetic-banner" role="status">
+    <div class="synthetic-banner" role="status" style={`bottom:${12 + bottomInset}px`}>
       SYNTHETIC OFFLINE DATA — generated locally, not a real survey
     </div>
   {/if}
@@ -3988,6 +3998,7 @@
   <div
     class="fov-minimap"
     aria-label="Sky position minimap"
+    style={`bottom:${88 + bottomInset}px`}
     onclick={onMinimapClick}
     onpointerdown={onMinimapPointerDown}
   >
@@ -4015,7 +4026,7 @@
   </div>
 
   <!-- FOV Indicator (Issue #7) -->
-  <div class="fov-indicator" aria-label="Field of view indicator">
+  <div class="fov-indicator" aria-label="Field of view indicator" style={`bottom:${12 + bottomInset}px`}>
     <div class="fov-row">
       <span class="fov-label">FOV</span>
       <span class="fov-value">{fovDegrees}°</span>

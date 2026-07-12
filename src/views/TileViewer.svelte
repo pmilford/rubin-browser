@@ -90,6 +90,13 @@
   let isFullscreen = $state(false);
   let uiVisible = $state(true);
 
+  // Measured height of the (collapsed or open) Object Browser bar that overlays the
+  // bottom of the viewer, so the canvas HUD (scale bar, FOV box, minimap, offline
+  // banner) can be lifted clear of it. Capped so an EXPANDED browser doesn't shove
+  // the HUD to the middle of the screen — the open panel covers it anyway.
+  let objectBrowserBarH = $state(0);
+  const bottomInset = $derived(Math.min(objectBrowserBarH, 40) + 4);
+
   let currentRa = $state(seed.ra ?? 62.0);
   let currentDec = $state(seed.dec ?? -37.0);
   let zoomLevel = $state(seed.zoom ?? 3);
@@ -1463,6 +1470,7 @@
       {showCenterReticle}
       targetMarker={lcTargetMarker}
       {identifyMarker}
+      {bottomInset}
       catalog={showCatalog ? catalog : null}
       {selectedCatalogIndex}
       {showPmVectors}
@@ -2212,7 +2220,7 @@
       </div>
     {/if}
 
-    <div class="object-browser-overlay">
+    <div class="object-browser-overlay" bind:clientHeight={objectBrowserBarH}>
       <ObjectBrowser onObjectSelect={handleObjectSelect} />
     </div>
   </div>

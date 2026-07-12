@@ -13,15 +13,15 @@
  */
 import { test, expect, type Page } from '@playwright/test';
 
-/** Count near-white pixels in the bottom-right scale-bar band (canvas coords). */
+/** Count near-white pixels in the scale-bar band (canvas coords). The bar is lifted
+ *  above the bottom Object Browser bar and anchored LEFT of the bottom-right FOV
+ *  column, so scan that region. */
 async function scaleBarWhitePixels(page: Page): Promise<number> {
   return page.locator('.hips-canvas').first().evaluate((el: HTMLCanvasElement) => {
     const ctx = el.getContext('2d')!;
     const { width: w, height: h } = el;
-    // The bar sits at y ≈ h-26, right-anchored at x ≈ w-24 extending left. Scan a
-    // generous band around it (bottom-right only — the compass is bottom-LEFT).
-    const x0 = Math.max(0, w - 160), x1 = w - 10;
-    const y0 = Math.max(0, h - 40), y1 = Math.min(h, h - 12);
+    const x0 = Math.max(0, w - 360), x1 = w - 140;
+    const y0 = Math.max(0, h - 84), y1 = Math.min(h, h - 42);
     const d = ctx.getImageData(x0, y0, x1 - x0, y1 - y0).data;
     let white = 0;
     for (let i = 0; i < d.length; i += 4) {
@@ -57,4 +57,39 @@ test('toggling the coordinate grid does NOT gate the scale bar (decoupled)', asy
   // that re-couples them would drop `off` to ~0.
   expect(off).toBeGreaterThan(10);
   expect(on).toBeGreaterThan(10);
+});
+
+// The bug the user hit: bottom-anchored HUD (FOV box, scale bar, offline banner)
+// was OCCLUDED by the collapsed Object Browser bar, and the scale bar overlapped
+// the FOV box. This asserts the geometry so it can't silently regress again.
+test('bottom HUD is not occluded by the Object Browser bar, and the scale bar clears the FOV box', async ({ page }) => {
+  await useOfflineBase(page);
+  const fovBox = (await page.locator('[aria-label="Field of view indicator"]').boundingBox())!;
+  const obBar = (await page.locator('[aria-label="Object browser"]').boundingBox())!;
+  const canvasBox = (await page.locator('.hips-canvas').first().boundingBox())!;
+
+  // (1) The FOV box sits ABOVE the (collapsed) Object Browser bar — no vertical overlap.
+  expect(fovBox.y + fovBox.height).toBeLessThanOrEqual(obBar.y + 1);
+
+  // (2) The scale bar's near-white pixels are present LEFT of the FOV box column,
+  // i.e. in the region between the canvas left and the FOV box's left edge — so the
+  // bar and the FOV box don't share screen space.
+  const fovLeftInCanvas = fovBox.x - canvasBox.x;
+  const whiteLeftOfFov = await page.locator('.hips-canvas').first().evaluate(
+    (el: HTMLCanvasElement, args: { fovLeft: number }) => {
+      const ctx = el.getContext('2d')!;
+      const { width: w, height: h } = el;
+      const x0 = Math.max(0, Math.min(w, args.fovLeft) - 220);
+      const x1 = Math.max(0, Math.min(w, args.fovLeft) - 6); // stop before the FOV box
+      const y0 = Math.max(0, h - 84), y1 = Math.min(h, h - 42);
+      const d = ctx.getImageData(x0, y0, x1 - x0, y1 - y0).data;
+      let white = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        if (d[i]! > 200 && d[i + 1]! > 200 && d[i + 2]! > 200) white++;
+      }
+      return white;
+    },
+    { fovLeft: fovLeftInCanvas },
+  );
+  expect(whiteLeftOfFov).toBeGreaterThan(10);
 });
