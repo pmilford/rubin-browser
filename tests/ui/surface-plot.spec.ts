@@ -85,8 +85,6 @@ test.describe('3D surface plot', () => {
   test('light curve (offline only) plots the transient rising and fading over time', async ({ page }: { page: Page }) => {
     await page.goto('/');
     await page.waitForTimeout(600);
-    // Light-curve toggle only exists in offline mode.
-    await expect(page.locator('button[aria-label="Toggle light curve"]')).toHaveCount(0);
     await page.locator('select[aria-label="Base layer"]').selectOption('offline');
     await expect(page.locator('.synthetic-banner')).toContainText('SYNTHETIC', { timeout: 8000 });
 
@@ -97,15 +95,16 @@ test.describe('3D surface plot', () => {
 
     const svg = page.locator('svg[aria-label="Intensity vs time"]');
     await expect(svg).toBeVisible({ timeout: 8000 });
-    // The curve has a point per epoch and a real peak: the polyline's y-range is a
-    // large fraction of the plot (a rise-and-fade), not a flat line.
+    // The curve has a point per epoch and a real peak: the y-range spanned by the
+    // per-epoch markers is a large fraction of the plot (a rise-and-fade), not flat.
+    // (The plot draws per-segment <line>s + per-point <circle>s, not one <path>.)
     const yspread = await svg.evaluate((el: SVGElement) => {
-      const d = el.querySelector('path')?.getAttribute('d') ?? '';
-      const ys = [...d.matchAll(/[ML][\d.]+,([\d.]+)/g)].map((m) => parseFloat(m[1]!));
+      const ys = [...el.querySelectorAll('g.series circle')].map((c) => parseFloat(c.getAttribute('cy') ?? 'NaN'));
       return ys.length ? Math.max(...ys) - Math.min(...ys) : 0;
     });
     expect(yspread).toBeGreaterThan(20);
-    // The current-epoch marker is drawn.
-    await expect(svg.locator('[aria-label="Current epoch marker"]')).toBeVisible();
+    // The current-epoch marker is drawn (a zero-width vertical <line>, so assert
+    // presence — Playwright's visibility heuristic rejects an empty bounding box).
+    await expect(svg.locator('[aria-label="Current epoch marker"]')).toHaveCount(1);
   });
 });

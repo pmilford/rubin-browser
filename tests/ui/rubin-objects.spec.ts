@@ -19,6 +19,7 @@
  */
 
 import { test, expect, type Page } from '@playwright/test';
+import { votableFromRows } from './helpers/votable.js';
 
 // 1×1 black PNG (base64) — served for any Rubin HiPS tile so the Rubin base paints.
 const PNG_1x1 =
@@ -60,9 +61,10 @@ async function routeRubin(page: Page): Promise<void> {
     route.fulfill({ status: 200, contentType: 'image/png', body: Buffer.from(PNG_1x1, 'base64') })
   );
   // Rubin TAP cone search (through the /rsp proxy) → the synthetic Object result.
-  const tapBody = JSON.stringify(OBJECT_RESULT);
+  // The RSP TAP client parses VOTable, not JSON (see helpers/votable.ts).
+  const tapBody = votableFromRows(OBJECT_RESULT.data);
   const fulfilTap = (route: import('@playwright/test').Route): Promise<void> =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: tapBody });
+    route.fulfill({ status: 200, contentType: 'application/x-votable+xml', body: tapBody });
   await page.route('**/api/tap/sync', fulfilTap);
   await page.route('**/rsp/**', (route) => {
     if (route.request().url().includes('/api/tap/sync')) return fulfilTap(route);

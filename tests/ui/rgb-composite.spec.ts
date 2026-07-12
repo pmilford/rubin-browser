@@ -16,6 +16,7 @@
  */
 
 import { test, expect, type Page } from '@playwright/test';
+import { votableFromRows } from './helpers/votable.js';
 
 const BLOCK = 2880;
 const CARD = 80;
@@ -91,19 +92,17 @@ async function routeBands(page: Page): Promise<void> {
     const band = m?.[1] ?? 'r';
     route.fulfill({
       status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        data: [
-          {
-            access_format: 'application/x-votable+xml;content=datalink',
-            access_url: `https://data.lsst.cloud/api/datalink/links?ID=deep-${band}`,
-            dataproduct_subtype: 'lsst.deep_coadd',
-            lsst_band: band,
-            s_ra: 62.0,
-            s_dec: -37.0,
-          },
-        ],
-      }),
+      contentType: 'application/x-votable+xml',
+      body: votableFromRows([
+        {
+          access_format: 'application/x-votable+xml;content=datalink',
+          access_url: `https://data.lsst.cloud/api/datalink/links?ID=deep-${band}`,
+          dataproduct_subtype: 'lsst.deep_coadd',
+          lsst_band: band,
+          s_ra: 62.0,
+          s_dec: -37.0,
+        },
+      ]),
     });
   });
 

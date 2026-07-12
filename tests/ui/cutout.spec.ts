@@ -18,6 +18,7 @@
  */
 
 import { test, expect, type Page } from '@playwright/test';
+import { votableFromRows } from './helpers/votable.js';
 
 // --- Synthetic FITS builder (mirrors tests/unit/fits.test.ts byte layout) ----
 const BLOCK = 2880;
@@ -92,25 +93,23 @@ async function seedToken(page: Page): Promise<void> {
 }
 
 /** One ObsCore row whose access_url carries the DataLink ID `test-id`. */
-const OBSCORE_ONE_ROW = {
-  data: [
-    {
-      access_format: 'application/x-votable+xml;content=datalink',
-      access_url: 'https://data.lsst.cloud/api/datalink/links?ID=test-id',
-      dataproduct_subtype: 'lsst.deep_coadd',
-      lsst_band: 'r',
-      s_ra: 62.0,
-      s_dec: -37.0,
-    },
-  ],
-};
+const OBSCORE_ROWS = [
+  {
+    access_format: 'application/x-votable+xml;content=datalink',
+    access_url: 'https://data.lsst.cloud/api/datalink/links?ID=test-id',
+    dataproduct_subtype: 'lsst.deep_coadd',
+    lsst_band: 'r',
+    s_ra: 62.0,
+    s_dec: -37.0,
+  },
+];
 
 test('FITS cutout: panel renders non-black pixels and a plausible RA/Dec readout', async ({ page }) => {
   await seedToken(page);
 
   const fits = buildCutoutFits(16, 16);
   await page.route('**/api/tap/sync', (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(OBSCORE_ONE_ROW) })
+    route.fulfill({ status: 200, contentType: 'application/x-votable+xml', body: votableFromRows(OBSCORE_ROWS) })
   );
   await page.route('**/api/cutout/**', (route) =>
     route.fulfill({ status: 200, contentType: 'application/fits', body: fits })
@@ -165,7 +164,7 @@ test('FITS cutout: zero ObsCore rows shows the honest "No DP1 … covers" messag
 
   // ObsTAP discovery returns NO rows → discoverCutoutId throws the honest error.
   await page.route('**/api/tap/sync', (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: [] }) })
+    route.fulfill({ status: 200, contentType: 'application/x-votable+xml', body: votableFromRows([]) })
   );
 
   await page.goto('/');

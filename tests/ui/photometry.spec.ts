@@ -9,6 +9,7 @@
  */
 
 import { test, expect, type Page } from '@playwright/test';
+import { votableFromRows } from './helpers/votable.js';
 
 const BLOCK = 2880;
 const CARD = 80;
@@ -72,18 +73,16 @@ function buildSourceFits(width = 32, height = 32): Buffer {
   return Buffer.from(buffer);
 }
 
-const OBSCORE_ONE_ROW = {
-  data: [
-    {
-      access_format: 'application/x-votable+xml;content=datalink',
-      access_url: 'https://data.lsst.cloud/api/datalink/links?ID=photom-id',
-      dataproduct_subtype: 'lsst.deep_coadd',
-      lsst_band: 'r',
-      s_ra: 62.0,
-      s_dec: -37.0,
-    },
-  ],
-};
+const OBSCORE_ROWS = [
+  {
+    access_format: 'application/x-votable+xml;content=datalink',
+    access_url: 'https://data.lsst.cloud/api/datalink/links?ID=photom-id',
+    dataproduct_subtype: 'lsst.deep_coadd',
+    lsst_band: 'r',
+    s_ra: 62.0,
+    s_dec: -37.0,
+  },
+];
 
 async function seedToken(page: Page): Promise<void> {
   await page.addInitScript(() => {
@@ -99,7 +98,7 @@ test('Photometry: click the centre → aperture overlay + non-empty radial profi
   await seedToken(page);
   const fits = buildSourceFits(32, 32);
   await page.route('**/api/tap/sync', (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(OBSCORE_ONE_ROW) })
+    route.fulfill({ status: 200, contentType: 'application/x-votable+xml', body: votableFromRows(OBSCORE_ROWS) })
   );
   await page.route('**/api/cutout/**', (route) =>
     route.fulfill({ status: 200, contentType: 'application/fits', body: fits })

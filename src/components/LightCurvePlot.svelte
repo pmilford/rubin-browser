@@ -219,7 +219,16 @@
 
         <!-- current-epoch (offline blink) marker -->
         {#if markerInRange && markerMjd != null}
-          <line x1={xOf(markerMjd)} y1={M.t} x2={xOf(markerMjd)} y2={H - M.b} stroke="#fc6" stroke-width="1" stroke-dasharray="2,2" />
+          <line
+            x1={xOf(markerMjd)}
+            y1={M.t}
+            x2={xOf(markerMjd)}
+            y2={H - M.b}
+            stroke="#fc6"
+            stroke-width="1"
+            stroke-dasharray="2,2"
+            aria-label="Current epoch marker"
+          />
         {/if}
 
         <!-- series (one <g data-band> each; per-segment lines allow gap dashing) -->

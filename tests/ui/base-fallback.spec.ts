@@ -22,6 +22,19 @@ function stubImage(route: Route): Promise<void> {
 }
 const isTile = (url: string): boolean => /Norder\d+.*Npix\d+/.test(url);
 
+// Playwright drives the Vite dev server, where Rubin RSP URLs are rewritten to the
+// same-origin `/rsp/...` proxy path (src/api/rspProxy.ts) so the authenticated
+// fetch→blob tile path isn't CORS-blocked. The browser therefore sends Rubin
+// requests to a localhost `/rsp/...` URL, NOT the data.lsst.cloud host — so tests
+// must intercept and classify by that path. We register BOTH globs (and match
+// either substring) so a test is robust to dev-proxy vs a direct/production URL.
+const RUBIN_GLOBS = ['**/rsp/**', '**/data.lsst.cloud/**'] as const;
+const isRubinReq = (url: string): boolean => url.includes('/rsp/') || url.includes('data.lsst.cloud');
+/** Register `handler` for every Rubin request path (proxied and direct). */
+async function routeRubin(page: Page, handler: (route: Route) => unknown): Promise<void> {
+  for (const glob of RUBIN_GLOBS) await page.route(glob, handler);
+}
+
 /**
  * Block until `counter` stops increasing for `quietMs` (or `timeoutMs` elapses).
  * Used to wait for a tile-loading wave to fully drain. The viewer fires all 48
@@ -73,7 +86,7 @@ test.describe('Base auto-fallback', () => {
     });
 
     // Rubin: everything 404s. DSS: serve stub tiles + a minimal properties file.
-    await page.route('**/data.lsst.cloud/**', (route) => route.fulfill({ status: 404, body: 'no rights' }));
+    await routeRubin(page, (route) => route.fulfill({ status: 404, body: 'no rights' }));
     await page.route('**/alasky.cds.unistra.fr/**', (route) => {
       const url = route.request().url();
       if (url.endsWith('/properties')) {
@@ -86,7 +99,7 @@ test.describe('Base auto-fallback', () => {
     const rubinUrls: string[] = [];
     page.on('request', (req) => {
       const url = req.url();
-      if (url.includes('data.lsst.cloud')) rubinUrls.push(url);
+      if (isRubinReq(url)) rubinUrls.push(url);
     });
 
     await page.goto('/');
@@ -102,12 +115,13 @@ test.describe('Base auto-fallback', () => {
     // ...and NONE of those DSS requests may carry the Rubin Bearer token.
     expect(dssAuthHeaders.every((h) => !h)).toBe(true);
 
-    // Every Rubin request used the DP1 path — never the retired DP0.2 one.
-    expect(rubinUrls.length).toBeGreaterThan(0);
-    for (const u of rubinUrls) {
-      expect(u).toContain('/api/hips/v2/dp1/deep_coadd/color_gri');
-      expect(u).not.toContain('/api/hips/images/');
-    }
+    // Every Rubin TILE used the DP1 deep_coadd path (discovery calls like
+    // `/api/hips/v2/dp1/list` are legit non-tile requests, so scope the deep_coadd
+    // assertion to tiles) — and NO Rubin request used the retired DP0.2 path.
+    const rubinTileUrls = rubinUrls.filter(isTile);
+    expect(rubinTileUrls.length).toBeGreaterThan(0);
+    for (const u of rubinTileUrls) expect(u).toContain('/api/hips/v2/dp1/deep_coadd/color_gri');
+    for (const u of rubinUrls) expect(u).not.toContain('/api/hips/images/');
   });
 
   test('DP1 Rubin renders: PNG tiles at the /v2/dp1/deep_coadd path, with the Bearer token', async ({ page }) => {
@@ -118,7 +132,7 @@ test.describe('Base auto-fallback', () => {
       const url = req.url();
       // Only the real GET tile fetches — not the CORS preflight OPTIONS (which
       // never carries Authorization).
-      if (req.method() === 'GET' && url.includes('data.lsst.cloud') && isTile(url)) {
+      if (req.method() === 'GET' && isRubinReq(url) && isTile(url)) {
         rubinTileReqs.push({ url, auth: req.headers()['authorization'] });
       }
     });
@@ -131,7 +145,7 @@ test.describe('Base auto-fallback', () => {
     // Serve the Rubin DP1 host: answer the CORS preflight (the authed fetch needs
     // it), 401 on /properties (auth-gated in reality), 200 PNG tiles at the correct
     // path. The viewer must NOT depend on /properties and must request .png.
-    await page.route('**/data.lsst.cloud/**', (route) => {
+    await routeRubin(page, (route) => {
       const req = route.request();
       if (req.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: AUTH_CORS });
       const url = req.url();
@@ -180,7 +194,7 @@ test.describe('Base auto-fallback', () => {
       'access-control-allow-headers': 'authorization',
       'access-control-allow-methods': 'GET,OPTIONS',
     };
-    await page.route('**/data.lsst.cloud/**', (route) => {
+    await routeRubin(page, (route) => {
       const req = route.request();
       if (req.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: AUTH_CORS });
       if (isTile(req.url())) return route.fulfill({ status: 200, contentType: 'image/png', headers: AUTH_CORS, body: white });
@@ -206,7 +220,7 @@ test.describe('Base auto-fallback', () => {
 
   test('Explicit Rubin does NOT fall back — it shows the switch-layer error and stays on Rubin', async ({ page }) => {
     await injectToken(page);
-    await page.route('**/data.lsst.cloud/**', (route) => route.fulfill({ status: 404, body: 'no rights' }));
+    await routeRubin(page, (route) => route.fulfill({ status: 404, body: 'no rights' }));
     await page.route('**/alasky.cds.unistra.fr/**', (route) => {
       const url = route.request().url();
       if (url.endsWith('/properties')) {
@@ -238,7 +252,7 @@ test.describe('Base auto-fallback', () => {
     const postSelectHosts: string[] = [];
     page.on('request', (req) => {
       const url = req.url();
-      if (isTile(url)) postSelectHosts.push(url.includes('data.lsst.cloud') ? 'rubin' : 'dss');
+      if (isTile(url)) postSelectHosts.push(isRubinReq(url) ? 'rubin' : 'dss');
     });
     await page.locator('select[aria-label="Base layer"]').selectOption('rubin');
 
