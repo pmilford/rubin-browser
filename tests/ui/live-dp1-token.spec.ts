@@ -194,15 +194,27 @@ test.describe('LIVE Rubin DP1 (requires RSP_TOKEN with DP1 rights)', () => {
 
     // A real field returns real difference-image detections → the toggle label
     // reports "(DIA, N)" with N>0. The old FORMAT=json break, an auth failure, or
-    // a parse regression would instead show 0 / an error / the demo count.
+    // a parse regression would instead show 0 / an error / the demo count. By
+    // default the "reliable only" quality cut is ON, so this is the real-transient
+    // count (~thousands), not the ~99% artifact scatter.
+    const countFromLabel = async () => {
+      const t = (await alertToggle.textContent()) ?? '';
+      const m = t.match(/DIA,\s*([\d,]+)/);
+      return m ? Number(m[1]!.replace(/,/g, '')) : 0;
+    };
     await expect(
       alertToggle,
       `Live DIA returned no detections over EDFS. RSP errors: ${rspFailures().join(' | ') || 'none'}`
     ).toContainText(/DIA,\s*[1-9][\d,]*/, { timeout: 30000 });
+    const reliableCount = await countFromLabel();
 
-    // EDFS holds ~257k detections (a live COUNT), far above the 50k cap, so the
-    // fetch MUST flag truncation honestly rather than presenting a partial field
-    // as complete. This is the "no silent caps" guarantee, validated live.
+    // Turning the reliability cut OFF shows the full artifact scatter — a MUCH
+    // larger set that overruns the 50k cap, so truncation is surfaced honestly.
+    // This proves BOTH the quality filter (reliable << all) and the honest cap.
+    await page.locator('input[aria-label="Reliable detections only"]').uncheck();
+    await expect
+      .poll(countFromLabel, { timeout: 30000, message: 'unfiltered DIA did not exceed the reliable set' })
+      .toBeGreaterThan(reliableCount * 3);
     await expect(page.locator('[aria-label="Status message"]')).toContainText(/TRUNCATED/, {
       timeout: 30000,
     });

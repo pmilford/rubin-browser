@@ -61,6 +61,21 @@ export interface DiaSourceQueryParams {
   tMinMjd?: number;
   /** Optional inclusive upper bound on detection epoch, MJD (TAI). */
   tMaxMjd?: number;
+  /**
+   * Optional lower bound on Rubin's ML real/bogus `reliability` score [0,1].
+   * A 1-deg DP1 field holds ~250k DiaSource detections, but a live COUNT shows
+   * ~99% have low reliability (subtraction artifacts, mostly clustered around
+   * bright/variable stars). `reliability > 0.5`–`0.9` keeps the real transients.
+   * Rows with NULL reliability are excluded by the `>` comparison (unknown = drop).
+   */
+  minReliability?: number;
+  /**
+   * When true, also drop the classic difference-image artifacts: dipoles
+   * (`isDipole`), saturated-core detections (`pixelFlags_saturatedCenter`), and
+   * artificial source injections (`pixelFlags_injected`, the DP1 fakes). These are
+   * the "scatter around bright sources" the overlay otherwise shows.
+   */
+  excludeArtifacts?: boolean;
   /** Row cap for the query. Default {@link DIA_DEFAULT_MAX_ROWS}. */
   maxRows?: number;
 }
@@ -104,7 +119,16 @@ function formatNum(value: number): string {
  * and finite-checked, so nothing user-controlled is interpolated as a string.
  */
 export function buildDiaSourceAdql(params: DiaSourceQueryParams): string {
-  const { ra, dec, radiusDeg, tMinMjd, tMaxMjd, maxRows = DIA_DEFAULT_MAX_ROWS } = params;
+  const {
+    ra,
+    dec,
+    radiusDeg,
+    tMinMjd,
+    tMaxMjd,
+    minReliability,
+    excludeArtifacts,
+    maxRows = DIA_DEFAULT_MAX_ROWS,
+  } = params;
 
   const raDeg = finiteNumber(ra, 'ra');
   const decDeg = finiteNumber(dec, 'dec');
@@ -114,26 +138,39 @@ export function buildDiaSourceAdql(params: DiaSourceQueryParams): string {
   }
   const top = Math.max(1, Math.floor(finiteNumber(maxRows, 'maxRows')));
 
-  // Time-window predicates: emitted ONLY for the bounds actually supplied, so an
-  // unbounded query has no time filter and a partly-bounded one has just one.
-  const timeClauses: string[] = [];
+  // Optional predicates, emitted ONLY when requested. Time window: supplied bounds
+  // only. Quality: a reliability floor and/or the artifact-flag cut that remove the
+  // ~99% low-reliability subtraction scatter around bright sources (verified live).
+  const clauses: string[] = [];
   if (tMinMjd !== undefined) {
-    timeClauses.push(`\n  AND ds.midpointMjdTai >= ${formatNum(finiteNumber(tMinMjd, 'tMinMjd'))}`);
+    clauses.push(`\n  AND ds.midpointMjdTai >= ${formatNum(finiteNumber(tMinMjd, 'tMinMjd'))}`);
   }
   if (tMaxMjd !== undefined) {
-    timeClauses.push(`\n  AND ds.midpointMjdTai <= ${formatNum(finiteNumber(tMaxMjd, 'tMaxMjd'))}`);
+    clauses.push(`\n  AND ds.midpointMjdTai <= ${formatNum(finiteNumber(tMaxMjd, 'tMaxMjd'))}`);
+  }
+  if (minReliability !== undefined) {
+    // NULL reliability fails `>`, so unknown-reliability rows are excluded.
+    clauses.push(`\n  AND ds.reliability > ${formatNum(finiteNumber(minReliability, 'minReliability'))}`);
+  }
+  if (excludeArtifacts) {
+    clauses.push(
+      `\n  AND ds.isDipole = 0` +
+        `\n  AND ds.pixelFlags_saturatedCenter = 0` +
+        `\n  AND ds.pixelFlags_injected = 0`
+    );
   }
 
   return `SELECT TOP ${top}
   ds.diaSourceId AS id,
   ds.ra AS ra, ds.dec AS dec,
   ds.midpointMjdTai AS mjd,
-  ds.psfFlux AS flux, ds.band AS band
+  ds.psfFlux AS flux, ds.band AS band,
+  ds.reliability AS reliability
 FROM dp1.DiaSource AS ds
 WHERE CONTAINS(
   POINT('ICRS', ds.ra, ds.dec),
   CIRCLE('ICRS', ${formatNum(raDeg)}, ${formatNum(decDeg)}, ${formatNum(radius)})
-) = 1${timeClauses.join('')}`;
+) = 1${clauses.join('')}`;
 }
 
 /* -------------------------------------------------------------------------- */

@@ -78,6 +78,28 @@ describe('buildDiaSourceAdql', () => {
     expect(lo).not.toContain('midpointMjdTai <=');
   });
 
+  // Kills a filter that ignores the reliability floor / artifact cut, OR one that
+  // applies them unconditionally (the default overlay must be able to show all).
+  it('emits reliability + artifact predicates ONLY when requested', () => {
+    const none = buildDiaSourceAdql(base);
+    expect(none).not.toContain('reliability >');
+    expect(none).not.toContain('isDipole');
+
+    const rel = buildDiaSourceAdql({ ...base, minReliability: 0.5 });
+    expect(rel).toContain('ds.reliability > 0.5');
+    expect(rel).not.toContain('isDipole'); // reliability floor without the artifact cut
+
+    const clean = buildDiaSourceAdql({ ...base, minReliability: 0.9, excludeArtifacts: true });
+    expect(clean).toContain('ds.reliability > 0.9');
+    expect(clean).toContain('ds.isDipole = 0');
+    expect(clean).toContain('ds.pixelFlags_saturatedCenter = 0');
+    expect(clean).toContain('ds.pixelFlags_injected = 0');
+
+    // The reliability column is selected so a parser could carry it.
+    expect(none).toContain('ds.reliability AS reliability');
+    expect(() => buildDiaSourceAdql({ ...base, minReliability: NaN })).toThrow(/minReliability/);
+  });
+
   // Kills an uncapped query (which could pull millions of DIA rows).
   it('caps rows via TOP/maxRows', () => {
     expect(buildDiaSourceAdql(base)).toMatch(/SELECT TOP \d+/);

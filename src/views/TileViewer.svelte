@@ -118,6 +118,12 @@
   // (generated lazily) and the real, auth-gated Rubin DP1 DIASource table.
   let showAlerts = $state(false);
   let alertSource = $state<'synthetic' | 'live'>('synthetic');
+  // Live DP1 DiaSource is ~99% low-reliability subtraction artifacts (verified: a
+  // 0.2-deg EDFS cone has 54,465 detections but only ~2,362 with reliability>0.5
+  // after dropping dipoles/saturated/injected). Default the quality cut ON so the
+  // overlay shows real transients, not the bright-source scatter; a toggle shows all.
+  let alertReliableOnly = $state(true);
+  const ALERT_MIN_RELIABILITY = 0.5;
   let alertLoading = $state(false);
   let alerts: AlertSet | null = $state(null);
   let alertIndex: AlertIndex | null = $state(null);
@@ -178,6 +184,10 @@
         radiusDeg: 1.0,
         tMinMjd: win?.min,
         tMaxMjd: win?.max,
+        // Server-side quality cut: drop the ~99% low-reliability subtraction
+        // artifacts (the bright-source scatter) unless the user asks to see all.
+        minReliability: alertReliableOnly ? ALERT_MIN_RELIABILITY : undefined,
+        excludeArtifacts: alertReliableOnly,
       });
       applyAlertSet(set);
       statusMessage =
@@ -1721,6 +1731,22 @@
               >↻</button>
             {/if}
           </label>
+          {#if alertSource === 'live'}
+            <label class="alert-reliable" aria-label="DIA reliability filter">
+              <input
+                type="checkbox"
+                bind:checked={alertReliableOnly}
+                onchange={() => { if (showAlerts) void loadDiaAlerts(); }}
+                aria-label="Reliable detections only"
+              />
+              <span
+                title="DP1 DiaSource is ~99% low-reliability difference-image artifacts (scatter around bright/variable stars). This keeps reliability > {ALERT_MIN_RELIABILITY} and drops dipoles / saturated / injected detections."
+              >Reliable only (real/bogus &gt; {ALERT_MIN_RELIABILITY})</span>
+            </label>
+            <div class="alert-note" aria-label="DIA classification note">
+              DP1 DIA has no transient classification — every detection is “unknown”.
+            </div>
+          {/if}
           <span class="alert-legend" aria-label="Alert type filter">
             {#each ALERT_TYPE_NAMES as name, t (t)}
               <button
