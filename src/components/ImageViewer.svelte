@@ -919,6 +919,7 @@
     }
 
     renderGraticule();
+    renderScaleBar(); // always visible — NOT gated on the graticule (was hidden by default)
     renderCoverage();
     renderCatalog();
     renderLensCatalog();
@@ -1406,23 +1407,46 @@
     const cy = canvasHeight - 64;
     drawCompassRay(cx, cy, compass.northAngleRad, 26, '#f88', 'N');
     drawCompassRay(cx, cy, compass.eastAngleRad, 26, '#8cf', 'E');
+  }
 
-    // Scale bar (screen-anchored, bottom-right) — real pixels-per-degree.
-    const bar = scaleBar(view);
+  /**
+   * Scale bar (screen-anchored, bottom-right) — a "nice" round on-sky length for
+   * the current FOV (real pixels-per-degree). Drawn UNCONDITIONALLY in every frame
+   * (NOT gated on the graticule): it is a fundamental orientation aid, and living
+   * inside renderGraticule() meant it VANISHED whenever the grid was off — which is
+   * the default — so it was effectively invisible (the reason a user couldn't find
+   * it). A dark under-stroke keeps it legible over bright imagery.
+   */
+  function renderScaleBar() {
+    if (!ctx) return;
+    const bar = scaleBar(currentView());
+    if (!(bar.lengthPx > 0) || !Number.isFinite(bar.lengthPx)) return;
     const bx2 = canvasWidth - 24;
     const bx1 = bx2 - bar.lengthPx;
     const by = canvasHeight - 26;
-    ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+    // Dark halo under the bar + ticks so it reads over a bright field.
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(bx1, by); ctx.lineTo(bx2, by);
+    ctx.moveTo(bx1, by - 5); ctx.lineTo(bx1, by + 5);
+    ctx.moveTo(bx2, by - 5); ctx.lineTo(bx2, by + 5);
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,255,255,0.95)';
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.moveTo(bx1, by);
-    ctx.lineTo(bx2, by);
+    ctx.moveTo(bx1, by); ctx.lineTo(bx2, by);
     ctx.moveTo(bx1, by - 4); ctx.lineTo(bx1, by + 4);
     ctx.moveTo(bx2, by - 4); ctx.lineTo(bx2, by + 4);
     ctx.stroke();
-    ctx.fillStyle = 'rgba(255,255,255,0.95)';
+    ctx.lineCap = 'butt';
     ctx.font = '11px monospace';
     ctx.textAlign = 'center';
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+    ctx.strokeText(bar.label, (bx1 + bx2) / 2, by - 6);
+    ctx.fillStyle = 'rgba(255,255,255,0.98)';
     ctx.fillText(bar.label, (bx1 + bx2) / 2, by - 6);
     ctx.textAlign = 'left';
   }
