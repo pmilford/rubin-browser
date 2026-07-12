@@ -14,7 +14,7 @@
   import ObjectInfoPanel from '../components/ObjectInfoPanel.svelte';
   import SimbadPanel from '../components/SimbadPanel.svelte';
   import { objectsNear, type SimbadObject } from '../api/simbad.js';
-  import { classifyWithCatalog, rubinObjectToCandidate, type CatalogCandidate } from '../utils/catalogClassify.js';
+  import { classifyWithCatalog, rubinObjectToCandidate, CATALOG_PROVENANCE, type CatalogCandidate } from '../utils/catalogClassify.js';
   import DiffPanel from '../components/DiffPanel.svelte';
   import VariabilityPanel from '../components/VariabilityPanel.svelte';
   import CutoutPanel from '../components/CutoutPanel.svelte';
@@ -324,6 +324,26 @@
     if (rc) candidates.push(rc);
     if (candidates.length === 0) return rawImageClass;
     return classifyWithCatalog(rawImageClass, candidates, { matchRadiusArcsec: radiusArcsec });
+  });
+
+  // On-canvas click-identify marker: a labelled pin at the CLICKED point showing what
+  // was identified there (catalogue name if any + the FINAL class + confidence),
+  // so it is obvious on the image which object the panel is describing. Cleared with
+  // the panel (identifyInfo). Position is the click point (identifyInfo.ra/dec).
+  const identifyMarker = $derived.by((): { ra: number; dec: number; label: string } | null => {
+    if (!identifyInfo || !Number.isFinite(identifyInfo.ra) || !Number.isFinite(identifyInfo.dec)) return null;
+    const name = identifyInfo.match?.object.name ?? null;
+    let clsPart: string | null = null;
+    if (imageClass) {
+      const L: Record<string, string> = { star: 'Star', galaxy: 'Galaxy', unknown: 'Uncertain' };
+      const cat = imageClass.provenance === CATALOG_PROVENANCE ? ' (catalog)' : '';
+      clsPart =
+        imageClass.cls === 'unknown'
+          ? 'Uncertain'
+          : `${L[imageClass.cls]} ${imageClass.confidence.toFixed(2)}${cat}`;
+    }
+    const label = [name, clsPart].filter(Boolean).join(' · ') || 'no catalogued object';
+    return { ra: identifyInfo.ra, dec: identifyInfo.dec, label };
   });
 
   // Cross-section / line-profile tool
@@ -1442,6 +1462,7 @@
       {showMagnifier}
       {showCenterReticle}
       targetMarker={lcTargetMarker}
+      {identifyMarker}
       catalog={showCatalog ? catalog : null}
       {selectedCatalogIndex}
       {showPmVectors}
@@ -1776,7 +1797,7 @@
           class:on={showCenterReticle}
           aria-pressed={showCenterReticle}
           aria-label="Toggle centre reticle"
-          title="Centre reticle: marks the exact sky point the light-curve/cutout/RGB/identify tools act on"
+          title="Centre reticle: marks the exact sky point the CENTRE tools (light curve, cutout, RGB) act on. Object identification acts where you CLICK, marked separately."
           onclick={toggleCenterReticle}
         >
           ⌖ Reticle

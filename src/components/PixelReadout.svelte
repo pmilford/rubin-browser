@@ -54,6 +54,7 @@
 
 {#if visible}
   <div class="pixel-readout" role="status" aria-label="Pixel readout">
+    <div class="readout-head" aria-label="Readout heading">under cursor</div>
     <div class="readout-row">
       <span class="label">RA</span>
       <span class="value ra">{raFormatted}</span>
@@ -70,9 +71,10 @@
         <span class="value">{pixelX}, {pixelY}</span>
       </div>
     {/if}
-    <div class="readout-row">
-      <span class="label">Value</span>
+    <div class="readout-row" title="Relative brightness (luminance) of the displayed pixel under the cursor, 0 (black) – 1 (white). Not a calibrated flux/magnitude.">
+      <span class="label">Bright</span>
       <span class="value pixel-value">{valueFormatted}</span>
+      <span class="value unit">0–1</span>
     </div>
     {#if constellation}
       <div class="readout-row">
@@ -109,11 +111,26 @@
     min-width: 200px;
   }
 
+  .readout-head {
+    color: #7a86a8;
+    text-transform: uppercase;
+    font-size: 9px;
+    letter-spacing: 1px;
+    margin-bottom: 2px;
+    border-bottom: 1px solid rgba(120, 140, 200, 0.18);
+    padding-bottom: 2px;
+  }
+
   .readout-row {
     display: flex;
     align-items: center;
     gap: 8px;
     line-height: 1.6;
+  }
+
+  .unit {
+    color: #667;
+    font-size: 9px;
   }
 
   .label {

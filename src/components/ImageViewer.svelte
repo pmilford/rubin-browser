@@ -110,6 +110,7 @@
     showMagnifier = false,
     showCenterReticle = true,
     targetMarker = null as { ra: number; dec: number; label?: string } | null,
+    identifyMarker = null as { ra: number; dec: number; label: string } | null,
     catalog = null,
     selectedCatalogIndex = -1,
     showPmVectors = false,
@@ -189,6 +190,10 @@
      *  after a pan it tracks the object (an edge arrow points back when it scrolls
      *  off-canvas). null = no marker. */
     targetMarker?: { ra: number; dec: number; label?: string } | null;
+    /** Click-identify marker: a labelled pin at the CLICKED sky point showing what
+     *  was identified there (name + final class + confidence). Sky-anchored (tracks
+     *  pan). null = no active identification. */
+    identifyMarker?: { ra: number; dec: number; label: string } | null;
     /** Catalog overlay (e.g. Gaia cone-search) to draw as markers; null = none. */
     catalog?: CatalogSet | null;
     /** Index of the selected catalog source (highlighted marker), or -1. */
@@ -929,6 +934,7 @@
     renderRuler();
     renderRegionOverlay();
     renderTargetMarker();
+    renderIdentifyMarker();
     renderCenterReticle();
 
     // Time the full frame → FPS + last-render for the HUD, then push a snapshot.
@@ -1533,12 +1539,65 @@
     ctx.restore();
   }
 
+  // Near-white — distinct from the orange LC target / cyan Gaia / gold lens / magenta Rubin.
+  const IDENTIFY_MARKER_COLOR = '#eaf2ff';
+
+  /**
+   * Draw the click-identify marker: a labelled ring pinned to the sky point the user
+   * CLICKED, captioned with what was identified there (name + final class +
+   * confidence). This answers "when I click, show me on the image what I clicked and
+   * what it is." Sky-anchored (tracks pan); off-canvas it becomes an edge arrow
+   * pointing back toward the click. Distinct in shape (ring, no arrow) and colour
+   * from the light-curve target marker so the two never read as the same thing.
+   */
+  function renderIdentifyMarker() {
+    if (!ctx || !identifyMarker) return;
+    const view = currentView();
+    const [sx, sy] = skyToCanvas(view, identifyMarker.ra, identifyMarker.dec);
+    if (Number.isNaN(sx) || Number.isNaN(sy)) return;
+    const x = sx + panOffsetX;
+    const y = sy + panOffsetY;
+    const color = IDENTIFY_MARKER_COLOR;
+    const onCanvas = x >= 0 && y >= 0 && x <= canvasWidth && y <= canvasHeight;
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    if (onCanvas) {
+      // A double ring + tiny centre dot marks the exact clicked point without hiding it.
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(x, y, 7, 0, Math.PI * 2); ctx.stroke();
+      ctx.lineWidth = 2.5; ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+      ctx.beginPath(); ctx.arc(x, y, 9.5, 0, Math.PI * 2); ctx.stroke();
+      ctx.strokeStyle = color; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(x, y, 9.5, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(x, y, 1.4, 0, Math.PI * 2); ctx.fill();
+      drawContrastLabel(x, y - 14, identifyMarker.label, color);
+    } else {
+      const ccx = canvasWidth / 2, ccy = canvasHeight / 2;
+      const ang = Math.atan2(y - ccy, x - ccx);
+      const margin = 26;
+      const ex = Math.max(margin, Math.min(canvasWidth - margin, x));
+      const ey = Math.max(margin, Math.min(canvasHeight - margin, y));
+      const h = 11;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(ex, ey);
+      ctx.lineTo(ex - h * Math.cos(ang - 0.42), ey - h * Math.sin(ang - 0.42));
+      ctx.lineTo(ex - h * Math.cos(ang + 0.42), ey - h * Math.sin(ang + 0.42));
+      ctx.closePath();
+      ctx.fill();
+      drawContrastLabel(ex - 30 * Math.cos(ang), ey - 30 * Math.sin(ang) + 4, identifyMarker.label, color);
+    }
+    ctx.restore();
+  }
+
   /**
    * Draw the centre reticle (feature 144): a small fixed crosshair at the canvas
-   * centre marking the exact sky point the centre-based tools (light curve, cutout,
-   * RGB, identify) act on. Screen-space (always the geometric centre), with a
-   * central gap so it never hides the target; a dark under-stroke keeps it visible
-   * over bright imagery.
+   * centre marking the exact sky point the CENTRE-based tools (light curve, cutout,
+   * RGB) act on. NOTE: object identification is CLICK-based (it acts where you
+   * click, marked by the identify marker), so it is deliberately NOT in this list.
+   * Screen-space (always the geometric centre), with a central gap so it never hides
+   * the target; a dark under-stroke keeps it visible over bright imagery.
    */
   function renderCenterReticle() {
     if (!ctx || !showCenterReticle) return;
@@ -1564,6 +1623,17 @@
     ctx.beginPath();
     ctx.arc(cx, cy, 1.1, 0, Math.PI * 2);
     ctx.fill();
+    // A tiny "centre" caption so the reticle's meaning is legible on-canvas (it is
+    // the point the centre tools act on) — not just buried in the toggle's tooltip.
+    ctx.font = '9px monospace';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.lineWidth = 2.4;
+    ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+    ctx.strokeText('centre', cx + gap + len + 3, cy);
+    ctx.fillStyle = 'rgba(255,255,255,0.8)';
+    ctx.fillText('centre', cx + gap + len + 3, cy);
+    ctx.textBaseline = 'alphabetic';
     ctx.restore();
   }
 
@@ -1587,6 +1657,7 @@
     void regionShape;
     void showCenterReticle;
     void targetMarker;
+    void identifyMarker;
     scheduleRender();
   });
 

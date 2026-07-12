@@ -26,10 +26,14 @@ describe('PixelReadout', () => {
       expect(screen.getByText('-37.0000°')).toBeTruthy();
     });
 
-    it('renders pixel value', () => {
+    it('renders the pixel brightness with a clear label + a "under cursor" heading', () => {
       render(PixelReadout, { props: { visible: true, pixelValue: 0.1234 } });
-      expect(screen.getByText('Value')).toBeTruthy();
+      // Labelled "Bright" (relative luminance), not a bare ambiguous "Value" (UX fix).
+      expect(screen.getByText('Bright')).toBeTruthy();
       expect(screen.getByText('0.1234')).toBeTruthy();
+      expect(screen.getByLabelText('Readout heading')).toBeTruthy();
+      // The old ambiguous label is gone.
+      expect(screen.queryByText('Value')).toBeNull();
     });
 
     it('shows dash for null pixel value', () => {
