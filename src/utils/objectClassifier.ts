@@ -8,16 +8,26 @@
  * Decision (PRD §3.1): honesty gates FIRST, then the morphology rule.
  *   1. insufficient resolution  (local PSF < minPsfPx)         → unknown
  *   2. too many gaps            (gapFraction > gapMax)         → unknown
- *   3. saturated core           (clipped plateau)              → unknown
+ *   3. saturated core           (large clipped plateau)        → unknown
  *   4. too faint                (snr < snrMin)                 → unknown
- *   5. star  iff  fwhmRatio < τ_f  AND  spreadModelProxy < τ_s  AND  C < τ_C
- *      else galaxy.
- * Equivalently the source is a STAR iff the strongest extendedness signal
- *   m = max( (fwhmRatio−τ_f)/τ_f , (spread−τ_s)/τ_s* , (C−τ_C)/τ_C )
- * is below 0; galaxy otherwise. |m| is the distance from the decision boundary and
- * drives confidence together with SNR (blocker B7). The τ constants are NOT copied
- * from the renderer — they were FIT on the synthetic calibration set so the
- * balanced-accuracy assertions pass, and are documented ratchet-up-only.
+ *   5. star iff concentrationRatio ≥ τ_c ; else galaxy.
+ *
+ * RETUNE (TODO 138): the previous rule keyed off fwhmRatio / spread_model / the
+ * curve-of-growth concentration C — features FIT on LINEAR-flux, well-sampled Gaussian
+ * synthetic cutouts. On the REAL sky the classifier sees 8-bit, asinh-STRETCHED,
+ * often-undersampled HiPS luminance, and there those features collapse: the second-
+ * moment FWHM and C are dominated by the stretch-lifted faint wings and swing wildly
+ * with zoom (a 12-mag galaxy, NGC 1494, flipped star↔galaxy↔unknown across zoom
+ * levels), and every source — star or galaxy — reads "extended" against the too-sharp
+ * nominal PSF. The rule now keys off `concentrationRatio` = enclosed-flux(2·PSF) /
+ * enclosed-flux(6·PSF): a dimensionless ratio of two PSF-scaled apertures measured
+ * against a ROBUST low-percentile sky. It is patch-size- and zoom-independent, and on
+ * a real labelled DSS/SIMBAD holdout (tests/regression/) it separates stars (light
+ * packed in the inner aperture ⇒ HIGH ratio) from galaxies (light spread to large
+ * radii ⇒ LOW ratio) at ~0.84 accuracy, versus ~0.5 for the always-galaxy /
+ * always-star / random baselines. τ_c was FIT on that real holdout; ratchet-up-only.
+ * The distance |concentrationRatio − τ_c| is the boundary distance that, with SNR,
+ * drives confidence (blocker B7).
  */
 
 import { computeFeatures, type Cutout, type ImageFeatures } from './imageFeatures.js';
@@ -45,21 +55,27 @@ export interface ImageClassification {
  * make a test pass (mirrors the coverage-floor rule).
  */
 export const CLASSIFIER_THRESHOLDS: {
-  fwhmRatio: number;
-  spreadModel: number;
-  concentration: number;
+  concentrationRatioStar: number;
+  fillMax: number;
   snrMin: number;
   minPsfPx: number;
   gapMax: number;
 } = {
-  // Source FWHM this many × the PSF ⇒ extended.
-  fwhmRatio: 1.25,
-  // SExtractor spread this far above 0 ⇒ extended.
-  spreadModel: 0.06,
-  // Concentration above this ⇒ extended. A PSF Gaussian sits at C≈2.03.
-  concentration: 2.5,
-  // Below this peak-SNR, refuse rather than guess.
-  snrMin: 7,
+  // concentrationRatio (enclosed flux 2·PSF ÷ 6·PSF) AT OR ABOVE this ⇒ compact ⇒ star;
+  // below ⇒ light spread to large radii ⇒ galaxy. FIT on the real DSS/SIMBAD holdout
+  // (tests/regression/objectClassifier.regression.test.ts): galaxy recall 1.0 and
+  // overall accuracy ~0.84 at this value, well clear of the 0.5 baselines. Ratchet up.
+  concentrationRatioStar: 0.18,
+  // fillFraction above this ⇒ the source (or a saturated stellar halo) overruns the
+  // FOV: the curve-of-growth is untrustworthy, so cap confidence (degeneracy, §8).
+  fillMax: 0.3,
+  // Below this peak-SNR, refuse rather than guess. On 8-bit asinh-stretched pixels the
+  // robust sky lands INSIDE a patch-filling galaxy, so a real diffuse galaxy's peak-SNR
+  // is only ~1.2–2.5 (peak-SNR is a linear-flux concept that degrades under a stretch);
+  // this floor therefore sits far below the old value of 7 — just high enough to still
+  // gate a genuinely blank/near-noise-floor synthetic patch, without gating real
+  // galaxies. The concentrationRatio, not peak-SNR, carries the star/galaxy call.
+  snrMin: 1.1,
   // Below this local PSF (px) the cutout cannot resolve star vs galaxy.
   minPsfPx: 2,
   // Above this NaN fraction the cutout is mostly gaps → refuse.
@@ -113,21 +129,30 @@ export function classifyCutout(c: Cutout): ImageClassification {
   if (features.snr < t.snrMin) {
     return unknown('too faint to classify', features);
   }
+  // A degenerate concentrationRatio (no measurable curve of growth — e.g. a patch with
+  // no real source above sky) cannot be classified. concentrationRatio is 0 only when
+  // there is effectively no flux to integrate.
+  if (!(features.concentrationRatio > 0)) {
+    return unknown('no measurable source — class uncertain', features);
+  }
 
-  // Signed, normalised extendedness per feature; the max is the decision variable.
-  const eF = (features.fwhmRatio - t.fwhmRatio) / t.fwhmRatio;
-  const eS = (features.spreadModelProxy - t.spreadModel) / t.spreadModel;
-  const eC = (features.concentration - t.concentration) / t.concentration;
-  const m = Math.max(eF, eS, eC);
+  // Signed distance from the star/galaxy boundary: >0 ⇒ light packed inside the inner
+  // aperture (compact ⇒ star); <0 ⇒ spread to large radii (extended ⇒ galaxy).
+  const margin = features.concentrationRatio - t.concentrationRatioStar;
+  const cls: InferredClass = margin >= 0 ? 'star' : 'galaxy';
 
-  const cls: InferredClass = m < 0 ? 'star' : 'galaxy';
-  const boundaryConf = Math.tanh(Math.abs(m) * CONF_BOUNDARY_K);
-  const confidence = clamp01(boundaryConf * snrConfidence(features.snr));
+  const boundaryConf = Math.tanh((Math.abs(margin) / t.concentrationRatioStar) * CONF_BOUNDARY_K);
+  let confidence = clamp01(boundaryConf * snrConfidence(features.snr));
+  // A source that overruns the FOV (or a saturated stellar halo reaching the border)
+  // has an untrustworthy curve of growth — honest low confidence (degeneracy §8).
+  let degenerate = '';
+  if (features.fillFraction > t.fillMax) {
+    confidence = Math.min(confidence, UNKNOWN_CONF_CAP);
+    degenerate = ' — source overruns FOV, low confidence';
+  }
 
-  const reason =
-    cls === 'star'
-      ? `compact vs PSF (fwhmRatio ${features.fwhmRatio.toFixed(2)}, C ${features.concentration.toFixed(2)}, spread ${features.spreadModelProxy.toFixed(3)})`
-      : `extended vs PSF (fwhmRatio ${features.fwhmRatio.toFixed(2)}, C ${features.concentration.toFixed(2)}, spread ${features.spreadModelProxy.toFixed(3)})`;
+  const shape = `concentrationRatio ${features.concentrationRatio.toFixed(3)} vs τ ${t.concentrationRatioStar}, coreFlux ${features.coreFluxFraction.toFixed(3)}, fill ${features.fillFraction.toFixed(2)}`;
+  const reason = (cls === 'star' ? `compact core (${shape})` : `extended — light spread to large radii (${shape})`) + degenerate;
 
   return { cls, subtype: null, confidence, reason, features, provenance: PROVENANCE };
 }

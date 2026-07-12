@@ -212,24 +212,135 @@ describe('computeFeatures — gaps count NaN ONLY, never low luminance (blocker 
   });
 });
 
-describe('computeFeatures — saturated core (blocker B9)', () => {
-  it('a ≥2×2 plateau at the max value sets saturatedCore=true', () => {
-    const W = 21;
+describe('computeFeatures — saturated core (blocker B9 + retune TODO 138 robustness)', () => {
+  it('a LARGE flat plateau (≥16 px) at the max value sets saturatedCore=true', () => {
+    const W = 25;
     const data = new Float32Array(W * W);
     const g = ellipticalGaussian(W, 3, 3, 0, 200);
     for (let y = 0; y < W; y++) for (let x = 0; x < W; x++) data[y * W + x] = g(x, y);
-    // Clip a 3×3 core to a common plateau value = the array max (8-bit-style clip).
+    // Clip a 5×5 (25-px) core to a common plateau value = the array max (real detector
+    // /photographic saturation is a SIZEABLE flat region, not a 2-px quantisation dab).
     const c = (W - 1) / 2;
     let mx = 0;
     for (const v of data) if (v > mx) mx = v;
-    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) data[(c + dy) * W + (c + dx)] = mx;
+    for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) data[(c + dy) * W + (c + dx)] = mx;
     const f = computeFeatures({ data, width: W, height: W, pixelScaleArcsec: 1, psfFwhmArcsec: 3 });
     expect(f.saturatedCore).toBe(true);
+  });
+
+  it('a SMALL max-value plateau (a 2×2 quantisation dab) does NOT flag saturation (TODO 138)', () => {
+    // The killer bug on real 8-bit asinh-stretched HiPS pixels: quantising a smooth
+    // bright core rounds a few neighbours to the same top value, faking a "saturated"
+    // core on essentially every source. A 2×2 (or 3×3) plateau must NOT trigger.
+    const W = 25;
+    const data = new Float32Array(W * W);
+    const g = ellipticalGaussian(W, 3, 3, 0, 200);
+    for (let y = 0; y < W; y++) for (let x = 0; x < W; x++) data[y * W + x] = g(x, y);
+    const c = (W - 1) / 2;
+    let mx = 0;
+    for (const v of data) if (v > mx) mx = v;
+    for (let dy = 0; dy <= 1; dy++) for (let dx = 0; dx <= 1; dx++) data[(c + dy) * W + (c + dx)] = mx; // 2×2 only
+    const f = computeFeatures({ data, width: W, height: W, pixelScaleArcsec: 1, psfFwhmArcsec: 3 });
+    expect(f.saturatedCore).toBe(false);
   });
 
   it('a clean single-peak Gaussian is NOT flagged saturated', () => {
     const f = computeFeatures(grid(21, ellipticalGaussian(21, 3, 3, 0, 137.5), 6));
     expect(f.saturatedCore).toBe(false);
+  });
+});
+
+describe('computeFeatures — scale/stretch-robust concentration features (retune TODO 138)', () => {
+  // psfFwhmArcsec = 2.5·pixelScale ⇒ psfFwhmPx = 2.5 (the app's undersampled floor).
+  const W = 64;
+  const cx = (W - 1) / 2;
+  const psfArcsec = 2.5;
+  const pixScale = 1;
+
+  it('a COMPACT point packs its light into the inner aperture ⇒ HIGH concentrationRatio', () => {
+    // A tight Gaussian (σ≈1 px, i.e. ~PSF-sized) on a flat sky.
+    const data = new Float32Array(W * W).fill(5);
+    for (let y = 0; y < W; y++) for (let x = 0; x < W; x++)
+      data[y * W + x] = 5 + 250 * Math.exp(-0.5 * ((x - cx) ** 2 + (y - cx) ** 2) / (1.1 * 1.1));
+    const f = computeFeatures({ data, width: W, height: W, pixelScaleArcsec: pixScale, psfFwhmArcsec: psfArcsec });
+    expect(f.concentrationRatio).toBeGreaterThan(0.6);
+    expect(f.coreFluxFraction).toBeGreaterThan(0.5);
+  });
+
+  it('a BROAD extended blob spreads light to large radii ⇒ LOW concentrationRatio', () => {
+    // An exponential disk many PSF-FWHM across (scale length ≈ 10 px ≈ 4·PSF).
+    const data = new Float32Array(W * W).fill(5);
+    for (let y = 0; y < W; y++) for (let x = 0; x < W; x++) {
+      const r = Math.hypot(x - cx, y - cx);
+      data[y * W + x] = 5 + 250 * Math.exp(-r / 10);
+    }
+    const f = computeFeatures({ data, width: W, height: W, pixelScaleArcsec: pixScale, psfFwhmArcsec: psfArcsec });
+    expect(f.concentrationRatio).toBeLessThan(0.3);
+    // And the ordering is what matters: extended ≪ compact.
+    const pt = new Float32Array(W * W).fill(5);
+    for (let y = 0; y < W; y++) for (let x = 0; x < W; x++)
+      pt[y * W + x] = 5 + 250 * Math.exp(-0.5 * ((x - cx) ** 2 + (y - cx) ** 2) / (1.1 * 1.1));
+    const fp = computeFeatures({ data: pt, width: W, height: W, pixelScaleArcsec: pixScale, psfFwhmArcsec: psfArcsec });
+    expect(f.concentrationRatio).toBeLessThan(fp.concentrationRatio);
+  });
+
+  it('concentrationRatio is INVARIANT to a positive intensity rescale (no absolute calibration)', () => {
+    const base = new Float32Array(W * W).fill(5);
+    for (let y = 0; y < W; y++) for (let x = 0; x < W; x++)
+      base[y * W + x] = 5 + 200 * Math.exp(-Math.hypot(x - cx, y - cx) / 8);
+    const scaled = new Float32Array(W * W);
+    for (let i = 0; i < base.length; i++) scaled[i] = base[i]! * 3.7;
+    const a = computeFeatures({ data: base, width: W, height: W, pixelScaleArcsec: pixScale, psfFwhmArcsec: psfArcsec });
+    const b = computeFeatures({ data: scaled, width: W, height: W, pixelScaleArcsec: pixScale, psfFwhmArcsec: psfArcsec });
+    expect(b.concentrationRatio).toBeCloseTo(a.concentrationRatio, 5);
+  });
+
+  it('flux reaching the FOV edge raises fillFraction above a centred compact source (degeneracy §8)', () => {
+    // A source whose light reaches the border ring flags an untrustworthy curve of
+    // growth; a centred compact point puts essentially nothing there. fillFraction ∈ [0,1].
+    const edge = new Float32Array(W * W).fill(5);
+    for (let y = 0; y < W; y++) for (let x = 0; x < W; x++) {
+      // Bright band along the left edge (flux on the border ring) plus a centred core.
+      const dEdge = x; // distance from left edge
+      edge[y * W + x] = 5 + 250 * Math.exp(-0.5 * (dEdge * dEdge) / (3 * 3));
+    }
+    const fe = computeFeatures({ data: edge, width: W, height: W, pixelScaleArcsec: pixScale, psfFwhmArcsec: psfArcsec });
+
+    const point = new Float32Array(W * W).fill(5);
+    for (let y = 0; y < W; y++) for (let x = 0; x < W; x++)
+      point[y * W + x] = 5 + 250 * Math.exp(-0.5 * ((x - cx) ** 2 + (y - cx) ** 2) / (1.1 * 1.1));
+    const fp = computeFeatures({ data: point, width: W, height: W, pixelScaleArcsec: pixScale, psfFwhmArcsec: psfArcsec });
+
+    expect(fe.fillFraction).toBeGreaterThanOrEqual(0);
+    expect(fe.fillFraction).toBeLessThanOrEqual(1);
+    expect(fe.fillFraction).toBeGreaterThan(fp.fillFraction + 0.05);
+  });
+
+  it('degenerate inputs yield ZERO concentration features (guards), never NaN', () => {
+    // All-NaN patch (no finite pixels) and a perfectly constant patch (no peak above
+    // sky) must both return 0 for the concentration features rather than NaN/Inf.
+    const allNaN = new Float32Array(16 * 16).fill(NaN);
+    const fN = computeFeatures({ data: allNaN, width: 16, height: 16, pixelScaleArcsec: 1, psfFwhmArcsec: 2.5 });
+    expect(fN.concentrationRatio).toBe(0);
+    expect(fN.coreFluxFraction).toBe(0);
+    expect(fN.fillFraction).toBe(0);
+
+    const flat = new Float32Array(16 * 16).fill(42);
+    const fF = computeFeatures({ data: flat, width: 16, height: 16, pixelScaleArcsec: 1, psfFwhmArcsec: 2.5 });
+    expect(fF.concentrationRatio).toBe(0);
+    expect(Number.isFinite(fF.coreFluxFraction)).toBe(true);
+  });
+
+  it('flux confined to the FOV border drives fillFraction above 0.3 (strong degeneracy)', () => {
+    // A bright frame with a dark centre: almost all flux sits on the border ring.
+    const W = 64;
+    const data = new Float32Array(W * W).fill(5);
+    for (let y = 0; y < W; y++) for (let x = 0; x < W; x++) {
+      const dEdge = Math.min(x, y, W - 1 - x, W - 1 - y);
+      if (dEdge < 4) data[y * W + x] = 250;
+    }
+    const f = computeFeatures({ data, width: W, height: W, pixelScaleArcsec: 1.4, psfFwhmArcsec: 3.5 });
+    expect(f.fillFraction).toBeGreaterThan(0.3);
   });
 });
 

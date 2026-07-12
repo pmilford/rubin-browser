@@ -73,6 +73,36 @@ export interface ImageFeatures {
   m20: number;
   /** Second-moment ellipticity e = 1 − b/a of the flux distribution (0 = round). */
   ellipticity: number;
+
+  // ── Scale- & stretch-ROBUST features (retune TODO 138) ──────────────────────
+  // These are the features the real-imagery classifier keys off. They are computed
+  // against a ROBUST low-percentile sky (not the border ring, which lands INSIDE a
+  // patch-filling galaxy and collapses its segmentation) and are expressed as
+  // dimensionless ratios in PSF units, so they do NOT swing with zoom the way the
+  // second-moment size / curve-of-growth C do on 8-bit asinh-stretched HiPS pixels.
+
+  /**
+   * Curve-of-growth concentration ratio: enclosed flux within 2·PSF-FWHM ÷ enclosed
+   * flux within 6·PSF-FWHM, both apertures PSF-scaled (so patch-size independent) and
+   * centred on the flux centroid, over the robust-sky-subtracted patch. A point
+   * source packs its light into the inner aperture (ratio HIGH); a resolved galaxy
+   * spreads it to larger radii (ratio LOW). Primary star/galaxy discriminant on real
+   * stretched imagery — insensitive to the asinh-lifted faint wings that wreck the
+   * threshold-mask second-moment FWHM. 1 for a delta, →(2/6 area) for a flat blob.
+   */
+  concentrationRatio: number;
+  /**
+   * Fraction of the robust-sky-subtracted patch flux contained within 1.5·PSF-FWHM of
+   * the peak. High ⇒ compact (star); low ⇒ light spread across the patch (galaxy).
+   */
+  coreFluxFraction: number;
+  /**
+   * Fraction of the robust-sky-subtracted flux sitting on the 2-px outer border ring.
+   * High ⇒ the source (or a saturated stellar halo) overruns the FOV — a degeneracy
+   * flag: a true point source never fills the patch, so a high value means the
+   * curve-of-growth is untrustworthy and the honest call is "extended, low confidence".
+   */
+  fillFraction: number;
 }
 
 /** FWHM = 2·√(2·ln2)·σ ⇒ this constant times σ. Pinned by a closed-form test. */
@@ -169,7 +199,18 @@ function bilinear(grid: Float64Array, width: number, height: number, x: number, 
   return top * (1 - dy) + bot * dy;
 }
 
-/** Detect a ≥2×2 contiguous block whose four cells all equal the finite max. */
+/**
+ * Detect a GENUINELY saturated (flat-topped) core: a connected plateau of at least
+ * `SAT_MIN_PLATEAU` pixels all pinned at the finite max.
+ *
+ * A bare 2×2 test (retune TODO 138) over-fired catastrophically on real 8-bit
+ * asinh-stretched HiPS pixels: quantising a smooth bright core rounds a handful of
+ * neighbouring pixels to the same top value, manufacturing a fake "saturated" plateau
+ * on essentially every source and gating the whole sky to "unknown". A real clipped
+ * core (photographic/detector saturation) is a LARGE flat region; requiring a sizeable
+ * connected max-plateau separates it from quantisation dabs (which are only a few px).
+ */
+const SAT_MIN_PLATEAU = 16;
 function detectSaturatedCore(c: Cutout): boolean {
   const { data, width, height } = c;
   let max = -Infinity;
@@ -178,14 +219,32 @@ function detectSaturatedCore(c: Cutout): boolean {
     if (Number.isFinite(v) && v > max) max = v;
   }
   if (!Number.isFinite(max)) return false;
-  for (let y = 0; y < height - 1; y++) {
-    for (let x = 0; x < width - 1; x++) {
-      const a = data[y * width + x]!;
-      const b = data[y * width + x + 1]!;
-      const cc = data[(y + 1) * width + x]!;
-      const d = data[(y + 1) * width + x + 1]!;
-      if (a === max && b === max && cc === max && d === max) return true;
+  // Largest 4-connected component of exactly-max pixels.
+  const seen = new Uint8Array(width * height);
+  for (let start = 0; start < data.length; start++) {
+    if (seen[start] || data[start] !== max) continue;
+    let count = 0;
+    const stack = [start];
+    seen[start] = 1;
+    while (stack.length > 0) {
+      const idx = stack.pop()!;
+      count++;
+      const px = idx % width;
+      const py = (idx - px) / width;
+      const nbrs = [
+        px > 0 ? idx - 1 : -1,
+        px < width - 1 ? idx + 1 : -1,
+        py > 0 ? idx - width : -1,
+        py < height - 1 ? idx + width : -1,
+      ];
+      for (const nIdx of nbrs) {
+        if (nIdx >= 0 && !seen[nIdx] && data[nIdx] === max) {
+          seen[nIdx] = 1;
+          stack.push(nIdx);
+        }
+      }
     }
+    if (count >= SAT_MIN_PLATEAU) return true;
   }
   return false;
 }
@@ -512,6 +571,102 @@ function m20(seg: Segmentation, width: number, height: number): number {
   return ratio > 0 ? Math.log10(ratio) : 0;
 }
 
+/** A percentile (q∈[0,1]) of an ASCENDING-sorted array; empty ⇒ NaN. */
+function percentileSorted(sorted: number[], q: number): number {
+  if (sorted.length === 0) return NaN;
+  const idx = (sorted.length - 1) * q;
+  const lo = Math.floor(idx);
+  const hi = Math.ceil(idx);
+  if (lo === hi) return sorted[lo]!;
+  return sorted[lo]! + (sorted[hi]! - sorted[lo]!) * (idx - lo);
+}
+
+/**
+ * Scale- and stretch-ROBUST concentration / fill features (retune TODO 138).
+ *
+ * Uses a ROBUST low-percentile sky rather than the border ring: on a big diffuse
+ * galaxy the border ring lands INSIDE the galaxy, inflating the background and
+ * collapsing the source to a single core pixel (fwhmRatio→0, gini→1) — which is
+ * exactly what made the classifier flip a 12-mag galaxy to "star" at some zooms.
+ *
+ * All apertures are PSF-scaled (patch-size independent) and the concentration is a
+ * RATIO of two such apertures, so the value does not swing with zoom the way an
+ * absolute second-moment size does on 8-bit asinh-stretched pixels.
+ */
+function concentrationFeatures(
+  c: Cutout,
+  psfFwhmPx: number,
+): { concentrationRatio: number; coreFluxFraction: number; fillFraction: number } {
+  const { data, width, height } = c;
+  const finite: number[] = [];
+  for (let i = 0; i < data.length; i++) {
+    const v = data[i]!;
+    if (Number.isFinite(v)) finite.push(v);
+  }
+  if (finite.length === 0) return { concentrationRatio: 0, coreFluxFraction: 0, fillFraction: 0 };
+  finite.sort((a, b) => a - b);
+  const sky = percentileSorted(finite, 0.2);
+
+  // Peak (robust-sky-subtracted) and its location.
+  let peak = -Infinity;
+  for (let i = 0; i < data.length; i++) {
+    const v = data[i]!;
+    if (Number.isFinite(v)) {
+      const r = v - sky;
+      if (r > peak) peak = r;
+    }
+  }
+  if (!(peak > 0)) return { concentrationRatio: 0, coreFluxFraction: 0, fillFraction: 0 };
+
+  // Flux-weighted centroid over the bright core (r > 0.1·peak), so faint asymmetric
+  // wing noise cannot drag the centre off the source.
+  let sw = 0;
+  let scx = 0;
+  let scy = 0;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const v = data[y * width + x]!;
+      if (!Number.isFinite(v)) continue;
+      const r = v - sky;
+      if (r > 0.1 * peak) {
+        sw += r;
+        scx += r * x;
+        scy += r * y;
+      }
+    }
+  }
+  if (!(sw > 0)) return { concentrationRatio: 0, coreFluxFraction: 0, fillFraction: 0 };
+  const cx = scx / sw;
+  const cy = scy / sw;
+
+  const rInner = 1.5 * psfFwhmPx; // core aperture for coreFluxFraction
+  const rC2 = 2 * psfFwhmPx; // concentration numerator aperture
+  const rC6 = 6 * psfFwhmPx; // concentration denominator aperture
+  let encInner = 0;
+  let encC2 = 0;
+  let encC6 = 0;
+  let total = 0;
+  let border = 0;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const v = data[y * width + x]!;
+      if (!Number.isFinite(v)) continue;
+      const r = v - sky;
+      if (r <= 0) continue;
+      total += r;
+      const d = Math.hypot(x - cx, y - cy);
+      if (d <= rInner) encInner += r;
+      if (d <= rC2) encC2 += r;
+      if (d <= rC6) encC6 += r;
+      if (x < 2 || y < 2 || x >= width - 2 || y >= height - 2) border += r;
+    }
+  }
+  const concentrationRatio = encC6 > 0 ? encC2 / encC6 : 0;
+  const coreFluxFraction = total > 0 ? encInner / total : 0;
+  const fillFraction = total > 0 ? border / total : 0;
+  return { concentrationRatio, coreFluxFraction, fillFraction };
+}
+
 /**
  * Compute the full feature vector for a cutout. PURE and NaN-safe: NaN cells are
  * gaps (excluded from every statistic, counted only by `gapFraction`); no feature
@@ -555,6 +710,7 @@ export function computeFeatures(c: Cutout): ImageFeatures {
   const asym = asymmetry(seg, c);
   const g = gini(seg, width, height);
   const mm = m20(seg, width, height);
+  const { concentrationRatio, coreFluxFraction, fillFraction } = concentrationFeatures(c, psfFwhmPx);
 
   return {
     snr,
@@ -568,5 +724,8 @@ export function computeFeatures(c: Cutout): ImageFeatures {
     gini: g,
     m20: mm,
     ellipticity,
+    concentrationRatio,
+    coreFluxFraction,
+    fillFraction,
   };
 }

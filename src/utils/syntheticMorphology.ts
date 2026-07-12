@@ -65,6 +65,14 @@ export interface RenderOpts {
   quantize8bit?: boolean;
   /** Apply an asinh display stretch before quantisation. Default false. */
   asinhStretch?: boolean;
+  /**
+   * Apply the SAME aggressive DSS/HiPS display transform the REAL holdout fixture
+   * uses (asinh a=10 on a [black=25th-percentile, white=max] window, then 8-bit
+   * quantise), so a synthetic population lands in the identical stretched regime the
+   * shipped classifier is tuned for — not the gentle `asinhStretch` used by the
+   * legacy anti-overfit holdout. Overrides `asinhStretch`/`quantize8bit` when set.
+   */
+  dssStretch?: boolean;
 }
 
 const FWHM_PER_SIGMA = 2 * Math.sqrt(2 * Math.LN2); // 2.354820045...
@@ -220,6 +228,7 @@ export function renderLabeledCutout(opts: RenderOpts): LabeledCutout {
   const profile = opts.profile ?? 'gaussian';
   const quantize8bit = opts.quantize8bit ?? false;
   const asinhStretch = opts.asinhStretch ?? false;
+  const dssStretch = opts.dssStretch ?? false;
 
   const isGalaxy = trueClass === 'galaxy';
   const psfFwhmPx = psfFwhmArcsec / pixelScaleArcsec;
@@ -286,7 +295,29 @@ export function renderLabeledCutout(opts: RenderOpts): LabeledCutout {
 
   // ── Optional display transform (asinh + 8-bit), monotonic in intensity ────────
   const data = new Float32Array(n * n);
-  if (!asinhStretch && !quantize8bit) {
+  if (dssStretch) {
+    // The EXACT transform the real DSS holdout fixture applies (asinh a=10 on a
+    // [black=25th-pct, white=max] window → 8-bit), so a synthetic population is in the
+    // identical stretched regime the shipped classifier is calibrated for.
+    const A = 10;
+    const denom = Math.asinh(A);
+    const sorted = [...raw].sort((p, q) => p - q);
+    const pctl = (fr: number): number => {
+      const idx = (sorted.length - 1) * fr;
+      const lo = Math.floor(idx);
+      const hi = Math.ceil(idx);
+      return sorted[lo]! + (sorted[hi]! - sorted[lo]!) * (idx - lo);
+    };
+    const black = pctl(0.25);
+    const white = Math.max(sorted[sorted.length - 1]!, black + 1e-9);
+    for (let i = 0; i < raw.length; i++) {
+      let x = (raw[i]! - black) / (white - black);
+      if (x < 0) x = 0;
+      if (x > 1) x = 1;
+      const q = Math.round((Math.asinh(A * x) / denom) * 255);
+      data[i] = q < 0 ? 0 : q > 255 ? 255 : q;
+    }
+  } else if (!asinhStretch && !quantize8bit) {
     for (let i = 0; i < raw.length; i++) data[i] = raw[i]!;
   } else {
     // Gentle asinh: softening ABOVE the peak so bright cores compress only mildly
@@ -334,6 +365,8 @@ export interface PopulationOpts {
   quantize8bit?: boolean;
   /** Apply an asinh stretch. Default false. */
   asinhStretch?: boolean;
+  /** Apply the real-fixture DSS/HiPS display stretch (see RenderOpts.dssStretch). */
+  dssStretch?: boolean;
 }
 
 /**
@@ -350,6 +383,7 @@ export function generateLabeledPopulation(seed: number, n: number, opts: Populat
   const profile = opts.profile ?? 'gaussian';
   const quantize8bit = opts.quantize8bit ?? false;
   const asinhStretch = opts.asinhStretch ?? false;
+  const dssStretch = opts.dssStretch ?? false;
 
   const rand = mulberry32(hashSeed(seed, n, 0x5eed));
   const out: LabeledCutout[] = [];
@@ -375,6 +409,7 @@ export function generateLabeledPopulation(seed: number, n: number, opts: Populat
         profile,
         quantize8bit,
         asinhStretch,
+        dssStretch,
       }),
     );
   }
