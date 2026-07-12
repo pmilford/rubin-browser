@@ -158,6 +158,34 @@ describe('LightCurvePlot — time-proportional axis, overlay, expand, hover', ()
     expect(container.querySelector('[aria-label="Light curve status"]')!.textContent).toContain('all bands hidden');
   });
 
+  it('compresses a long gap to a short on-screen break (opt-in) without moving intra-cluster spacing', async () => {
+    // Two dense clusters separated by a 98-day void.
+    const pts = [0, 1, 2, 100, 101, 102].map((mjd) => ({ mjd, intensity: 1 + (mjd % 3) }));
+    const { container, getByLabelText } = render(LightCurvePlot, { series: [{ band: 'r', points: pts }] });
+    const cxs = (): number[] => seriesCircles(container).map(cx);
+
+    const full = cxs();
+    const fullStep = full[1]! - full[0]!; // intra-cluster (1 day)
+    const fullAcross = full[3]! - full[2]!; // across the void (98 days)
+    expect(fullAcross / fullStep).toBeGreaterThan(20); // full-time: the void dominates
+
+    // Toggle compression → the across-void gap shrinks to ~one intra-cluster step,
+    // and a break glyph appears; a screen-pinned/no-op impl fails this ratio.
+    await fireEvent.click(getByLabelText('Compress time gaps'));
+    const comp = cxs();
+    const compStep = comp[1]! - comp[0]!;
+    const compAcross = comp[3]! - comp[2]!;
+    expect(compAcross / compStep).toBeCloseTo(1, 1);
+    expect(container.querySelectorAll('[aria-label="Time gap break"]').length).toBe(1);
+  });
+
+  it('hides the compress toggle when there is no large gap (uniform cadence)', () => {
+    const { queryByLabelText } = render(LightCurvePlot, {
+      series: [{ band: 'r', points: [0, 10, 20, 30].map((mjd) => ({ mjd, intensity: 1 })) }],
+    });
+    expect(queryByLabelText('Compress time gaps')).toBeNull();
+  });
+
   it('draws exactly one <circle> per epoch (preserves the Playwright marker contract)', () => {
     const { container } = render(LightCurvePlot, {
       series: [{ band: 'r', points: [0, 1, 2, 3].map((mjd) => ({ mjd, intensity: mjd })) }],

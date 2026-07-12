@@ -143,6 +143,80 @@ export function normalizeIntensities(points: readonly LcSeriesPoint[]): number[]
   return points.map((p) => (span > 0 ? (p.intensity - lo) / span : 0.5));
 }
 
+/* -------------------------------------------------------------------------- */
+/* Time-axis compression (collapse large observing gaps to a short break)      */
+/* -------------------------------------------------------------------------- */
+
+/** Ascending unique values. */
+export function uniqueSorted(values: readonly number[]): number[] {
+  const out = [...values].filter((v) => Number.isFinite(v)).sort((a, b) => a - b);
+  return out.filter((v, i) => i === 0 || v !== out[i - 1]);
+}
+
+/**
+ * One piece of the compressed time axis: the real MJD interval [t0,t1] maps
+ * linearly to the compressed interval [c0,c1]. A `gap` piece is a large observing
+ * gap whose compressed width is deliberately SHORT (one median cadence) so the
+ * dense clusters get the horizontal room instead of a wide void.
+ */
+export interface CompressedSegment {
+  t0: number;
+  t1: number;
+  c0: number;
+  c1: number;
+  gap: boolean;
+}
+
+/**
+ * Build a piecewise-linear compressed time axis over the (already sorted, unique)
+ * observation times. A consecutive interval longer than `gapFactor`× the median
+ * cadence is a "gap": instead of its true width it takes a fixed SHORT width (the
+ * median cadence), so a season-long void no longer squashes the data. Non-gap
+ * intervals keep their true (proportional) width. `totalC` is the full compressed
+ * span used to normalise into pixels.
+ */
+export function buildCompressedSegments(
+  sortedUniqueMjds: readonly number[],
+  gapFactor = 3
+): { segments: CompressedSegment[]; totalC: number } {
+  const u = sortedUniqueMjds;
+  if (u.length <= 1) return { segments: [], totalC: 0 };
+  const med = medianGap(u) || 1;
+  const segments: CompressedSegment[] = [];
+  let c = 0;
+  for (let i = 1; i < u.length; i++) {
+    const delta = u[i]! - u[i - 1]!;
+    const gap = delta > gapFactor * med;
+    const cDelta = gap ? med : delta;
+    segments.push({ t0: u[i - 1]!, t1: u[i]!, c0: c, c1: c + cDelta, gap });
+    c += cDelta;
+  }
+  return { segments, totalC: c };
+}
+
+/** Map an MJD to its compressed coordinate via the segment it falls in (clamped). */
+export function compressedCoord(mjd: number, segments: readonly CompressedSegment[], totalC: number): number {
+  if (segments.length === 0) return 0;
+  if (mjd <= segments[0]!.t0) return 0;
+  const last = segments[segments.length - 1]!;
+  if (mjd >= last.t1) return totalC;
+  for (const s of segments) {
+    if (mjd >= s.t0 && mjd <= s.t1) {
+      if (s.t1 === s.t0) return s.c0;
+      return s.c0 + ((mjd - s.t0) / (s.t1 - s.t0)) * (s.c1 - s.c0);
+    }
+  }
+  return totalC;
+}
+
+/** True when `mjd` falls strictly inside a collapsed gap segment (for tick hiding). */
+export function isInCollapsedGap(mjd: number, segments: readonly CompressedSegment[]): boolean {
+  for (const s of segments) {
+    if (s.gap && mjd > s.t0 && mjd < s.t1) return true;
+  }
+  return false;
+}
+
 /** Standard per-band colours (Rubin ugrizy + Gaia g/bp/rp); fallback palette by index. */
 const BAND_COLORS: Record<string, string> = {
   u: '#a78bfa',

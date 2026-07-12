@@ -64,6 +64,11 @@ test.describe('Gaia variable light curve', () => {
     await page.locator('button[aria-label="Toggle band bp"]').click();
     await expect(page.locator('g.series[data-band="bp"]')).toHaveCount(0);
     await expect(page.locator('g.series[data-band="g"]')).toHaveCount(1);
+
+    // Compress the long observing gaps → break glyphs appear on the axis (the
+    // fixture's bursty cadence has gaps, so the toggle is offered).
+    await page.locator('button[aria-label="Compress time gaps"]').click();
+    await expect.poll(() => page.locator('[aria-label="Time gap break"]').count()).toBeGreaterThan(0);
   });
 
   test('an empty cone is reported honestly, not as a blank/no-op panel', async ({ page }) => {

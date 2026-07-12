@@ -13,6 +13,10 @@ import {
   normalizeIntensities,
   bandColor,
   formatValue,
+  uniqueSorted,
+  buildCompressedSegments,
+  compressedCoord,
+  isInCollapsedGap,
   type LcSeries,
 } from '../../src/utils/lightCurvePlot.js';
 
@@ -99,6 +103,51 @@ describe('normalizeIntensities', () => {
   });
   it('maps a flat series to 0.5 (no divide-by-zero)', () => {
     expect(normalizeIntensities([{ mjd: 1, intensity: 7 }, { mjd: 2, intensity: 7 }])).toEqual([0.5, 0.5]);
+  });
+});
+
+describe('time-axis compression', () => {
+  const clusters = [0, 1, 2, 100, 101, 102]; // two dense clusters, one 98-day void
+
+  it('uniqueSorted dedups + sorts + drops non-finite', () => {
+    expect(uniqueSorted([3, 1, 2, 1, NaN, 3])).toEqual([1, 2, 3]);
+  });
+
+  it('collapses a large gap to ONE median cadence, keeping clusters proportional', () => {
+    const { segments, totalC } = buildCompressedSegments(clusters);
+    const gapSeg = segments.find((s) => s.gap)!;
+    expect(gapSeg.t0).toBe(2);
+    expect(gapSeg.t1).toBe(100);
+    // The 98-day void is compressed to the median cadence (1), not its true width.
+    expect(gapSeg.c1 - gapSeg.c0).toBe(1);
+    // total = 2 intra-cluster steps ×2 clusters + 1 collapsed gap = 5 (not 102).
+    expect(totalC).toBe(5);
+  });
+
+  it('makes the collapsed gap the SAME on-screen size as one normal step', () => {
+    const { segments, totalC } = buildCompressedSegments(clusters);
+    const step = compressedCoord(1, segments, totalC) - compressedCoord(0, segments, totalC);
+    const across = compressedCoord(100, segments, totalC) - compressedCoord(2, segments, totalC);
+    expect(step).toBe(1);
+    expect(across).toBe(1); // full-time mode would give 98 — this is the whole point
+  });
+
+  it('flags MJDs strictly inside a collapsed gap (for tick hiding), not the endpoints', () => {
+    const { segments } = buildCompressedSegments(clusters);
+    expect(isInCollapsedGap(50, segments)).toBe(true);
+    expect(isInCollapsedGap(2, segments)).toBe(false);
+    expect(isInCollapsedGap(1, segments)).toBe(false);
+  });
+
+  it('is a no-op shape for a uniformly-sampled series (no gap segments)', () => {
+    const { segments, totalC } = buildCompressedSegments([0, 10, 20, 30]);
+    expect(segments.every((s) => !s.gap)).toBe(true);
+    expect(totalC).toBe(30);
+  });
+
+  it('handles <2 unique times without dividing by zero', () => {
+    expect(buildCompressedSegments([5])).toEqual({ segments: [], totalC: 0 });
+    expect(compressedCoord(5, [], 0)).toBe(0);
   });
 });
 

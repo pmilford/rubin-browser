@@ -21,6 +21,10 @@
     normalizeIntensities,
     bandColor,
     formatValue,
+    uniqueSorted,
+    buildCompressedSegments,
+    compressedCoord,
+    isInCollapsedGap,
     type LcSeries,
     type LcSeriesPoint,
   } from '../utils/lightCurvePlot.js';
@@ -68,6 +72,9 @@
   // --- normalise + legend state -------------------------------------------------
   let normalized = $state(false);
   let hidden = $state<string[]>([]);
+  // Compress large observing gaps to a short break (so dense clusters aren't
+  // squashed by a season-long void). Opt-in; the default axis stays true-to-time.
+  let compress = $state(false);
 
   // --- assemble series (series prop wins; else wrap the back-compat curve) -------
   const allSeries = $derived.by((): { band: string; color: string; points: LcSeriesPoint[] }[] => {
@@ -102,9 +109,18 @@
   const domain = $derived(seriesDomain(plotSeries.map((s) => ({ band: s.band, points: s.points.map((p) => ({ mjd: p.mjd, intensity: p.y })) }))));
   const hasData = $derived(!!domain);
 
+  // --- compressed time axis (opt-in) --------------------------------------------
+  // Union of every visible epoch, and the piecewise-linear compressed axis over it.
+  const unionMjds = $derived(uniqueSorted(plotSeries.flatMap((s) => s.points.map((p) => p.mjd))));
+  const compAxis = $derived(buildCompressedSegments(unionMjds));
+  // A compressed view only matters when there IS a collapsed gap to remove.
+  const hasGap = $derived(compAxis.segments.some((s) => s.gap));
+  const compressing = $derived(compress && hasGap && compAxis.totalC > 0);
+
   // --- scales -------------------------------------------------------------------
   const xOf = (mjd: number): number => {
     if (!domain) return M.l;
+    if (compressing) return M.l + (compressedCoord(mjd, compAxis.segments, compAxis.totalC) / compAxis.totalC) * plotW;
     if (domain.mjdMax === domain.mjdMin) return M.l + plotW / 2;
     return M.l + ((mjd - domain.mjdMin) / (domain.mjdMax - domain.mjdMin)) * plotW;
   };
@@ -114,8 +130,21 @@
     return M.t + plotH - ((v - domain.vMin) / (domain.vMax - domain.vMin)) * plotH;
   };
 
-  const xTicks = $derived(domain ? niceTicks(domain.mjdMin, domain.mjdMax, expanded ? 7 : 4) : []);
+  // In compressed mode hide any tick that lands inside a collapsed void (its x would
+  // misleadingly sit in the short break). The break glyphs mark those spans instead.
+  const xTicks = $derived.by(() => {
+    if (!domain) return [];
+    const ticks = niceTicks(domain.mjdMin, domain.mjdMax, expanded ? 7 : 4);
+    return compressing ? ticks.filter((t) => !isInCollapsedGap(t, compAxis.segments)) : ticks;
+  });
   const yTicks = $derived(domain ? niceTicks(domain.vMin, domain.vMax, expanded ? 6 : 4) : []);
+
+  // Screen x of each collapsed gap's break glyph (midpoint of the short break span).
+  const breakXs = $derived(
+    compressing
+      ? compAxis.segments.filter((s) => s.gap).map((s) => M.l + (((s.c0 + s.c1) / 2) / compAxis.totalC) * plotW)
+      : []
+  );
 
   // Per-series gap-aware line segments (dashed + dimmed across large temporal gaps).
   const segmentsFor = (pts: PlotPoint[]): { x1: number; y1: number; x2: number; y2: number; gap: boolean }[] => {
@@ -169,6 +198,16 @@
         onclick={() => (normalized = !normalized)}>norm</button
       >
     {/if}
+    {#if hasGap}
+      <button
+        class="ctl"
+        class:on={compress}
+        aria-label="Compress time gaps"
+        aria-pressed={compress}
+        title="Collapse long observing gaps to a short break so the dense data isn't squashed"
+        onclick={() => (compress = !compress)}>⇥gap</button
+      >
+    {/if}
     <button
       class="ctl"
       aria-label={expanded ? 'Collapse light curve' : 'Expand light curve'}
@@ -216,6 +255,14 @@
         <!-- axes frame -->
         <line x1={M.l} y1={M.t} x2={M.l} y2={H - M.b} stroke="rgba(150,170,230,0.5)" stroke-width="0.8" />
         <line x1={M.l} y1={H - M.b} x2={W - M.r} y2={H - M.b} stroke="rgba(150,170,230,0.5)" stroke-width="0.8" />
+
+        <!-- break glyphs marking each collapsed time gap (compressed axis) -->
+        {#each breakXs as bx, bi (bi)}
+          <g class="axis-break" aria-label="Time gap break">
+            <line x1={bx} y1={M.t} x2={bx} y2={H - M.b} stroke="rgba(255,180,90,0.35)" stroke-width="1" stroke-dasharray="1,3" />
+            <path d={`M${bx - 3},${H - M.b + 1} l4,-5 M${bx - 1},${H - M.b + 1} l4,-5`} stroke="#fb5" stroke-width="1" fill="none" />
+          </g>
+        {/each}
 
         <!-- current-epoch (offline blink) marker -->
         {#if markerInRange && markerMjd != null}
