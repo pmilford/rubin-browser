@@ -113,6 +113,23 @@ export interface ImageFeatures {
    * curve-of-growth is untrustworthy and the honest call is "extended, low confidence".
    */
   fillFraction: number;
+
+  /**
+   * Lag-1 spatial autocorrelation (Moran's I, rook adjacency) of the finite pixels
+   * (retune TODO 147). This is the STRUCTURE / spatial-coherence discriminant that
+   * separates a real light concentration from spatially-incoherent noise WITHOUT
+   * relying on amplitude (which fails on 8-bit asinh-stretched pixels, where a diffuse
+   * ~1.2σ galaxy and empty sky have the SAME peak-SNR). A real source — compact star OR
+   * a patch-filling diffuse galaxy — is smooth, so neighbouring pixels co-vary and I is
+   * HIGH (measured ≥0.65 on the real DSS/SIMBAD holdout). White sky noise has
+   * independent pixels, so I ≈ 0. Scale-invariant (a correlation coefficient, so
+   * multiplying the patch by any positive constant leaves it unchanged) and it needs NO
+   * background/σ estimate, so — unlike peak-SNR — it is not fooled by a border ring that
+   * lands inside a patch-filling galaxy. The classifier gates the UNDERSAMPLED/stretched
+   * regime on this so empty sky honestly returns `unknown`. 0 for a constant/all-NaN
+   * patch (no measurable structure).
+   */
+  spatialCoherence: number;
 }
 
 /** FWHM = 2·√(2·ln2)·σ ⇒ this constant times σ. Pinned by a closed-form test. */
@@ -685,6 +702,68 @@ function concentrationFeatures(
 }
 
 /**
+ * Lag-1 spatial autocorrelation (Moran's I, rook/4-neighbour adjacency) over the
+ * FINITE pixels of the patch — the structure/coherence discriminant (retune TODO 147).
+ *
+ *   I = (N / S0) · (Σ_ij w_ij·(v_i−μ)(v_j−μ)) / (Σ_i (v_i−μ)²)
+ *
+ * with w_ij = 1 for horizontally/vertically adjacent finite cells (symmetric). A
+ * smooth light distribution (any real source — a compact PSF core or a diffuse galaxy)
+ * makes adjacent pixels co-vary ⇒ I → 1; spatially-independent sky noise ⇒ I ≈ 0.
+ *
+ * Deliberately AMPLITUDE-FREE: subtracting the (finite-pixel) mean cancels any additive
+ * sky pedestal, and the ratio form cancels any positive multiplicative rescale — so it
+ * neither needs a σ estimate nor is fooled by the border-ring contamination that
+ * collapses peak-SNR on a patch-filling galaxy. NaN cells (gaps) are excluded from both
+ * the mean and every adjacency term. A constant patch (den = 0) or one with < 2 finite
+ * cells returns 0 (no measurable structure).
+ */
+function spatialCoherence(c: Cutout): number {
+  const { data, width, height } = c;
+  let n = 0;
+  let sum = 0;
+  for (let i = 0; i < data.length; i++) {
+    const v = data[i]!;
+    if (Number.isFinite(v)) {
+      sum += v;
+      n++;
+    }
+  }
+  if (n < 2) return 0;
+  const mean = sum / n;
+  let num = 0; // Σ over UNORDERED adjacent finite pairs of (v_i−μ)(v_j−μ)
+  let pairs = 0; // count of those unordered pairs
+  let den = 0; // Σ (v_i−μ)²
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = y * width + x;
+      const vi = data[idx]!;
+      if (!Number.isFinite(vi)) continue;
+      const di = vi - mean;
+      den += di * di;
+      if (x + 1 < width) {
+        const vr = data[idx + 1]!;
+        if (Number.isFinite(vr)) {
+          num += di * (vr - mean);
+          pairs++;
+        }
+      }
+      if (y + 1 < height) {
+        const vd = data[idx + width]!;
+        if (Number.isFinite(vd)) {
+          num += di * (vd - mean);
+          pairs++;
+        }
+      }
+    }
+  }
+  if (den <= 0 || pairs === 0) return 0;
+  // Symmetric weights: S0 = 2·pairs and the weighted double sum = 2·num, so the
+  // factors of 2 cancel and I = (N / pairs) · (num / den).
+  return (n / pairs) * (num / den);
+}
+
+/**
  * Compute the full feature vector for a cutout. PURE and NaN-safe: NaN cells are
  * gaps (excluded from every statistic, counted only by `gapFraction`); no feature
  * emits NaN/Inf. See the module header for the design-review blockers each rule
@@ -728,6 +807,7 @@ export function computeFeatures(c: Cutout): ImageFeatures {
   const g = gini(seg, width, height);
   const mm = m20(seg, width, height);
   const { concentrationRatio, coreConcentration, coreFluxFraction, fillFraction } = concentrationFeatures(c, psfFwhmPx);
+  const coherence = spatialCoherence(c);
 
   return {
     snr,
@@ -745,5 +825,6 @@ export function computeFeatures(c: Cutout): ImageFeatures {
     coreConcentration,
     coreFluxFraction,
     fillFraction,
+    spatialCoherence: coherence,
   };
 }

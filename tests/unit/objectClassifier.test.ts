@@ -183,17 +183,80 @@ describe('classifyCutout — honesty gates return unknown, never a fabricated cl
     expect(r.reason).toContain('saturated');
   });
 
-  it('a patch with NO source above sky ⇒ unknown, never false certainty', () => {
-    // Flat sky + faint noise: no measurable curve of growth / peak-SNR below floor.
+  it('a patch with NO source above sky ⇒ hard unknown via the structure gate (TODO 147)', () => {
+    // Flat sky + faint white noise in the UNDERSAMPLED/stretched regime (localPsfPx =
+    // 2.5). Peak-SNR alone CANNOT reject this (a diffuse ~1.2σ galaxy would sit here too),
+    // so it used to leak out a low-confidence star/galaxy. The spatial-coherence gate
+    // (Moran's I ≈ 0 for white noise) now returns a HARD `unknown` — the honest DSS-regime
+    // analogue of the well-sampled empty-sky SNR gate.
     const W = 64;
     const data = new Float32Array(W * W);
     const rand = mulberry32(99);
     for (let i = 0; i < data.length; i++) data[i] = 8 + (rand() - 0.5) * 1.2;
     const r = classifyCutout({ data, width: W, height: W, pixelScaleArcsec: 1.4, psfFwhmArcsec: 3.5 });
-    // On stretched 8-bit pixels peak-SNR cannot separate a diffuse galaxy from noise
-    // (both spread flux), so a structureless patch is not force-gated to 'unknown';
-    // the HONEST outcome is a very LOW confidence, never a confident wrong class (§8).
+    expect(r.cls).toBe('unknown');
+    expect(r.reason).toContain('coherent');
+    expect(r.features.spatialCoherence).toBeLessThan(CLASSIFIER_THRESHOLDS.coherenceMin);
     expect(r.confidence).toBeLessThanOrEqual(0.25);
+  });
+});
+
+/**
+ * The core TODO 147 assertion + its non-regression pair (the seam the Playwright
+ * classify spec drives at the pixel level): in the SAME undersampled/stretched regime
+ * (localPsfPx = 2.5), a pure-noise cutout must return a HARD `unknown`, while a real
+ * structured source (compact PSF point AND diffuse extended blob) must still be
+ * classified — the gate has to reject noise AND pass real faint structure, or it is
+ * worthless. A gate that returned `unknown` for everything would pass the noise test but
+ * FAIL the non-regression pair; a gate that returned a class for everything (the old
+ * behaviour) fails the noise test.
+ */
+describe('classifyCutout — structure gate rejects noise, passes real sources (TODO 147)', () => {
+  /** Pure gaussian noise at the raw seam shape (64×64, 8-bit, localPsfPx = 2.5). */
+  function makeNoisePatch(seed: number, sky = 40, sigma = 8): Cutout {
+    const W = 64;
+    const rand = mulberry32(seed);
+    const data = new Float32Array(W * W);
+    for (let i = 0; i < data.length; i++) {
+      // Box–Muller gaussian, then 8-bit clamp/round — the real seam's quantisation.
+      const u1 = Math.max(1e-12, rand());
+      const u2 = rand();
+      const g = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+      data[i] = Math.max(0, Math.min(255, Math.round(sky + g * sigma)));
+    }
+    return { data, width: W, height: W, pixelScaleArcsec: 1.4, psfFwhmArcsec: 3.5 };
+  }
+
+  it('NOISE-ONLY stretched cutout ⇒ unknown, NOT a low-confidence star/galaxy', () => {
+    for (const seed of [1, 2, 3, 7, 99, 12345]) {
+      const r = classifyCutout(makeNoisePatch(seed));
+      expect(r.cls, `noise seed ${seed}`).toBe('unknown');
+      expect(r.features.spatialCoherence, `noise seed ${seed}`).toBeLessThan(CLASSIFIER_THRESHOLDS.coherenceMin);
+    }
+  });
+
+  it('non-regression: a real COMPACT point in the same regime still classifies STAR', () => {
+    for (const seed of [1, 2, 3]) {
+      const r = classifyCutout(makePatch('star', 0x9000 + seed, 0, 180));
+      expect(r.cls, `compact seed ${seed}`).toBe('star');
+      expect(r.features.spatialCoherence).toBeGreaterThanOrEqual(CLASSIFIER_THRESHOLDS.coherenceMin);
+    }
+  });
+
+  it('non-regression: a real DIFFUSE extended source in the same regime still classifies GALAXY', () => {
+    for (const scalePx of [22, 26, 30]) {
+      const r = classifyCutout(makePatch('galaxy', 0xa000 + scalePx, scalePx, 200));
+      expect(r.cls, `diffuse scale ${scalePx}`).toBe('galaxy');
+      expect(r.features.spatialCoherence).toBeGreaterThanOrEqual(CLASSIFIER_THRESHOLDS.coherenceMin);
+    }
+  });
+
+  it('the gate discriminates: real sources measure FAR higher coherence than noise', () => {
+    const noise = classifyCutout(makeNoisePatch(42)).features.spatialCoherence;
+    const star = classifyCutout(makePatch('star', 0xb001, 0, 180)).features.spatialCoherence;
+    const gal = classifyCutout(makePatch('galaxy', 0xb002, 22, 200)).features.spatialCoherence;
+    expect(star).toBeGreaterThan(noise + 0.3);
+    expect(gal).toBeGreaterThan(noise + 0.3);
   });
 });
 
@@ -350,6 +413,8 @@ describe('classifyCutout — determinism, invariance, and result shape', () => {
     expect(CLASSIFIER_THRESHOLDS.snrMin).toBeGreaterThan(0);
     expect(CLASSIFIER_THRESHOLDS.concentrationRatioStar).toBeGreaterThan(0);
     expect(CLASSIFIER_THRESHOLDS.concentrationRatioStar).toBeLessThan(1);
+    expect(CLASSIFIER_THRESHOLDS.coherenceMin).toBeGreaterThan(0);
+    expect(CLASSIFIER_THRESHOLDS.coherenceMin).toBeLessThan(1);
   });
 
   it('classification result exposes the driving features (audit trail)', () => {

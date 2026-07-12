@@ -287,6 +287,15 @@
     statusMessage = showGraticule ? `Coordinate grid: on (${gridSystem})` : 'Coordinate grid: off';
   }
 
+  // Feature 144: a small fixed reticle at the canvas centre marking the exact sky
+  // point the centre-based tools (light curve, cutout, RGB, identify) act on. On by
+  // default because the grab-hand cursor left it unclear WHAT the view targets.
+  let showCenterReticle = $state(true);
+  function toggleCenterReticle() {
+    showCenterReticle = !showCenterReticle;
+    statusMessage = showCenterReticle ? 'Centre reticle: on' : 'Centre reticle: off';
+  }
+
   // Rubin DP1 footprint coverage overlay — shade the 7 fields so it's obvious
   // WHERE Rubin data exists (a view off every field falls back to DSS/black).
   let showCoverage = $state(false);
@@ -857,6 +866,10 @@
   let rubinLcParsed = $state<ParsedLightCurve | null>(null);
   let rubinLcBand = $state('r');
   let rubinLcStatus = $state<string | null>(null);
+  // Sky point the fetched Rubin curve belongs to (captured AT fetch time, so the
+  // on-canvas target marker stays pinned to the object after the user pans away).
+  let rubinLcTargetRa = $state<number | null>(null);
+  let rubinLcTargetDec = $state<number | null>(null);
   const rubinLcCurve = $derived(
     rubinLcParsed
       ? toLightCurvePoints(rubinLcParsed, { band: rubinLcBand === 'all' ? undefined : rubinLcBand })
@@ -867,13 +880,17 @@
 
   async function fetchRubinLc() {
     rubinLcParsed = null;
-    rubinLcStatus = `Fetching DP1 light curve at ${currentRa.toFixed(3)}, ${currentDec.toFixed(3)}…`;
+    const fetchRa = currentRa;
+    const fetchDec = currentDec;
+    rubinLcStatus = `Fetching DP1 light curve at ${fetchRa.toFixed(3)}, ${fetchDec.toFixed(3)}…`;
     try {
-      const parsed = await fetchLightCurve({ ra: currentRa, dec: currentDec, radiusArcsec: 2 });
+      const parsed = await fetchLightCurve({ ra: fetchRa, dec: fetchDec, radiusArcsec: 2 });
       if (parsed.samples.length === 0) {
         rubinLcStatus = 'No DP1 epochs here (DP1 covers only a few small fields — try an on-field source).';
       } else {
         rubinLcParsed = parsed;
+        rubinLcTargetRa = fetchRa;
+        rubinLcTargetDec = fetchDec;
         // Default to r if present, else the first band that returned data.
         rubinLcBand = parsed.bands.includes('r') ? 'r' : (parsed.bands[0] ?? 'r');
         rubinLcStatus = null;
@@ -910,12 +927,18 @@
   let gaiaLcCurve = $state<LightCurvePoint[] | null>(null);
   let gaiaLcStatus = $state<string | null>(null);
   let gaiaLcSourceId = $state<string | null>(null);
+  // Sky point the fetched Gaia curve belongs to (captured AT fetch time — see the
+  // Rubin equivalent above — so the target marker stays pinned after a pan).
+  let gaiaLcTargetRa = $state<number | null>(null);
+  let gaiaLcTargetDec = $state<number | null>(null);
   async function fetchGaiaLc() {
     gaiaLcCurve = null;
     gaiaLcSourceId = null;
-    gaiaLcStatus = `Searching Gaia DR2 variables at ${currentRa.toFixed(3)}, ${currentDec.toFixed(3)}…`;
+    const fetchRa = currentRa;
+    const fetchDec = currentDec;
+    gaiaLcStatus = `Searching Gaia DR2 variables at ${fetchRa.toFixed(3)}, ${fetchDec.toFixed(3)}…`;
     try {
-      const vars = await fetchGaiaLightCurves({ ra: currentRa, dec: currentDec, radiusArcsec: 6 });
+      const vars = await fetchGaiaLightCurves({ ra: fetchRa, dec: fetchDec, radiusArcsec: 6 });
       const withG = vars.filter((v) => v.g.length >= 2);
       if (withG.length === 0) {
         gaiaLcStatus =
@@ -925,6 +948,8 @@
       const v = withG[0]!;
       gaiaLcSourceId = v.sourceId;
       gaiaLcCurve = v.g.map((p) => ({ mjd: p.mjd, intensity: p.intensity }));
+      gaiaLcTargetRa = fetchRa;
+      gaiaLcTargetDec = fetchDec;
       gaiaLcStatus = null;
     } catch (e) {
       gaiaLcStatus = e instanceof Error ? e.message : 'Gaia light-curve fetch failed.';
@@ -935,6 +960,34 @@
     if (gaiaLcMode) void fetchGaiaLc();
     statusMessage = gaiaLcMode ? 'Gaia variable light curve: on' : 'Gaia variable light curve: off';
   }
+
+  // Feature 143: the sky point a CURRENTLY-DISPLAYED light curve belongs to, passed
+  // to ImageViewer as a labelled target marker so it is clear which object the curve
+  // is for. Offline curves are re-derived live at the view centre; Rubin/Gaia curves
+  // stay pinned to the point they were fetched at (captured above). null = no curve
+  // shown → no marker.
+  const lcTargetMarker = $derived.by(() => {
+    if (lightCurveMode && baseLayerId === 'offline' && offlineLc && offlineLc.length > 0)
+      return { ra: currentRa, dec: currentDec, label: 'light curve' };
+    if (
+      lightCurveMode &&
+      rubinLcAvailable &&
+      rubinLcCurve &&
+      rubinLcCurve.length > 0 &&
+      rubinLcTargetRa != null &&
+      rubinLcTargetDec != null
+    )
+      return { ra: rubinLcTargetRa, dec: rubinLcTargetDec, label: 'light curve' };
+    if (
+      gaiaLcMode &&
+      gaiaLcCurve &&
+      gaiaLcCurve.length > 0 &&
+      gaiaLcTargetRa != null &&
+      gaiaLcTargetDec != null
+    )
+      return { ra: gaiaLcTargetRa, dec: gaiaLcTargetDec, label: 'Gaia var' };
+    return null;
+  });
 
   // Rubin DP1 multi-filter: switch the active HiPS dataset (gri/ugri/… colour
   // composites or a single ugrizy band). Shown when the Rubin base is active.
@@ -1286,6 +1339,8 @@
       {gridSystem}
       {showCoverage}
       {showMagnifier}
+      {showCenterReticle}
+      targetMarker={lcTargetMarker}
       catalog={showCatalog ? catalog : null}
       {selectedCatalogIndex}
       {showPmVectors}
@@ -1610,6 +1665,17 @@
           onclick={toggleMagnifier}
         >
           🔍 Loupe
+        </button>
+
+        <button
+          class="xsection-toggle"
+          class:on={showCenterReticle}
+          aria-pressed={showCenterReticle}
+          aria-label="Toggle centre reticle"
+          title="Centre reticle: marks the exact sky point the light-curve/cutout/RGB/identify tools act on"
+          onclick={toggleCenterReticle}
+        >
+          ⌖ Reticle
         </button>
 
         <button

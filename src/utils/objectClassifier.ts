@@ -9,8 +9,9 @@
  *   1. insufficient resolution  (local PSF < minPsfPx)         → unknown
  *   2. too many gaps            (gapFraction > gapMax)         → unknown
  *   3. saturated core           (large clipped plateau)        → unknown
- *   4. too faint                (snr < snrMin)                 → unknown
- *   5. star iff concentrationRatio ≥ τ_c ; else galaxy.
+ *   4. no coherent structure    (undersampled: Moran's I < τ)  → unknown  (TODO 147)
+ *   5. too faint                (snr < snrMin)                 → unknown
+ *   6. star iff concentrationRatio ≥ τ_c ; else galaxy.
  *
  * RETUNE (TODO 138): the previous rule keyed off fwhmRatio / spread_model / the
  * curve-of-growth concentration C — features FIT on LINEAR-flux, well-sampled Gaussian
@@ -63,6 +64,7 @@ export const CLASSIFIER_THRESHOLDS: {
   snrMinWellSampled: number;
   minPsfPx: number;
   gapMax: number;
+  coherenceMin: number;
 } = {
   // ── UNDERSAMPLED / asinh-stretched HiPS regime (DSS, browse-zoom Rubin) ──────────
   // localPsfPx ≈ 2.5 (the display-resolution floor dominates). Sources are haloed by
@@ -97,6 +99,18 @@ export const CLASSIFIER_THRESHOLDS: {
   minPsfPx: 2,
   // Above this NaN fraction the cutout is mostly gaps → refuse.
   gapMax: 0.2,
+  // ── STRUCTURE / spatial-coherence floor for the UNDERSAMPLED/stretched regime (TODO
+  // 147). Lag-1 Moran's I (features.spatialCoherence) at or above this ⇒ a genuine,
+  // spatially-coherent light concentration (a real source) is present; below it the
+  // patch is spatially-incoherent (empty/noise-dominated sky) and is honestly gated to
+  // `unknown` — the DSS-regime analogue of the well-sampled branch's SNR floor, which
+  // peak-SNR CANNOT provide here (a diffuse ~1.2σ galaxy and empty sky share the same
+  // peak-SNR on asinh-stretched 8-bit pixels). FIT with wide margin: on the real
+  // DSS/SIMBAD holdout every star AND galaxy measures I ≥ 0.65, while white sky noise
+  // measures I ≈ 0; 0.35 sits well below all real sources and well above noise. Applied
+  // ONLY in the undersampled branch, so the well-sampled offline cube is untouched.
+  // Ratchet UP as more real empty-sky data is captured.
+  coherenceMin: 0.35,
 };
 
 const PROVENANCE = 'image-inferred (morphology, luminance only)';
@@ -152,6 +166,19 @@ export function classifyCutout(c: Cutout): ImageClassification {
   // SNR floor that actually work there. This is NOT reading the display — localPsfPx is
   // a geometry ratio the caller already supplies.
   const wellSampled = localPsfPx >= t.wellSampledPsfPx;
+
+  // STRUCTURE / spatial-coherence gate (TODO 147) — UNDERSAMPLED regime ONLY. On 8-bit
+  // asinh-stretched HiPS pixels peak-SNR cannot tell a diffuse ~1.2σ galaxy from empty
+  // sky (both spread flux, both a few σ), so the previous branch returned a low-confidence
+  // star/galaxy for a structureless patch. A real source — compact star OR patch-filling
+  // galaxy — is a SMOOTH, spatially-COHERENT light concentration (Moran's I ≥ ~0.65 on the
+  // real holdout); white sky noise is spatially incoherent (I ≈ 0). Gating on coherence
+  // makes empty stretched sky honestly `unknown`, exactly like the well-sampled empty-sky
+  // case, WITHOUT touching that branch (it is `wellSampled` and already SNR-gated) and
+  // without swallowing real faint structure (which clears the floor by a wide margin).
+  if (!wellSampled && features.spatialCoherence < t.coherenceMin) {
+    return unknown('no coherent structure — empty or noise-dominated sky', features);
+  }
 
   // Faint/empty-sky gate. In the well-sampled LINEAR regime peak-SNR is meaningful, so a
   // higher floor honestly rejects empty sky (a few σ) while passing real sources (≫σ). In

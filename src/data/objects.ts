@@ -157,15 +157,54 @@ export interface NearestObjectResult {
 }
 
 /**
- * Nearest catalog object to a sky position (great-circle). Linear scan over the
- * ~3000 objects — trivially cheap, called throttled from the cursor readout.
- * Returns the TRUE minimum with its real separation (it never claims an object
- * is "here" when the nearest is far away); null only if the catalog is empty.
+ * Declination-sorted index over ALL_OBJECTS, built once at module load to make
+ * {@link nearestObject} fast without a full O(n) scan. `DEC_SORTED` holds the
+ * ALL_OBJECTS indices in ascending-dec order; `SORTED_DECS` is the parallel
+ * Float64Array of their decs, for a branch-cheap binary search.
+ */
+const DEC_SORTED: number[] = ALL_OBJECTS.map((_, i) => i).sort(
+  (a, b) => ALL_OBJECTS[a]!.dec - ALL_OBJECTS[b]!.dec
+);
+const SORTED_DECS = new Float64Array(DEC_SORTED.map((i) => ALL_OBJECTS[i]!.dec));
+
+/**
+ * Nearest catalog object to a sky position (great-circle). The catalog is
+ * ~11,907 objects and this is called throttled from the cursor readout, so
+ * rather than scan them all we use the declination-sorted index above: binary-
+ * search to the query dec, then expand outward (always taking whichever side's
+ * next object is nearer in dec), computing the TRUE {@link angularSeparation}
+ * for each candidate and tracking the best. Great-circle separation is always
+ * >= the raw dec difference, so once the nearest unexamined object's dec gap
+ * exceeds the best separation found so far, no remaining object can beat it and
+ * we stop. This returns the exact same TRUE minimum (and real separation) a
+ * full scan would — the dec-gap lower bound is unconditionally valid, so RA
+ * wrap (0/360) and the poles need no special-casing. null only if empty.
  */
 export function nearestObject(ra: number, dec: number): NearestObjectResult | null {
+  const n = SORTED_DECS.length;
+  // Lower bound: first index whose dec is >= the query dec (the landing point).
+  let lo = 0;
+  let hi = n;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (SORTED_DECS[mid]! < dec) lo = mid + 1;
+    else hi = mid;
+  }
+  // `up` walks ascending decs from the landing point; `down` walks descending.
+  // The first candidate we examine is the one nearest in dec, which seeds
+  // bestSep so pruning is effective immediately.
+  let up = lo;
+  let down = lo - 1;
   let best: AstroObject | null = null;
   let bestSep = Infinity;
-  for (const obj of ALL_OBJECTS) {
+  while (up < n || down >= 0) {
+    const upGap = up < n ? SORTED_DECS[up]! - dec : Infinity;
+    const downGap = down >= 0 ? dec - SORTED_DECS[down]! : Infinity;
+    // The closest unexamined object in dec is already farther (in dec alone,
+    // a lower bound on true separation) than our best — nothing left can win.
+    if (Math.min(upGap, downGap) > bestSep) break;
+    const idx = upGap <= downGap ? DEC_SORTED[up++]! : DEC_SORTED[down--]!;
+    const obj = ALL_OBJECTS[idx]!;
     const sep = angularSeparation(ra, dec, obj.ra, obj.dec);
     if (sep < bestSep) {
       bestSep = sep;

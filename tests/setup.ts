@@ -68,6 +68,8 @@ const mockCtx = {
   moveTo: vi.fn(),
   lineTo: vi.fn(),
   closePath: vi.fn(),
+  fillText: vi.fn(),
+  strokeText: vi.fn(),
   setTransform: vi.fn(),
   fillStyle: '#000',
   strokeStyle: '#000',

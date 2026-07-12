@@ -366,6 +366,66 @@ describe('computeFeatures — scale/stretch-robust concentration features (retun
   });
 });
 
+describe('computeFeatures — spatialCoherence separates a source from white noise (TODO 147)', () => {
+  const FWHM = 2 * Math.sqrt(2 * Math.LN2);
+  /** Deterministic PRNG so the noise field is reproducible. */
+  function rng(seed: number): () => number {
+    let a = seed >>> 0;
+    return () => {
+      a |= 0;
+      a = (a + 0x6d2b79f5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  it('a smooth Gaussian blob has HIGH coherence; white noise has coherence ≈ 0', () => {
+    const W = 64;
+    const c = (W - 1) / 2;
+    const blob = computeFeatures(grid(W, ellipticalGaussian(W, 8, 8, 0, 100), 5));
+
+    const nd = new Float32Array(W * W);
+    const r = rng(123);
+    for (let i = 0; i < nd.length; i++) nd[i] = 40 + (r() - 0.5) * 40; // flat sky + white noise
+    const noise = computeFeatures({ data: nd, width: W, height: W, pixelScaleArcsec: 1.4, psfFwhmArcsec: 3.5 });
+
+    expect(blob.spatialCoherence).toBeGreaterThan(0.8);
+    expect(Math.abs(noise.spatialCoherence)).toBeLessThan(0.15);
+    // The whole point: a smooth source is FAR more coherent than noise.
+    expect(blob.spatialCoherence).toBeGreaterThan(noise.spatialCoherence + 0.5);
+    void c;
+  });
+
+  it('spatialCoherence is INVARIANT to a positive rescale (a correlation, no calibration)', () => {
+    const W = 48;
+    const base = grid(W, ellipticalGaussian(W, 6, 4, 20, 100), 5);
+    const scaled = new Float32Array(base.data.length);
+    for (let i = 0; i < base.data.length; i++) scaled[i] = base.data[i]! * 4.2 + 17; // scale + pedestal
+    const a = computeFeatures(base).spatialCoherence;
+    const b = computeFeatures({ ...base, data: scaled }).spatialCoherence;
+    expect(b).toBeCloseTo(a, 5); // additive sky + multiplicative gain both cancel
+  });
+
+  it('a compact PSF-sized point is still coherent (adjacent core pixels co-vary)', () => {
+    const W = 64;
+    const c = (W - 1) / 2;
+    const data = new Float32Array(W * W).fill(5);
+    for (let y = 0; y < W; y++) for (let x = 0; x < W; x++)
+      data[y * W + x] = 5 + 250 * Math.exp(-0.5 * ((x - c) ** 2 + (y - c) ** 2) / ((2.5 / FWHM) ** 2));
+    const f = computeFeatures({ data, width: W, height: W, pixelScaleArcsec: 1.4, psfFwhmArcsec: 3.5 });
+    expect(f.spatialCoherence).toBeGreaterThan(0.35);
+  });
+
+  it('a constant and an all-NaN patch both yield coherence 0 (no structure), never NaN', () => {
+    const flat = computeFeatures(grid(20, () => 42, 3));
+    expect(flat.spatialCoherence).toBe(0);
+    const allNaN = new Float32Array(16 * 16).fill(NaN);
+    const fN = computeFeatures({ data: allNaN, width: 16, height: 16, pixelScaleArcsec: 1, psfFwhmArcsec: 2.5 });
+    expect(fN.spatialCoherence).toBe(0);
+  });
+});
+
 describe('computeFeatures — SNR & peakSharpness', () => {
   it('snr ≈ peak/σ for a known peak on known Gaussian noise-free background', () => {
     // Flat background 10 with a single bright pixel of +100; border σ is ~0 so the

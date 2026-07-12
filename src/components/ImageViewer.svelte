@@ -107,6 +107,8 @@
     gridSystem = 'equatorial' as CoordSystem,
     showCoverage = false,
     showMagnifier = false,
+    showCenterReticle = true,
+    targetMarker = null as { ra: number; dec: number; label?: string } | null,
     catalog = null,
     selectedCatalogIndex = -1,
     showPmVectors = false,
@@ -177,6 +179,15 @@
     showCoverage?: boolean;
     /** When true, show a magnifier loupe of the pixels under the cursor. */
     showMagnifier?: boolean;
+    /** When true, draw a small fixed reticle at the canvas centre marking the exact
+     *  sky point the centre-based tools (light curve, cutout, RGB, identify) act on,
+     *  so it is unambiguous what the view is pointed at. (Feature 144.) */
+    showCenterReticle?: boolean;
+    /** Sky point a currently-displayed light curve belongs to (feature 143): drawn
+     *  as a labelled arrow marking WHICH object the curve is for. Sky-anchored, so
+     *  after a pan it tracks the object (an edge arrow points back when it scrolls
+     *  off-canvas). null = no marker. */
+    targetMarker?: { ra: number; dec: number; label?: string } | null;
     /** Catalog overlay (e.g. Gaia cone-search) to draw as markers; null = none. */
     catalog?: CatalogSet | null;
     /** Index of the selected catalog source (highlighted marker), or -1. */
@@ -915,6 +926,8 @@
     renderCrossSection();
     renderRuler();
     renderRegionOverlay();
+    renderTargetMarker();
+    renderCenterReticle();
 
     // Time the full frame → FPS + last-render for the HUD, then push a snapshot.
     perf.recordRender(performance.now() - renderStart);
@@ -1413,6 +1426,122 @@
     ctx.textAlign = 'left';
   }
 
+  /** Draw a short high-contrast text label (dark outline + coloured fill) centred
+   *  at (lx, ly). Used by the light-curve target marker. */
+  function drawContrastLabel(lx: number, ly: number, text: string, color: string) {
+    if (!ctx) return;
+    ctx.font = '11px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    ctx.lineWidth = 3;
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = 'rgba(0,0,0,0.78)';
+    ctx.strokeText(text, lx, ly);
+    ctx.fillStyle = color;
+    ctx.fillText(text, lx, ly);
+    ctx.textBaseline = 'alphabetic';
+    ctx.textAlign = 'left';
+  }
+
+  // Orange — distinct from Gaia cyan / lens gold / Rubin magenta overlays.
+  const TARGET_MARKER_COLOR = '#ff8c1a';
+
+  /**
+   * Draw the light-curve target marker (feature 143): a labelled arrow pinned to
+   * the sky point the currently-shown light curve belongs to, so it is clear WHICH
+   * object the curve is for. Sky-anchored (tracks pan); when the point scrolls
+   * off-canvas the marker becomes an edge arrow pointing back toward it. No-op when
+   * no marker is set.
+   */
+  function renderTargetMarker() {
+    if (!ctx || !targetMarker) return;
+    const view = currentView();
+    const [sx, sy] = skyToCanvas(view, targetMarker.ra, targetMarker.dec);
+    if (Number.isNaN(sx) || Number.isNaN(sy)) return; // behind the projection horizon
+    const x = sx + panOffsetX;
+    const y = sy + panOffsetY;
+    const label = targetMarker.label ?? 'light curve';
+    const color = TARGET_MARKER_COLOR;
+    const onCanvas = x >= 0 && y >= 0 && x <= canvasWidth && y <= canvasHeight;
+
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    if (onCanvas) {
+      // Ring around the target + a downward arrow whose tip touches it + label above.
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(x, y, 9, 0, Math.PI * 2);
+      ctx.stroke();
+      const tipY = y - 11;
+      const tailY = y - 30;
+      ctx.beginPath();
+      ctx.moveTo(x, tailY);
+      ctx.lineTo(x, tipY);
+      ctx.moveTo(x, tipY); ctx.lineTo(x - 5, tipY - 7);
+      ctx.moveTo(x, tipY); ctx.lineTo(x + 5, tipY - 7);
+      ctx.stroke();
+      drawContrastLabel(x, tailY - 3, label, color);
+    } else {
+      // Off-canvas: park an arrow at the edge pointing from the canvas centre toward
+      // the true position, so the user sees which way the LC object lies.
+      const ccx = canvasWidth / 2;
+      const ccy = canvasHeight / 2;
+      const ang = Math.atan2(y - ccy, x - ccx);
+      const margin = 26;
+      const ex = Math.max(margin, Math.min(canvasWidth - margin, x));
+      const ey = Math.max(margin, Math.min(canvasHeight - margin, y));
+      const h = 11;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(ex, ey);
+      ctx.lineTo(ex - h * Math.cos(ang - 0.42), ey - h * Math.sin(ang - 0.42));
+      ctx.lineTo(ex - h * Math.cos(ang + 0.42), ey - h * Math.sin(ang + 0.42));
+      ctx.closePath();
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(ex - h * Math.cos(ang), ey - h * Math.sin(ang));
+      ctx.lineTo(ex - 26 * Math.cos(ang), ey - 26 * Math.sin(ang));
+      ctx.stroke();
+      drawContrastLabel(ex - 34 * Math.cos(ang), ey - 34 * Math.sin(ang) + 4, label, color);
+    }
+    ctx.restore();
+  }
+
+  /**
+   * Draw the centre reticle (feature 144): a small fixed crosshair at the canvas
+   * centre marking the exact sky point the centre-based tools (light curve, cutout,
+   * RGB, identify) act on. Screen-space (always the geometric centre), with a
+   * central gap so it never hides the target; a dark under-stroke keeps it visible
+   * over bright imagery.
+   */
+  function renderCenterReticle() {
+    if (!ctx || !showCenterReticle) return;
+    const cx = canvasWidth / 2;
+    const cy = canvasHeight / 2;
+    const gap = 5;
+    const len = 11;
+    ctx.save();
+    for (const [color, width] of [
+      ['rgba(0,0,0,0.6)', 3.2],
+      ['rgba(255,255,255,0.92)', 1.4],
+    ] as const) {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = width;
+      ctx.beginPath();
+      ctx.moveTo(cx - gap - len, cy); ctx.lineTo(cx - gap, cy);
+      ctx.moveTo(cx + gap, cy); ctx.lineTo(cx + gap + len, cy);
+      ctx.moveTo(cx, cy - gap - len); ctx.lineTo(cx, cy - gap);
+      ctx.moveTo(cx, cy + gap); ctx.lineTo(cx, cy + gap + len);
+      ctx.stroke();
+    }
+    ctx.fillStyle = 'rgba(255,255,255,0.92)';
+    ctx.beginPath();
+    ctx.arc(cx, cy, 1.1, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
   // Repaint when the graticule (or its coordinate system), coverage overlay, or
   // ruler is toggled/changed.
   $effect(() => {
@@ -1431,6 +1560,8 @@
     void showRegions;
     void regionMode;
     void regionShape;
+    void showCenterReticle;
+    void targetMarker;
     scheduleRender();
   });
 

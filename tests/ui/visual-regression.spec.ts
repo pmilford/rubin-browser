@@ -40,6 +40,10 @@ const MASKS = (page: Page) => [
 test.describe('Visual regression + seam detection', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
+    // These specs baseline the IMAGERY; turn off the centre reticle (feature 144,
+    // on by default) so its crosshair doesn't sit in the golden image or register
+    // as a central dark seam in the seam detector.
+    await page.locator('button[aria-label="Toggle centre reticle"]').click();
     await waitForTiles(page);
   });
 
