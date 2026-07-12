@@ -22,10 +22,17 @@ import { classifyCutout, alwaysGalaxyClassify, type InferredClass } from '../../
  * stars, but a BRIGHT star saturates + blooms in DSS to a large low-concentration
  * blob that is morphologically indistinguishable from a galaxy in luminance only.
  * There is no luminance-morphology feature that separates them (asymmetry catches a
- * few but would wreck galaxy recall on irregular galaxies). The real fix is a colour
- * (multi-band) discriminant or a catalog (Gaia/SIMBAD) cross-match — a separate
- * feature, tracked under TODO 147. This spec locks the finding in as a visible,
- * ratchet-up gate so the overfit can never again hide behind the tuning-set number.
+ * few but would wreck galaxy recall on irregular galaxies). This spec scores the PURE
+ * `classifyCutout` (morphology only), so these numbers stand as a documented ceiling.
+ *
+ * DEPLOYED fix (TODO 151, `src/utils/catalogClassify.ts`, wired in TileViewer): a
+ * catalog cross-match OVERRIDES the morphology call when the click identifies a typed
+ * catalogue object at the cursor — a bundled bright star (Sirius/Vega) now classifies
+ * "Star (catalog)" in the app even though its pixels read galaxy here. That override
+ * is a UI-layer wrap, NOT part of `classifyCutout`, so it does not move these
+ * pure-morphology numbers; extending the cross-match to a live SIMBAD/Gaia cone (full
+ * coverage beyond the bundled catalogue) remains open. This spec locks the pure
+ * finding in as a ratchet-up gate so the overfit can never hide behind the tuning number.
  */
 
 interface S { name: string; label: 'star' | 'galaxy'; fovDeg: number; pixelScaleArcsec: number; psfFwhmArcsec: number; width: number; height: number; pixels: number[]; }

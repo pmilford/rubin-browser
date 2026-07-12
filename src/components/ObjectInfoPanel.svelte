@@ -11,6 +11,7 @@
   import { OBJECT_TYPE_LABELS, type IdentifyInfo } from '../data/objects.js';
   import { formatSeparation, cardinalDirection } from '../utils/skyGeom.js';
   import type { ImageClassification } from '../utils/objectClassifier.js';
+  import { CATALOG_PROVENANCE } from '../utils/catalogClassify.js';
 
   let {
     info,
@@ -37,6 +38,8 @@
   /** Format a feature number honestly: NaN/∞ → "—". */
   const fmtFeat = (v: number, digits = 2) =>
     typeof v === 'number' && Number.isFinite(v) ? v.toFixed(digits) : '—';
+  /** True when a catalog cross-match (not pixel morphology) decided the class (TODO 151). */
+  const catalogDecided = $derived(imageClass?.provenance === CATALOG_PROVENANCE);
 </script>
 
 {#if info}
@@ -87,7 +90,8 @@
 
     <div class="image-inferred" aria-label="Image-inferred classification">
       <div class="ii-head">
-        Image-inferred <span class="ii-tag">(from pixels)</span>
+        {catalogDecided ? 'Classification' : 'Image-inferred'}
+        <span class="ii-tag">{catalogDecided ? '(catalog cross-match)' : '(from pixels)'}</span>
       </div>
       {#if imageClass}
         {#if imageClass.cls === 'unknown'}
@@ -97,7 +101,7 @@
         {:else}
           <div class="ii-class" aria-label="Inferred class">
             {CLASS_LABEL[imageClass.cls]}{imageClass.subtype ? ` — ${imageClass.subtype}` : ''}
-            <span class="ii-mark">(image-inferred)</span>
+            <span class="ii-mark">{catalogDecided ? '(catalog)' : '(image-inferred)'}</span>
           </div>
           <div class="ii-conf" aria-label="Inferred confidence">
             <span class="ii-conf-label">confidence {imageClass.confidence.toFixed(2)}</span>

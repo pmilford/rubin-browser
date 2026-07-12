@@ -14,6 +14,7 @@
   import ObjectInfoPanel from '../components/ObjectInfoPanel.svelte';
   import SimbadPanel from '../components/SimbadPanel.svelte';
   import { objectsNear, type SimbadObject } from '../api/simbad.js';
+  import { classifyWithCatalog, type CatalogCandidate } from '../utils/catalogClassify.js';
   import DiffPanel from '../components/DiffPanel.svelte';
   import VariabilityPanel from '../components/VariabilityPanel.svelte';
   import CutoutPanel from '../components/CutoutPanel.svelte';
@@ -257,7 +258,9 @@
   let identifyInfo = $state<IdentifyInfo | null>(null);
   // Image-INFERRED classification of the pixels under the click (feature 123),
   // shown as a separate block beside the catalog match. Null = unavailable here.
-  let imageClass = $state<ImageClassification | null>(null);
+  // This is the RAW luminance-morphology call; the displayed `imageClass` below
+  // applies a catalog cross-match on top of it (TODO 151).
+  let rawImageClass = $state<ImageClassification | null>(null);
   function handleIdentify(info: IdentifyInfo) {
     identifyInfo = info;
     statusMessage = info.match
@@ -265,8 +268,28 @@
       : `No catalogued object within ${(info.matchRadiusDeg * 60).toFixed(0)}′ of the click`;
   }
   function handleClassify(result: ImageClassification | null) {
-    imageClass = result;
+    rawImageClass = result;
   }
+  // CATALOG CROSS-MATCH (TODO 151): luminance morphology alone cannot separate a
+  // BRIGHT saturated star (Sirius/Vega bloom into a low-concentration blob) from a
+  // galaxy — the independent-holdout overfit finding. When the same click ALSO
+  // identifies a typed bundled-catalog object at the cursor (a bright star, an
+  // NGC/Messier galaxy), that catalogue type OVERRIDES the morphology call within
+  // the identify's own match radius — and, importantly, makes the image-class agree
+  // with the "Identified: … (star/galaxy)" panel instead of contradicting it. No
+  // catalogue object here ⇒ the raw morphology call passes through unchanged.
+  const imageClass = $derived.by((): ImageClassification | null => {
+    if (!rawImageClass) return null;
+    const m = identifyInfo?.match;
+    if (!m || !identifyInfo) return rawImageClass;
+    const candidate: CatalogCandidate = {
+      source: 'simbad',
+      otype: m.object.type, // ObjectType text ('star'/'galaxy'/'double-star'/… → catalogClass)
+      separationArcsec: m.separationDeg * 3600,
+      magnitude: m.object.magnitude,
+    };
+    return classifyWithCatalog(rawImageClass, [candidate], { matchRadiusArcsec: identifyInfo.matchRadiusDeg * 3600 });
+  });
 
   // Cross-section / line-profile tool
   let crossSectionMode = $state(false);
@@ -1944,7 +1967,7 @@
           <ObjectInfoPanel
             info={identifyInfo}
             imageClass={imageClass}
-            onClose={() => { identifyInfo = null; imageClass = null; }}
+            onClose={() => { identifyInfo = null; rawImageClass = null; }}
           />
         {/if}
         {#if simbadQuery}
