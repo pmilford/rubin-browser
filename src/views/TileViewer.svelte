@@ -48,7 +48,8 @@
   import { GLOSSARY } from '../data/glossary.js';
   import { getToken, isAuthenticated } from '../api/auth.js';
   import { fetchLightCurve, toLightCurvePoints, type ParsedLightCurve } from '../api/lightcurve.js';
-  import { fetchGaiaLightCurves } from '../api/gaiaLightCurve.js';
+  import { fetchGaiaLightCurves, type GaiaVariable } from '../api/gaiaLightCurve.js';
+  import type { LcSeries } from '../utils/lightCurvePlot.js';
   import { fetchDiaAlerts } from '../api/diaSource.js';
   import { fetchVisitImageSeries, type EpochImage } from '../api/visitImageSeries.js';
   import type { LightCurvePoint } from '../data/offlineDataset.js';
@@ -875,8 +876,17 @@
       ? toLightCurvePoints(rubinLcParsed, { band: rubinLcBand === 'all' ? undefined : rubinLcBand })
       : null
   );
-  // Bands actually present in the fetched curve, plus an 'all' (luminance) option.
-  const rubinLcBands = $derived(rubinLcParsed ? [...rubinLcParsed.bands, 'all'] : []);
+  // One overlay series PER BAND for the plot (all filters shown at once). Separate
+  // from `rubinLcCurve` above, which stays alive purely to gate the on-canvas target
+  // marker (design-review B3). Flux is the plotted intensity; mag drives the hover.
+  const rubinLcSeries = $derived<LcSeries[]>(
+    rubinLcParsed
+      ? rubinLcParsed.bands.map((b) => ({
+          band: b,
+          points: rubinLcParsed!.byBand[b]!.map((s) => ({ mjd: s.mjd, intensity: s.flux, ...(s.mag != null ? { mag: s.mag } : {}) })),
+        }))
+      : []
+  );
 
   async function fetchRubinLc() {
     rubinLcParsed = null;
@@ -924,14 +934,30 @@
   // Gaia DR2 variable-star light curve (public GAVO epoch photometry, NO auth) —
   // works on any base. Only ~550k DR2 variables exist, so most positions have none.
   let gaiaLcMode = $state(false);
+  // The chosen DR2 variable's FULL multi-band photometry (g/bp/rp), used to build the
+  // overlay series. `gaiaLcCurve` (below) is the first non-empty band only — kept
+  // alive solely to gate the on-canvas target marker (design-review B3).
+  let gaiaLcVar = $state<GaiaVariable | null>(null);
   let gaiaLcCurve = $state<LightCurvePoint[] | null>(null);
   let gaiaLcStatus = $state<string | null>(null);
   let gaiaLcSourceId = $state<string | null>(null);
+  // One overlay series per Gaia band that has data (g/bp/rp), for the plot.
+  const gaiaLcSeries = $derived<LcSeries[]>(
+    gaiaLcVar
+      ? (['g', 'bp', 'rp'] as const)
+          .filter((b) => gaiaLcVar![b].length >= 1)
+          .map((b) => ({
+            band: b,
+            points: gaiaLcVar![b].map((p) => ({ mjd: p.mjd, intensity: p.intensity, mag: p.mag })),
+          }))
+      : []
+  );
   // Sky point the fetched Gaia curve belongs to (captured AT fetch time — see the
   // Rubin equivalent above — so the target marker stays pinned after a pan).
   let gaiaLcTargetRa = $state<number | null>(null);
   let gaiaLcTargetDec = $state<number | null>(null);
   async function fetchGaiaLc() {
+    gaiaLcVar = null;
     gaiaLcCurve = null;
     gaiaLcSourceId = null;
     const fetchRa = currentRa;
@@ -939,15 +965,20 @@
     gaiaLcStatus = `Searching Gaia DR2 variables at ${fetchRa.toFixed(3)}, ${fetchDec.toFixed(3)}…`;
     try {
       const vars = await fetchGaiaLightCurves({ ra: fetchRa, dec: fetchDec, radiusArcsec: 6 });
-      const withG = vars.filter((v) => v.g.length >= 2);
-      if (withG.length === 0) {
+      // Accept a source with ANY band's epoch photometry, not just G (design-review
+      // B4): a bp/rp-only variable is real overlay data we must not silently drop.
+      const withData = vars.filter((v) => v.g.length >= 2 || v.bp.length >= 2 || v.rp.length >= 2);
+      if (withData.length === 0) {
         gaiaLcStatus =
           'No Gaia DR2 variable here (only ~550k published variables have epoch photometry — try a known variable star).';
         return;
       }
-      const v = withG[0]!;
+      const v = withData[0]!;
+      gaiaLcVar = v;
       gaiaLcSourceId = v.sourceId;
-      gaiaLcCurve = v.g.map((p) => ({ mjd: p.mjd, intensity: p.intensity }));
+      // Marker gate: first band that actually has points (g → bp → rp).
+      const firstBand = v.g.length ? v.g : v.bp.length ? v.bp : v.rp;
+      gaiaLcCurve = firstBand.map((p) => ({ mjd: p.mjd, intensity: p.intensity }));
       gaiaLcTargetRa = fetchRa;
       gaiaLcTargetDec = fetchDec;
       gaiaLcStatus = null;
@@ -2051,10 +2082,7 @@
           <LightCurvePlot curve={offlineLc} currentIndex={offlineEpochIndex} band={offlineBand} onClose={toggleLightCurve} />
         {:else if lightCurveMode && rubinLcAvailable}
           <LightCurvePlot
-            curve={rubinLcCurve}
-            band={rubinLcBand}
-            bands={rubinLcBands}
-            onBandSelect={(b) => (rubinLcBand = b)}
+            series={rubinLcSeries}
             yLabel="flux (nJy)"
             title="Rubin light curve"
             status={rubinLcStatus}
@@ -2073,12 +2101,12 @@
         {/if}
         {#if gaiaLcMode}
           <LightCurvePlot
-            curve={gaiaLcCurve}
-            band="G"
+            series={gaiaLcSeries}
+            yLabel="flux (e⁻/s)"
             title="Gaia DR2 variable"
             status={gaiaLcStatus}
             footNote={gaiaLcSourceId
-              ? `Gaia DR2 ${gaiaLcSourceId} · G-band flux (e⁻/s) vs time · epoch photometry (GAVO)`
+              ? `Gaia DR2 ${gaiaLcSourceId} · g/bp/rp flux (e⁻/s) vs time · epoch photometry (GAVO)`
               : 'Gaia DR2 epoch photometry (public GAVO mirror) · variable stars only'}
             onRefresh={fetchGaiaLc}
             onClose={toggleGaiaLc}

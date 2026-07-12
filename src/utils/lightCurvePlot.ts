@@ -1,0 +1,173 @@
+/**
+ * Pure geometry + scaling helpers for the multi-band light-curve plot
+ * (`LightCurvePlot.svelte`). Extracted here so the axis-tick, domain, gap, and
+ * normalisation logic is unit-testable WITHOUT a DOM — the component only wires
+ * these into SVG. Keep this math here (mirrors the projection.ts split rationale).
+ *
+ * The plot's x-axis is TIME (MJD), mapped proportionally so real observing gaps
+ * are visible; the y-axis is a per-plot intensity/flux quantity. Multiple bands
+ * overlay on one shared pair of axes (each band a separate series).
+ */
+
+/** One epoch of a light curve. `intensity` is the plotted quantity (flux/counts). */
+export interface LcSeriesPoint {
+  mjd: number;
+  intensity: number;
+  /** Optional magnitude, shown in the hover read-out when present. */
+  mag?: number;
+}
+
+/** A single band's epoch series. `color` is optional (assigned by band if absent). */
+export interface LcSeries {
+  band: string;
+  color?: string;
+  points: LcSeriesPoint[];
+}
+
+/** Data ranges spanned by a set of series (over their finite points). */
+export interface LcDomain {
+  mjdMin: number;
+  mjdMax: number;
+  vMin: number;
+  vMax: number;
+}
+
+/** Finite points only (drop NaN/Infinity in mjd or intensity), sorted by mjd. */
+export function cleanPoints(points: LcSeriesPoint[]): LcSeriesPoint[] {
+  return points
+    .filter((p) => Number.isFinite(p.mjd) && Number.isFinite(p.intensity))
+    .slice()
+    .sort((a, b) => a.mjd - b.mjd);
+}
+
+/**
+ * The data domain (time + intensity ranges) over every finite point in `series`.
+ * Returns null when there are no finite points (caller shows the empty state).
+ * `vMin` MAY be negative — difference-image psfFlux is legitimately negative, so
+ * callers must map with `(v - vMin)/(vMax - vMin)`, never assume intensity ≥ 0.
+ */
+export function seriesDomain(series: readonly LcSeries[]): LcDomain | null {
+  let mjdMin = Infinity;
+  let mjdMax = -Infinity;
+  let vMin = Infinity;
+  let vMax = -Infinity;
+  let any = false;
+  for (const s of series) {
+    for (const p of s.points) {
+      if (!Number.isFinite(p.mjd) || !Number.isFinite(p.intensity)) continue;
+      any = true;
+      if (p.mjd < mjdMin) mjdMin = p.mjd;
+      if (p.mjd > mjdMax) mjdMax = p.mjd;
+      if (p.intensity < vMin) vMin = p.intensity;
+      if (p.intensity > vMax) vMax = p.intensity;
+    }
+  }
+  if (!any) return null;
+  return { mjdMin, mjdMax, vMin, vMax };
+}
+
+/**
+ * Median spacing between consecutive (already time-sorted) MJDs. 0 for <2 points.
+ * Computed PER SERIES — overlaid bands are independently time-sampled, so a
+ * merged-set median would be meaningless (design-review B2).
+ */
+export function medianGap(mjds: readonly number[]): number {
+  if (mjds.length < 2) return 0;
+  const diffs: number[] = [];
+  for (let i = 1; i < mjds.length; i++) diffs.push(mjds[i]! - mjds[i - 1]!);
+  diffs.sort((a, b) => a - b);
+  const m = Math.floor(diffs.length / 2);
+  return diffs.length % 2 ? diffs[m]! : (diffs[m - 1]! + diffs[m]!) / 2;
+}
+
+/**
+ * "Nice" round tick values within [min, max] (1/2/5·10ⁿ steps), targeting ~`target`
+ * ticks. Ticks are DERIVED from the data range (never hardcoded), so an axis whose
+ * labels don't match the data fails its test. Empty for non-finite input; a single
+ * value for min===max.
+ */
+export function niceTicks(min: number, max: number, target = 5): number[] {
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return [];
+  if (min === max) return [min];
+  if (max < min) [min, max] = [max, min];
+  const range = max - min;
+  const rawStep = range / Math.max(1, target);
+  const mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
+  const norm = rawStep / mag;
+  let step: number;
+  if (norm < 1.5) step = 1;
+  else if (norm < 3) step = 2;
+  else if (norm < 7) step = 5;
+  else step = 10;
+  step *= mag;
+  const start = Math.ceil(min / step) * step;
+  const ticks: number[] = [];
+  // +tiny epsilon so a tick landing exactly on `max` is included despite FP drift.
+  for (let v = start; v <= max + step * 1e-9; v += step) {
+    ticks.push(Number(v.toFixed(10)));
+  }
+  return ticks;
+}
+
+/**
+ * Classify each consecutive segment of a series as a "gap" (a temporal jump far
+ * larger than the series' own cadence) or not. A segment i→i+1 is a gap when its
+ * MJD delta exceeds `factor`× the series median spacing. With <2 points, or a
+ * degenerate (all-equal-MJD) series, no segment is a gap. Length === points-1.
+ */
+export function gapSegments(points: readonly LcSeriesPoint[], factor = 3): boolean[] {
+  const mjds = points.map((p) => p.mjd);
+  const med = medianGap(mjds);
+  const threshold = med > 0 ? med * factor : Infinity;
+  const out: boolean[] = [];
+  for (let i = 1; i < points.length; i++) {
+    out.push(mjds[i]! - mjds[i - 1]! > threshold);
+  }
+  return out;
+}
+
+/**
+ * Rescale a series' intensities to [0,1] over its own min..max, preserving MJDs and
+ * carrying the original value as `intensity` unchanged is NOT done — instead the
+ * caller keeps the raw value separately for the read-out. A flat series maps to 0.5.
+ */
+export function normalizeIntensities(points: readonly LcSeriesPoint[]): number[] {
+  if (points.length === 0) return [];
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (const p of points) {
+    if (p.intensity < lo) lo = p.intensity;
+    if (p.intensity > hi) hi = p.intensity;
+  }
+  const span = hi - lo;
+  return points.map((p) => (span > 0 ? (p.intensity - lo) / span : 0.5));
+}
+
+/** Standard per-band colours (Rubin ugrizy + Gaia g/bp/rp); fallback palette by index. */
+const BAND_COLORS: Record<string, string> = {
+  u: '#a78bfa',
+  g: '#22c55e',
+  r: '#ef4444',
+  i: '#f59e0b',
+  z: '#b45309',
+  y: '#9ca3af',
+  bp: '#3b82f6',
+  rp: '#f43f5e',
+  all: '#8fd1c8',
+};
+const FALLBACK_PALETTE = ['#8fd1c8', '#fbbf72', '#6cc4f5', '#f472b6', '#86efac', '#c4b5fd'];
+
+/** Deterministic colour for a band: the standard map, else a stable palette slot. */
+export function bandColor(band: string, index: number): string {
+  const key = (band ?? '').toLowerCase();
+  return BAND_COLORS[key] ?? FALLBACK_PALETTE[index % FALLBACK_PALETTE.length]!;
+}
+
+/** Compact numeric label for an axis tick / read-out (exponential at extreme magnitudes). */
+export function formatValue(v: number): string {
+  if (!Number.isFinite(v)) return '—';
+  if (v === 0) return '0';
+  const a = Math.abs(v);
+  if (a >= 1e4 || a < 1e-2) return v.toExponential(1);
+  return String(Number(v.toPrecision(3)));
+}

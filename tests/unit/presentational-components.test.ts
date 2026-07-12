@@ -41,6 +41,131 @@ describe('LightCurvePlot', () => {
   });
 });
 
+describe('LightCurvePlot — time-proportional axis, overlay, expand, hover', () => {
+  const seriesCircles = (c: Element): SVGCircleElement[] => [...c.querySelectorAll('g.series circle')] as SVGCircleElement[];
+  const cx = (el: Element): number => parseFloat(el.getAttribute('cx') ?? 'NaN');
+  const cy = (el: Element): number => parseFloat(el.getAttribute('cy') ?? 'NaN');
+
+  it('maps x by TIME not index: a 3× longer temporal gap is 3× wider on screen', () => {
+    // Index-based x (the old bug) would make both gaps equal (ratio 1) — this fails it.
+    const { container } = render(LightCurvePlot, {
+      series: [{ band: 'r', points: [
+        { mjd: 60000, intensity: 1 }, { mjd: 60010, intensity: 2 }, { mjd: 60040, intensity: 1.5 },
+      ] }],
+    });
+    const cs = seriesCircles(container);
+    expect(cs.length).toBe(3);
+    expect((cx(cs[2]!) - cx(cs[1]!)) / (cx(cs[1]!) - cx(cs[0]!))).toBeCloseTo(3, 4);
+  });
+
+  it('overlays one <g data-band> per filter (multi-band)', () => {
+    const { container } = render(LightCurvePlot, {
+      series: [
+        { band: 'g', points: [{ mjd: 1, intensity: 1 }, { mjd: 2, intensity: 2 }] },
+        { band: 'r', points: [{ mjd: 1, intensity: 3 }, { mjd: 2, intensity: 4 }] },
+        { band: 'i', points: [{ mjd: 1, intensity: 5 }, { mjd: 2, intensity: 6 }] },
+      ],
+    });
+    const bands = [...container.querySelectorAll('g.series[data-band]')].map((g) => g.getAttribute('data-band'));
+    expect(bands).toEqual(['g', 'r', 'i']);
+  });
+
+  it('legend toggle removes a band AND recomputes the shared y-domain', async () => {
+    const { container, getByLabelText } = render(LightCurvePlot, {
+      series: [
+        { band: 'g', points: [{ mjd: 1, intensity: 1000 }, { mjd: 2, intensity: 900 }] }, // dominates the scale
+        { band: 'r', points: [{ mjd: 1, intensity: 10 }, { mjd: 2, intensity: 20 }] },
+      ],
+    });
+    // r's brightest epoch (intensity 20) — near the axis floor while g dominates the scale.
+    const rMax = (c: Element): SVGCircleElement => c.querySelectorAll('g.series[data-band="r"] circle')[1] as SVGCircleElement;
+    const rBefore = cy(rMax(container));
+    await fireEvent.click(getByLabelText('Toggle band g'));
+    // g's group is gone…
+    expect(container.querySelector('g.series[data-band="g"]')).toBeNull();
+    // …and r re-scaled because vMax dropped from 1000 to 20 (real recompute, not just removal).
+    const rAfter = cy(rMax(container));
+    expect(rAfter).not.toBeCloseTo(rBefore, 1);
+  });
+
+  it('expand re-projects the data (rightmost point moves right), not just resizes the box', async () => {
+    const { container, getByLabelText } = render(LightCurvePlot, {
+      series: [{ band: 'r', points: [{ mjd: 60000, intensity: 1 }, { mjd: 60100, intensity: 2 }] }],
+    });
+    const svg = () => container.querySelector('svg[aria-label="Intensity vs time"]')!;
+    const rightmost = () => Math.max(...seriesCircles(container).map(cx));
+    const wBefore = parseFloat(svg().getAttribute('width')!);
+    const xBefore = rightmost();
+    await fireEvent.click(getByLabelText('Expand light curve'));
+    expect(parseFloat(svg().getAttribute('width')!)).toBeGreaterThan(wBefore);
+    expect(rightmost()).toBeGreaterThan(xBefore);
+  });
+
+  it('dashes only the segment that spans a real temporal gap (mid-series, not the last one)', () => {
+    // deltas 10,70,10,10 → the GAP is the 2nd segment; a "dash the last segment" impl fails.
+    const { container } = render(LightCurvePlot, {
+      series: [{ band: 'r', points: [0, 10, 80, 90, 100].map((mjd) => ({ mjd, intensity: 1 })) }],
+    });
+    const lines = [...container.querySelectorAll('g.series line')] as SVGLineElement[];
+    const dashed = lines.filter((l) => l.getAttribute('stroke-dasharray'));
+    expect(dashed.length).toBe(1);
+    const span = (l: SVGLineElement): number =>
+      Math.abs(parseFloat(l.getAttribute('x2')!) - parseFloat(l.getAttribute('x1')!));
+    expect(span(dashed[0]!)).toBe(Math.max(...lines.map(span))); // the widest = the gap
+  });
+
+  it('keeps negative-flux points inside the canvas (difference-image flux) — B5', () => {
+    const { container } = render(LightCurvePlot, {
+      series: [{ band: 'r', points: [{ mjd: 1, intensity: -50 }, { mjd: 2, intensity: 0 }, { mjd: 3, intensity: 100 }] }],
+    });
+    for (const c of seriesCircles(container)) {
+      expect(cy(c)).toBeGreaterThanOrEqual(0);
+      expect(cy(c)).toBeLessThanOrEqual(150);
+    }
+  });
+
+  it('renders finite coords for a degenerate all-equal-MJD series (no NaN)', () => {
+    const { container } = render(LightCurvePlot, {
+      series: [{ band: 'r', points: [{ mjd: 60000, intensity: 1 }, { mjd: 60000, intensity: 2 }] }],
+    });
+    expect(container.querySelector('svg[aria-label="Intensity vs time"]')!.innerHTML).not.toContain('NaN');
+  });
+
+  it('hover read-out reflects the hovered datum (different points → different MJDs)', async () => {
+    const { container } = render(LightCurvePlot, {
+      series: [{ band: 'r', points: [{ mjd: 60000, intensity: 1 }, { mjd: 60010, intensity: 2 }] }],
+    });
+    const cs = seriesCircles(container);
+    const readout = () => container.querySelector('[aria-label="Light curve readout"]')!.textContent ?? '';
+    await fireEvent.mouseEnter(cs[0]!);
+    const first = readout();
+    await fireEvent.mouseEnter(cs[1]!);
+    const second = readout();
+    expect(first).toContain('60000.000');
+    expect(second).toContain('60010.000');
+    expect(first).not.toBe(second);
+  });
+
+  it('reports "all bands hidden" honestly instead of a blank axis box', async () => {
+    const { container, getByLabelText } = render(LightCurvePlot, {
+      series: [
+        { band: 'g', points: [{ mjd: 1, intensity: 1 }, { mjd: 2, intensity: 2 }] },
+        { band: 'r', points: [{ mjd: 1, intensity: 3 }, { mjd: 2, intensity: 4 }] },
+      ],
+    });
+    await fireEvent.click(getByLabelText('Toggle band g'));
+    await fireEvent.click(getByLabelText('Toggle band r'));
+    expect(container.querySelector('[aria-label="Light curve status"]')!.textContent).toContain('all bands hidden');
+  });
+
+  it('draws exactly one <circle> per epoch (preserves the Playwright marker contract)', () => {
+    const { container } = render(LightCurvePlot, {
+      series: [{ band: 'r', points: [0, 1, 2, 3].map((mjd) => ({ mjd, intensity: mjd })) }],
+    });
+    expect(container.querySelectorAll('[aria-label="Intensity vs time"] circle').length).toBe(4);
+  });
+});
+
 describe('SurfacePlot', () => {
   it('renders a grid, adjusts exaggeration, and closes', async () => {
     const onClose = vi.fn();

@@ -39,6 +39,33 @@ test.describe('Gaia variable light curve', () => {
     await expect(page.locator('.lc-plot')).toContainText(/Gaia DR2/i);
   });
 
+  test('overlays g/bp/rp, legend toggles a band, hover reads out MJD, expand enlarges', async ({ page }) => {
+    await routeEpochFlux(page, FIXTURE);
+    await page.goto('/');
+    await page.locator('button[aria-label="Toggle Gaia variable light curve"]').click();
+
+    // Overlay: the fixture carries g/bp/rp, so three data-band series draw at once.
+    const groups = page.locator('[aria-label="Intensity vs time"] g.series[data-band]');
+    await expect.poll(() => groups.count(), { timeout: 15000 }).toBe(3);
+    await expect(page.locator('g.series[data-band="bp"]')).toBeVisible();
+
+    // Expand grows the plot SVG (re-projects into more pixels).
+    const svg = page.locator('svg[aria-label="Intensity vs time"]');
+    const wBefore = Number(await svg.getAttribute('width'));
+    await page.locator('button[aria-label="Expand light curve"]').click();
+    const wAfter = Number(await svg.getAttribute('width'));
+    expect(wAfter).toBeGreaterThan(wBefore);
+
+    // Hover a data point → the read-out reports a concrete MJD (not a static string).
+    await page.locator('g.series[data-band="g"] circle').first().hover({ force: true });
+    await expect(page.locator('[aria-label="Light curve readout"]')).toContainText(/MJD\s+\d/);
+
+    // Legend toggle removes the bp series but keeps the others.
+    await page.locator('button[aria-label="Toggle band bp"]').click();
+    await expect(page.locator('g.series[data-band="bp"]')).toHaveCount(0);
+    await expect(page.locator('g.series[data-band="g"]')).toHaveCount(1);
+  });
+
   test('an empty cone is reported honestly, not as a blank/no-op panel', async ({ page }) => {
     await routeEpochFlux(page, EMPTY);
     await page.goto('/');
