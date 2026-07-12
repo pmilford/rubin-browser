@@ -93,12 +93,51 @@ describe('fetchWithRetry', () => {
     expect(sleep.mock.calls.map((c) => c[0])).toEqual([500, 1000]); // 500·2⁰, 500·2¹
   });
 
-  it('propagates a network rejection without retrying', async () => {
+  it('propagates a network rejection without retrying (default — TAP callers unchanged)', async () => {
     const fetchImpl = vi.fn(async () => {
       throw new TypeError('Failed to fetch');
     });
     const sleep = vi.fn(async () => {});
     await expect(fetchWithRetry('u', {}, { fetchImpl, sleep })).rejects.toThrow('Failed to fetch');
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  // --- retryOnNetworkError (TODO: tile transient-blip resilience) --------------
+  it('retries a NETWORK rejection then succeeds when retryOnNetworkError is set', async () => {
+    // A transient blip (fetch throws) followed by a 200 — the tile path must recover
+    // rather than count it as a hard failure. A no-retry impl throws instead.
+    const fetchImpl = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValueOnce(resp(200));
+    const sleep = vi.fn(async () => {});
+    const r = await fetchWithRetry('u', {}, { fetchImpl, sleep, retryOnNetworkError: true, baseDelayMs: 400 });
+    expect(r.status).toBe(200);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledWith(400); // backed off once before the retry
+  });
+
+  it('gives up after maxRetries on a persistent network rejection and rethrows', async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new TypeError('Failed to fetch');
+    });
+    const sleep = vi.fn(async () => {});
+    await expect(
+      fetchWithRetry('u', {}, { fetchImpl, sleep, retryOnNetworkError: true, maxRetries: 2 }),
+    ).rejects.toThrow('Failed to fetch');
+    expect(fetchImpl).toHaveBeenCalledTimes(3); // initial + 2 retries
+  });
+
+  it('NEVER retries an AbortError, even with retryOnNetworkError (a superseded tile stops at once)', async () => {
+    const abortErr = Object.assign(new Error('aborted'), { name: 'AbortError' });
+    const fetchImpl = vi.fn(async () => {
+      throw abortErr;
+    });
+    const sleep = vi.fn(async () => {});
+    await expect(
+      fetchWithRetry('u', {}, { fetchImpl, sleep, retryOnNetworkError: true, maxRetries: 3 }),
+    ).rejects.toBe(abortErr);
+    expect(fetchImpl).toHaveBeenCalledTimes(1); // no retry on abort
+    expect(sleep).not.toHaveBeenCalled();
   });
 });

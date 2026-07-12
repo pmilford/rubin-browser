@@ -25,6 +25,7 @@
     buildCompressedSegments,
     compressedCoord,
     isInCollapsedGap,
+    foldPhase,
     type LcSeries,
     type LcSeriesPoint,
   } from '../utils/lightCurvePlot.js';
@@ -75,6 +76,10 @@
   // Compress large observing gaps to a short break (so dense clusters aren't
   // squashed by a season-long void). Opt-in; the default axis stays true-to-time.
   let compress = $state(false);
+  // Phase-fold onto a single cycle at a user-entered period (days) — reveals the
+  // shape of a periodic variable. Opt-in; the default axis stays time (MJD).
+  let folded = $state(false);
+  let periodDays = $state(1);
 
   // --- assemble series (series prop wins; else wrap the back-compat curve) -------
   const allSeries = $derived.by((): { band: string; color: string; points: LcSeriesPoint[] }[] => {
@@ -87,21 +92,40 @@
   const visibleSeries = $derived(allSeries.filter((s) => !hidden.includes(s.band)));
   const multi = $derived(allSeries.length > 1);
 
-  /** One plotted point: `y` is the mapped value (normalised or raw), `v` the true value. */
+  // Fold is only meaningful (and only offered) with a valid positive period.
+  const foldActive = $derived(folded && Number.isFinite(periodDays) && periodDays > 0);
+
+  /**
+   * One plotted point: `x` is the axis coordinate (MJD in time mode, PHASE 0–1 in
+   * fold mode), `y` the mapped value (normalised or raw), `v` the true value, `err`
+   * the 1σ uncertainty in the SAME units as `v` (only when normalise is off — a
+   * whisker in normalised space would need per-band rescaling and isn't drawn).
+   */
   interface PlotPoint {
     mjd: number;
     y: number;
     v: number;
     mag?: number;
+    err?: number;
   }
   const plotSeries = $derived.by((): { band: string; color: string; points: PlotPoint[] }[] =>
     visibleSeries.map((s) => {
       const norm = normalized ? normalizeIntensities(s.points) : null;
-      return {
-        band: s.band,
-        color: s.color,
-        points: s.points.map((p, i) => ({ mjd: p.mjd, y: norm ? norm[i]! : p.intensity, v: p.intensity, mag: p.mag })),
-      };
+      let pts: PlotPoint[] = s.points.map((p, i) => ({
+        mjd: p.mjd,
+        y: norm ? norm[i]! : p.intensity,
+        v: p.intensity,
+        mag: p.mag,
+        // Only carry a whisker in RAW space (normalise would distort per-band σ).
+        ...(!normalized && typeof p.err === 'number' && Number.isFinite(p.err) && p.err > 0 ? { err: p.err } : {}),
+      }));
+      if (foldActive) {
+        pts = pts
+          .map((p) => ({ ...p, mjd: foldPhase(p.mjd, periodDays) }))
+          .filter((p) => Number.isFinite(p.mjd))
+          .sort((a, b) => a.mjd - b.mjd);
+      }
+      return { band: s.band, color: s.color, points: pts };
     })
   );
 
@@ -114,12 +138,15 @@
   const unionMjds = $derived(uniqueSorted(plotSeries.flatMap((s) => s.points.map((p) => p.mjd))));
   const compAxis = $derived(buildCompressedSegments(unionMjds));
   // A compressed view only matters when there IS a collapsed gap to remove.
+  // Folding replaces the time axis entirely, so gap-compression is mutually exclusive.
   const hasGap = $derived(compAxis.segments.some((s) => s.gap));
-  const compressing = $derived(compress && hasGap && compAxis.totalC > 0);
+  const compressing = $derived(!foldActive && compress && hasGap && compAxis.totalC > 0);
 
   // --- scales -------------------------------------------------------------------
   const xOf = (mjd: number): number => {
     if (!domain) return M.l;
+    // Fold mode: `mjd` already carries a PHASE in [0,1) — map it across the full width.
+    if (foldActive) return M.l + Math.max(0, Math.min(1, mjd)) * plotW;
     if (compressing) return M.l + (compressedCoord(mjd, compAxis.segments, compAxis.totalC) / compAxis.totalC) * plotW;
     if (domain.mjdMax === domain.mjdMin) return M.l + plotW / 2;
     return M.l + ((mjd - domain.mjdMin) / (domain.mjdMax - domain.mjdMin)) * plotW;
@@ -134,9 +161,13 @@
   // misleadingly sit in the short break). The break glyphs mark those spans instead.
   const xTicks = $derived.by(() => {
     if (!domain) return [];
+    // Fold mode: fixed phase gridlines across a single 0–1 cycle.
+    if (foldActive) return [0, 0.25, 0.5, 0.75, 1];
     const ticks = niceTicks(domain.mjdMin, domain.mjdMax, expanded ? 7 : 4);
     return compressing ? ticks.filter((t) => !isInCollapsedGap(t, compAxis.segments)) : ticks;
   });
+  /** X tick label: integer MJD in time mode, 2-dp phase in fold mode. */
+  const xTickLabel = (t: number): string => (foldActive ? t.toFixed(2) : String(Math.round(t)));
   const yTicks = $derived(domain ? niceTicks(domain.vMin, domain.vMax, expanded ? 6 : 4) : []);
 
   // Screen x of each collapsed gap's break glyph (midpoint of the short break span).
@@ -163,7 +194,8 @@
     return null;
   });
   const markerInRange = $derived(
-    markerMjd != null && domain != null && markerMjd >= domain.mjdMin && markerMjd <= domain.mjdMax
+    !foldActive &&
+      markerMjd != null && domain != null && markerMjd >= domain.mjdMin && markerMjd <= domain.mjdMax
   );
 
   // Soft "scales differ" hint: overlaid, un-normalised, and one band's peak dwarfs another's.
@@ -175,7 +207,7 @@
   });
 
   // --- hover read-out -----------------------------------------------------------
-  let hover = $state<{ band: string; mjd: number; v: number; mag?: number; color: string } | null>(null);
+  let hover = $state<{ band: string; mjd: number; v: number; mag?: number; err?: number; color: string } | null>(null);
 
   function toggleBand(b: string): void {
     hidden = hidden.includes(b) ? hidden.filter((x) => x !== b) : [...hidden, b];
@@ -198,7 +230,7 @@
         onclick={() => (normalized = !normalized)}>norm</button
       >
     {/if}
-    {#if hasGap}
+    {#if hasGap && !folded}
       <button
         class="ctl"
         class:on={compress}
@@ -207,6 +239,27 @@
         title="Collapse long observing gaps to a short break so the dense data isn't squashed"
         onclick={() => (compress = !compress)}>⇥gap</button
       >
+    {/if}
+    {#if hasAny}
+      <button
+        class="ctl"
+        class:on={folded}
+        aria-label="Phase fold"
+        aria-pressed={folded}
+        title="Fold the light curve onto a single cycle at the entered period (days)"
+        onclick={() => (folded = !folded)}>⟳fold</button
+      >
+      {#if folded}
+        <input
+          class="period-input"
+          type="number"
+          min="0.0001"
+          step="0.1"
+          bind:value={periodDays}
+          aria-label="Fold period (days)"
+          title="Period in days"
+        />
+      {/if}
     {/if}
     <button
       class="ctl"
@@ -250,7 +303,7 @@
         {#each xTicks as t (t)}
           {@const gx = xOf(t)}
           <line x1={gx} y1={M.t} x2={gx} y2={H - M.b} stroke="rgba(120,140,220,0.10)" stroke-width="0.5" />
-          <text class="tick" x={gx} y={H - M.b + 12} text-anchor="middle">{Math.round(t)}</text>
+          <text class="tick" x={gx} y={H - M.b + 12} text-anchor="middle">{xTickLabel(t)}</text>
         {/each}
         <!-- axes frame -->
         <line x1={M.l} y1={M.t} x2={M.l} y2={H - M.b} stroke="rgba(150,170,230,0.5)" stroke-width="0.8" />
@@ -278,20 +331,37 @@
           />
         {/if}
 
-        <!-- series (one <g data-band> each; per-segment lines allow gap dashing) -->
+        <!-- series (one <g data-band> each; per-segment lines allow gap dashing).
+             Fold mode draws POINTS + error bars only — a connecting line would
+             cross the 0↔1 phase seam and mislead. -->
         {#each plotSeries as s (s.band)}
           <g class="series" data-band={s.band}>
-            {#each segmentsFor(s.points) as seg, si (si)}
-              <line
-                x1={seg.x1}
-                y1={seg.y1}
-                x2={seg.x2}
-                y2={seg.y2}
-                stroke={s.color}
-                stroke-width={expanded ? 1.6 : 1.3}
-                stroke-dasharray={seg.gap ? '3,3' : undefined}
-                opacity={seg.gap ? 0.4 : 1}
-              />
+            {#if !foldActive}
+              {#each segmentsFor(s.points) as seg, si (si)}
+                <line
+                  x1={seg.x1}
+                  y1={seg.y1}
+                  x2={seg.x2}
+                  y2={seg.y2}
+                  stroke={s.color}
+                  stroke-width={expanded ? 1.6 : 1.3}
+                  stroke-dasharray={seg.gap ? '3,3' : undefined}
+                  opacity={seg.gap ? 0.4 : 1}
+                />
+              {/each}
+            {/if}
+            <!-- 1σ error-bar whiskers (only where a finite positive err is present) -->
+            {#each s.points as p, ei (ei)}
+              {#if p.err != null && p.err > 0}
+                {@const ex = xOf(p.mjd)}
+                {@const yhi = yOf(p.v + p.err)}
+                {@const ylo = yOf(p.v - p.err)}
+                <g class="errbar" aria-label={`${s.band} error bar`}>
+                  <line x1={ex} y1={yhi} x2={ex} y2={ylo} stroke={s.color} stroke-width="1" opacity="0.6" />
+                  <line x1={ex - 2} y1={yhi} x2={ex + 2} y2={yhi} stroke={s.color} stroke-width="1" opacity="0.6" />
+                  <line x1={ex - 2} y1={ylo} x2={ex + 2} y2={ylo} stroke={s.color} stroke-width="1" opacity="0.6" />
+                </g>
+              {/if}
             {/each}
             {#each s.points as p, pi (pi)}
               <circle
@@ -302,8 +372,8 @@
                 stroke="transparent"
                 stroke-width="6"
                 role="img"
-                aria-label={`${s.band} MJD ${p.mjd.toFixed(3)} value ${formatValue(p.v)}`}
-                onmouseenter={() => (hover = { band: s.band, mjd: p.mjd, v: p.v, mag: p.mag, color: s.color })}
+                aria-label={`${s.band} ${foldActive ? 'phase' : 'MJD'} ${p.mjd.toFixed(3)} value ${formatValue(p.v)}`}
+                onmouseenter={() => (hover = { band: s.band, mjd: p.mjd, v: p.v, mag: p.mag, err: p.err, color: s.color })}
               />
             {/each}
           </g>
@@ -311,7 +381,9 @@
       </svg>
     </div>
 
-    <div class="x-axis-label" aria-label="X axis">Time (MJD)</div>
+    <div class="x-axis-label" aria-label="X axis">
+      {foldActive ? `Phase (fold @ ${periodDays} d)` : 'Time (MJD)'}
+    </div>
 
     {#if multi}
       <div class="legend" aria-label="Band legend">
@@ -336,7 +408,8 @@
     <div class="readout" aria-label="Light curve readout">
       {#if hover}
         <span class="ro-band" style={`color:${hover.color}`}>{hover.band === 'all' ? 'lum' : hover.band}</span>
-        MJD {hover.mjd.toFixed(3)} · {mjdToIso(hover.mjd)} · {formatValue(hover.v)}{#if hover.mag != null}
+        {#if foldActive}phase {hover.mjd.toFixed(3)}{:else}MJD {hover.mjd.toFixed(3)} · {mjdToIso(hover.mjd)}{/if} · {formatValue(hover.v)}{#if hover.err != null && hover.err > 0}
+          ± {formatValue(hover.err)}{/if}{#if hover.mag != null}
           · {hover.mag.toFixed(2)} mag{/if}
       {:else}
         hover a point for its MJD, date &amp; value
@@ -363,6 +436,10 @@
     cursor: pointer; font-size: 10px; padding: 2px 7px; font-family: inherit;
   }
   .ctl.on { background: #2b6; color: #041; border-color: #3c7; }
+  .period-input {
+    width: 56px; background: #1a1c33; border: 1px solid #445; border-radius: 4px;
+    color: #cde; font: inherit; font-size: 10px; padding: 1px 4px;
+  }
   .band-tag { color: #9fd; font-weight: 600; }
   .plot-row { display: flex; align-items: stretch; gap: 3px; }
   .y-axis-label {

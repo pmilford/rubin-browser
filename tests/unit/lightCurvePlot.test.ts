@@ -17,7 +17,10 @@ import {
   buildCompressedSegments,
   compressedCoord,
   isInCollapsedGap,
+  foldPhase,
+  foldSeriesPoints,
   type LcSeries,
+  type LcSeriesPoint,
 } from '../../src/utils/lightCurvePlot.js';
 
 describe('cleanPoints', () => {
@@ -165,5 +168,64 @@ describe('formatValue', () => {
     expect(formatValue(123)).toBe('123');
     expect(formatValue(50000)).toMatch(/e/);
     expect(formatValue(0.0001)).toMatch(/e/);
+  });
+});
+
+describe('phase folding (TODO 155)', () => {
+  it('folds a time onto [0,1) at the period, and points one full period apart map to the SAME phase', () => {
+    // Period 2.5 d, epoch 0. t=0 → 0; t=1.25 → 0.5; t=2.5 → 0 (one full period later).
+    expect(foldPhase(0, 2.5)).toBeCloseTo(0, 10);
+    expect(foldPhase(1.25, 2.5)).toBeCloseTo(0.5, 10);
+    expect(foldPhase(2.5, 2.5)).toBeCloseTo(0, 10);
+    // The defining property: any integer number of periods apart → identical phase.
+    expect(foldPhase(100.7, 2.5)).toBeCloseTo(foldPhase(100.7 + 5 * 2.5, 2.5), 10);
+  });
+
+  it('always returns a phase in [0,1), including for a negative time offset', () => {
+    for (const t of [-3.3, -0.1, 0, 0.4, 7.9, 123.456]) {
+      const ph = foldPhase(t, 1.7, 0.5);
+      expect(ph).toBeGreaterThanOrEqual(0);
+      expect(ph).toBeLessThan(1);
+    }
+  });
+
+  it('returns NaN for a non-positive or non-finite period (caller falls back to time axis)', () => {
+    expect(Number.isNaN(foldPhase(1, 0))).toBe(true);
+    expect(Number.isNaN(foldPhase(1, -2))).toBe(true);
+    expect(Number.isNaN(foldPhase(1, NaN))).toBe(true);
+    expect(Number.isNaN(foldPhase(NaN, 2))).toBe(true);
+  });
+
+  it('foldSeriesPoints collapses many cycles onto one, preserves value/err, and sorts by phase', () => {
+    // A period-2 sinusoid-like set sampled over 3 cycles: values depend only on phase,
+    // so after folding, equal-phase points share a value — a NON-folding (identity) or
+    // wrong-period impl would leave them scattered across the baseline.
+    const period = 2;
+    const pts: LcSeriesPoint[] = [0, 1, 2, 3, 4, 5].map((t) => ({
+      mjd: t,
+      intensity: t % 2 === 0 ? 10 : 20, // even t → phase 0 → 10; odd t → phase 0.5 → 20
+      err: 1.5,
+    }));
+    const folded = foldSeriesPoints(pts, period);
+    expect(folded).toHaveLength(6);
+    // sorted by phase
+    for (let i = 1; i < folded.length; i++) {
+      expect(folded[i]!.mjd).toBeGreaterThanOrEqual(folded[i - 1]!.mjd);
+    }
+    // phase-0 group all value 10, phase-0.5 group all value 20 (period-collapsed)
+    const atPhase0 = folded.filter((p) => Math.abs(p.mjd) < 1e-9);
+    const atPhaseHalf = folded.filter((p) => Math.abs(p.mjd - 0.5) < 1e-9);
+    expect(atPhase0.every((p) => p.intensity === 10)).toBe(true);
+    expect(atPhaseHalf.every((p) => p.intensity === 20)).toBe(true);
+    expect(atPhase0.length).toBe(3);
+    expect(atPhaseHalf.length).toBe(3);
+    // err carried through
+    expect(folded.every((p) => p.err === 1.5)).toBe(true);
+  });
+
+  it('drops points that fold to NaN (bad period) rather than emitting NaN phases', () => {
+    const pts: LcSeriesPoint[] = [{ mjd: 1, intensity: 5 }, { mjd: 2, intensity: 6 }];
+    expect(foldSeriesPoints(pts, 0)).toEqual([]);
+    expect(foldSeriesPoints(pts, -1)).toEqual([]);
   });
 });

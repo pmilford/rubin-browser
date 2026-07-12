@@ -912,7 +912,13 @@
     rubinLcParsed
       ? rubinLcParsed.bands.map((b) => ({
           band: b,
-          points: rubinLcParsed!.byBand[b]!.map((s) => ({ mjd: s.mjd, intensity: s.flux, ...(s.mag != null ? { mag: s.mag } : {}) })),
+          points: rubinLcParsed!.byBand[b]!.map((s) => ({
+            mjd: s.mjd,
+            intensity: s.flux,
+            ...(s.mag != null ? { mag: s.mag } : {}),
+            // Flux error (nJy) → error-bar whisker in the plot (TODO 155). Same units as intensity.
+            ...(s.fluxErr != null && Number.isFinite(s.fluxErr) ? { err: s.fluxErr } : {}),
+          })),
         }))
       : []
   );

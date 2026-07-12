@@ -32,6 +32,14 @@ export interface RetryOptions {
   maxDelayMs?: number;
   /** Statuses to retry. Default {@link DEFAULT_RETRY_STATUSES}. */
   retryStatuses?: readonly number[];
+  /**
+   * Also retry a NETWORK REJECTION (fetch itself throwing — a transient
+   * network/CORS blip, `status===null` at the call site) with the same bounded
+   * backoff. Default false (status-based only, preserving the TAP callers'
+   * behaviour). An `AbortError` is NEVER retried — it propagates immediately so a
+   * superseded/cancelled request stops at once.
+   */
+  retryOnNetworkError?: boolean;
   /** Injectable delay (default setTimeout-based) — tests pass a no-op. */
   sleep?: (ms: number) => Promise<void>;
   /** Injectable fetch (default global fetch) — tests pass a stub. */
@@ -92,6 +100,7 @@ export async function fetchWithRetry(
     baseDelayMs = DEFAULT_BASE_DELAY_MS,
     maxDelayMs = DEFAULT_MAX_DELAY_MS,
     retryStatuses = DEFAULT_RETRY_STATUSES,
+    retryOnNetworkError = false,
     sleep = defaultSleep,
     fetchImpl = fetch,
     now = Date.now,
@@ -99,7 +108,20 @@ export async function fetchWithRetry(
 
   let attempt = 0;
   for (;;) {
-    const resp = await fetchImpl(url, init);
+    let resp: Response;
+    try {
+      resp = await fetchImpl(url, init);
+    } catch (err) {
+      // Network rejection (fetch threw — transient blip / CORS). Never retry an
+      // AbortError: a superseded/cancelled request must stop immediately. Otherwise,
+      // if opted in and retries remain, back off and try again; else re-throw so the
+      // caller's existing catch runs (status===null failure).
+      const isAbort = (err as { name?: string } | null)?.name === 'AbortError';
+      if (isAbort || !retryOnNetworkError || attempt >= maxRetries) throw err;
+      await sleep(Math.min(maxDelayMs, baseDelayMs * 2 ** attempt));
+      attempt += 1;
+      continue;
+    }
     if (!retryStatuses.includes(resp.status) || attempt >= maxRetries) {
       return resp;
     }

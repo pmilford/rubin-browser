@@ -65,6 +65,13 @@ async function clickCentreAndRead(page: Page): Promise<string> {
 }
 
 test.describe('Image-inferred classification (offline synthetic cube)', () => {
+  // The offline synthetic cube generates in ~37s; under the full parallel UI suite
+  // (many workers contending) that pushes past Playwright's default 30s per-test
+  // timeout even though each test passes standalone (TODO 154). Give the whole
+  // block generous headroom so the gate is deterministically green — this is a
+  // test-infra allowance for a slow-but-correct fixture, not a product delay.
+  test.describe.configure({ timeout: 90_000 });
+
   test('the extended galaxy → "Galaxy", the point source → "Star" (labels differ)', async ({ page }) => {
     await focusOfflineTarget(page, '150, 20'); // OFFLINE_GALAXY
     const galaxyLabel = await clickCentreAndRead(page);

@@ -15,6 +15,12 @@ export interface LcSeriesPoint {
   intensity: number;
   /** Optional magnitude, shown in the hover read-out when present. */
   mag?: number;
+  /**
+   * Optional 1σ uncertainty in `intensity` (SAME units as `intensity`, e.g. nJy
+   * flux error for Rubin). Drawn as a vertical error-bar whisker when finite and
+   * positive. Absent/NaN/≤0 ⇒ no whisker (never a fabricated zero-length bar).
+   */
+  err?: number;
 }
 
 /** A single band's epoch series. `color` is optional (assigned by band if absent). */
@@ -235,6 +241,52 @@ const FALLBACK_PALETTE = ['#8fd1c8', '#fbbf72', '#6cc4f5', '#f472b6', '#86efac',
 export function bandColor(band: string, index: number): string {
   const key = (band ?? '').toLowerCase();
   return BAND_COLORS[key] ?? FALLBACK_PALETTE[index % FALLBACK_PALETTE.length]!;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Phase folding (periodic variables)                                         */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Fold a time onto a phase in [0, 1) at a given `period` (days), relative to an
+ * `epoch` (MJD) zero-point (default 0). Phase = frac((mjd − epoch) / period),
+ * normalised into [0,1) so a negative offset still lands in range. Returns NaN
+ * when the period is non-finite or ≤ 0 (the caller must guard — an unfolded plot
+ * is the honest fallback, never a divide-by-zero collapse to one point).
+ *
+ * This is the standard variable-star fold: a light curve sampled over many cycles
+ * of a true period P collapses onto a single cycle, revealing the periodic shape
+ * that the time-series view scatters across the whole baseline.
+ */
+export function foldPhase(mjd: number, period: number, epoch = 0): number {
+  if (!Number.isFinite(period) || period <= 0 || !Number.isFinite(mjd)) return NaN;
+  const phase = ((mjd - epoch) / period) % 1;
+  return phase < 0 ? phase + 1 : phase;
+}
+
+/**
+ * Fold a series' points to phase, returning a NEW point array whose `mjd` field
+ * carries the PHASE in [0,1) (so the existing plot machinery can map it on a 0–1
+ * x-axis unchanged) while preserving intensity/mag/err. Points whose fold is NaN
+ * (guarded above) are dropped. Sorted by phase so line segments connect in phase
+ * order within the single folded cycle.
+ *
+ * NOTE: connecting folded points with lines can cross the 0↔1 seam; the component
+ * draws folded data as POINTS (with error bars), not a connected line, to avoid a
+ * misleading wrap-around segment.
+ */
+export function foldSeriesPoints(
+  points: readonly LcSeriesPoint[],
+  period: number,
+  epoch = 0,
+): LcSeriesPoint[] {
+  const out: LcSeriesPoint[] = [];
+  for (const p of points) {
+    const ph = foldPhase(p.mjd, period, epoch);
+    if (!Number.isFinite(ph)) continue;
+    out.push({ ...p, mjd: ph });
+  }
+  return out.sort((a, b) => a.mjd - b.mjd);
 }
 
 /** Compact numeric label for an axis tick / read-out (exponential at extreme magnitudes). */

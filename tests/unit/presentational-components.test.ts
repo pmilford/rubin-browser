@@ -192,6 +192,56 @@ describe('LightCurvePlot — time-proportional axis, overlay, expand, hover', ()
     });
     expect(container.querySelectorAll('[aria-label="Intensity vs time"] circle').length).toBe(4);
   });
+
+  // --- error bars (TODO 155) ---------------------------------------------------
+  it('draws a 1σ whisker per point WITH err, whose height scales with the error (not constant)', () => {
+    // Same value, different errors → the taller err must draw the taller whisker.
+    // A no-op (no bars) or constant-height impl fails.
+    const { container } = render(LightCurvePlot, {
+      series: [{ band: 'r', points: [
+        { mjd: 1, intensity: 30, err: 2 },
+        { mjd: 2, intensity: 70, err: 20 },
+      ] }],
+    });
+    const bars = [...container.querySelectorAll('g.errbar')];
+    expect(bars.length).toBe(2);
+    // First (vertical) line of each whisker: |y2 − y1| is the pixel height.
+    const height = (g: Element): number => {
+      const l = g.querySelector('line')!;
+      return Math.abs(parseFloat(l.getAttribute('y2')!) - parseFloat(l.getAttribute('y1')!));
+    };
+    const [h0, h1] = bars.map(height);
+    expect(h1!).toBeGreaterThan(h0! * 3); // err 20 vs 2 → a much taller bar
+  });
+
+  it('draws NO error bars when points carry no err (never a fabricated zero-length whisker)', () => {
+    const { container } = render(LightCurvePlot, {
+      series: [{ band: 'r', points: [{ mjd: 1, intensity: 5 }, { mjd: 2, intensity: 6 }] }],
+    });
+    expect(container.querySelectorAll('g.errbar').length).toBe(0);
+  });
+
+  // --- phase folding (TODO 155) ------------------------------------------------
+  it('phase-folds many cycles onto one: equal-phase points collapse to the SAME x (default period 1)', async () => {
+    // Times 0,0.5,1,1.5 at period 1 → phases 0,0.5,0,0.5. Value depends only on phase.
+    const pts = [0, 0.5, 1, 1.5].map((mjd) => ({ mjd, intensity: mjd % 1 === 0 ? 10 : 20 }));
+    const { container, getByLabelText } = render(LightCurvePlot, { series: [{ band: 'r', points: pts }] });
+    const distinctX = (): number =>
+      new Set(seriesCircles(container).map((c) => Math.round(cx(c)))).size;
+    expect(distinctX()).toBe(4); // time mode: four separate epochs
+    await fireEvent.click(getByLabelText('Phase fold')); // default period 1
+    // fold mode: two phases (0 and 0.5) → only two distinct x. An unfolded/no-op impl stays at 4.
+    expect(distinctX()).toBe(2);
+    expect(container.querySelector('[aria-label="X axis"]')!.textContent).toMatch(/Phase/);
+  });
+
+  it('fold draws points only (no connecting line that would cross the 0↔1 phase seam)', async () => {
+    const pts = [0, 0.5, 1, 1.5, 2].map((mjd) => ({ mjd, intensity: mjd % 1 === 0 ? 10 : 20 }));
+    const { container, getByLabelText } = render(LightCurvePlot, { series: [{ band: 'r', points: pts }] });
+    expect(container.querySelectorAll('g.series line').length).toBeGreaterThan(0); // time mode has segments
+    await fireEvent.click(getByLabelText('Phase fold'));
+    expect(container.querySelectorAll('g.series line').length).toBe(0); // fold mode: no connecting lines
+  });
 });
 
 describe('SurfacePlot', () => {

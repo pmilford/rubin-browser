@@ -1,5 +1,6 @@
 <script lang="ts">
   import { getAuthHeader } from '../api/auth.js';
+  import { fetchWithRetry } from '../api/rateLimit.js';
   import { toRequestUrl } from '../api/rspProxy.js';
   import { parseHipsProperties, radecToThetaPhi, thetaPhiToRadec, getTileCenter } from '../api/hips.js';
   import {
@@ -2169,7 +2170,18 @@
             // never strand the tile: supersede() already settled + counted the
             // cancel, and a still-VISIBLE queued tile is left un-aborted so it runs.
             if (aborted) return Promise.resolve();
-            return fetch(toRequestUrl(url), { headers: auth, signal: controller!.signal })
+            // Bounded, abort-aware retry with backoff so a TRANSIENT Rubin blip —
+            // a network/CORS reject (status===null) or a 429/503 — doesn't count as
+            // a hard tile failure on the first try and prematurely trip the
+            // auto-fallback / "Switch the Base layer" banner. Deterministic errors
+            // (404 wrong path, 401/403 no rights) are NOT retried (not in
+            // retryStatuses) so they still surface immediately. A superseded fetch's
+            // AbortError propagates without retry (handled in the catch below).
+            return fetchWithRetry(
+              toRequestUrl(url),
+              { headers: auth, signal: controller!.signal },
+              { retryOnNetworkError: true, maxRetries: 2, baseDelayMs: 400, maxDelayMs: 2000 }
+            )
               .then(resp => {
                 if (!resp.ok) {
                   const e = new Error(`HTTP ${resp.status}`) as Error & { status?: number };
