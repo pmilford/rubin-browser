@@ -44,6 +44,7 @@ import {
   type CatalogSet,
 } from '../data/catalog.js';
 import type { TapQueryResult } from '../types/catalog.js';
+import { angularSeparation } from '../utils/skyGeom.js';
 
 /** LSST photometric bands, in wavelength order — the per-band psfMag columns selected. */
 export const RUBIN_OBJECT_BANDS = ['u', 'g', 'r', 'i', 'z', 'y'] as const;
@@ -104,6 +105,12 @@ export const RUBIN_OBJECT_COLUMNS: readonly string[] = [
   'refBand',
   ...RUBIN_OBJECT_BANDS.map((b) => `${b}_psfMag`),
   'r_cModelMag',
+  // Rubin's OWN star/galaxy separator (0=point source, 1=extended) — CModel-vs-PSF
+  // flux, computed by the pipeline. Used to authoritatively classify a clicked
+  // object (see fetchNearestRubinObject + catalogClassify.rubinObjectToCandidate),
+  // which our in-browser luminance morphology only approximates. Verified column
+  // name against the sdm_schemas dp1.yaml / .claude/skills/adql-builder/SKILL.md.
+  'refExtendedness',
 ];
 
 /**
@@ -261,6 +268,8 @@ export function parseRubinObjects(raw: TapQueryResult): CatalogSet {
       numField(rec, `${b} (psf mag)`, pickNumber(r, [`${b}_psfMag`]));
     }
     numField(rec, 'r (cModel mag)', pickNumber(r, ['r_cModelMag']));
+    const ext = pickNumber(r, ['refExtendedness']);
+    rec['Type (Rubin)'] = ext === null ? CATALOG_NO_DATA : ext >= 0.5 ? 'galaxy' : 'star';
     records[i] = rec;
   }
 
@@ -320,4 +329,80 @@ export async function fetchRubinObjects(params: RubinObjectConeParams): Promise<
   // Empty result is a legitimate answer (DP1 covers only a few small fields), not
   // an error — return a valid empty CatalogSet so the UI shows an honest "none here".
   return parseRubinObjects(result);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Nearest-object cross-match (recognizer fix — authoritative star/galaxy)     */
+/* -------------------------------------------------------------------------- */
+
+/** The nearest `dp1.Object` to a query point, with its Rubin star/galaxy flag. */
+export interface NearestRubinObject {
+  objectId: string;
+  ra: number;
+  dec: number;
+  /** Angular separation from the query point, ARCSEC. */
+  separationArcsec: number;
+  /**
+   * Rubin `refExtendedness` (0 = point source ⇒ star, 1 = extended ⇒ galaxy), or
+   * null when the column was null for this object (faint / not measured). null ⇒
+   * the caller keeps morphology (no authoritative override).
+   */
+  extendedness: number | null;
+  /** r-band cModel AB magnitude if present (context only), else null. */
+  rMag: number | null;
+}
+
+/**
+ * Cross-match a clicked sky position to the NEAREST `dp1.Object` and return its
+ * Rubin `refExtendedness` (the pipeline's own star/galaxy call). This is the
+ * authoritative fix for "obvious galaxies mis-classified": the in-browser luminance
+ * morphology only approximates extendedness, so when a real Rubin object sits under
+ * the click we defer to its measured flag (via `catalogClassify.rubinObjectToCandidate`).
+ *
+ * Auth-gated (dp1.Object requires an RSP token with DP1 rights) — throws the same
+ * honest "sign-in required" as {@link fetchRubinObjects} BEFORE any request. Returns
+ * null (NOT an error) when the small cone is empty, so the caller silently keeps
+ * morphology. A tiny cone (default 3″) + small row cap keeps it cheap for a click.
+ */
+export async function fetchNearestRubinObject(params: {
+  ra: number;
+  dec: number;
+  /** Search radius in ARCSEC (small — a deliberate click lands within a few ″). Default 3. */
+  radiusArcsec?: number;
+}): Promise<NearestRubinObject | null> {
+  if (!isAuthenticated()) {
+    throw new Error(
+      'Sign-in required: the live DP1 Object catalog requires an RSP token with ' +
+        'DP1 data rights.'
+    );
+  }
+  const raDeg = finiteNumber(params.ra, 'ra');
+  const decDeg = finiteNumber(params.dec, 'dec');
+  const radiusArcsec = params.radiusArcsec ?? 3;
+  const radiusDeg = radiusArcsec / 3600;
+
+  const adql = buildObjectConeSearch({ ra: raDeg, dec: decDeg, radiusDeg, maxRows: 64 });
+  const result = await query(adql, { maxRec: 64 });
+  if (!result || !Array.isArray(result.rows) || result.rows.length === 0) return null;
+
+  let best: NearestRubinObject | null = null;
+  for (const row of result.rows) {
+    if (!row || typeof row !== 'object') continue;
+    const r = row as Record<string, unknown>;
+    const oRa = pickNumber(r, RA_KEYS);
+    const oDec = pickNumber(r, DEC_KEYS);
+    if (oRa === null || oDec === null) continue;
+    const sepArcsec = angularSeparation(raDeg, decDeg, normalizeRa(oRa), oDec) * 3600;
+    if (best === null || sepArcsec < best.separationArcsec) {
+      best = {
+        objectId: pickIdString(r, ID_KEYS),
+        ra: normalizeRa(oRa),
+        dec: oDec,
+        separationArcsec: sepArcsec,
+        extendedness: pickNumber(r, ['refExtendedness']),
+        rMag: pickNumber(r, ['r_cModelMag', 'r_psfMag']),
+      };
+    }
+  }
+  return best;
 }

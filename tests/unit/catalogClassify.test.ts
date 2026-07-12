@@ -5,6 +5,7 @@ import {
   classifyWithCatalog,
   catalogClass,
   simbadObjectToCandidate,
+  rubinObjectToCandidate,
   CATALOG_PROVENANCE,
   type CatalogCandidate,
 } from '../../src/utils/catalogClassify.js';
@@ -239,5 +240,47 @@ describe('simbadObjectToCandidate — thin adapter', () => {
     expect(c.separationArcsec).toBe(Infinity);
     // …so it can never satisfy the match radius.
     expect(classifyWithCatalog(morph('star'), [c])).toEqual(morph('star'));
+  });
+});
+
+describe('Rubin refExtendedness cross-match (recognizer fix — authoritative star/galaxy)', () => {
+  it('extendedness=1 → galaxy, extendedness=0 → star, decisively (Rubin pipeline flag beats morphology)', () => {
+    expect(catalogClass({ source: 'rubin', extendedness: 1, separationArcsec: 0.5 })).toBe('galaxy');
+    expect(catalogClass({ source: 'rubin', extendedness: 0, separationArcsec: 0.5 })).toBe('star');
+  });
+
+  it('FLIPS a morphology "star" to galaxy when Rubin says extended — the user\'s "obvious galaxies misclassified" case', () => {
+    const cand = rubinObjectToCandidate({ separationArcsec: 0.8, extendedness: 1 })!;
+    const out = classifyWithCatalog(morph('star', 0.4), [cand], { matchRadiusArcsec: 3 });
+    expect(out.cls).toBe('galaxy');
+    expect(out.provenance).toBe(CATALOG_PROVENANCE); // panel shows "(catalog)"
+    expect(out.reason).toMatch(/Rubin galaxy match \(refExtendedness extended\).*overrides image morphology \(star\)/);
+    // Authoritative: separation penalty waived → confidence stays high.
+    expect(out.confidence).toBeGreaterThan(0.85);
+  });
+
+  it('CONFIRMS a morphology "galaxy" and keeps high confidence (no flip wording)', () => {
+    const cand = rubinObjectToCandidate({ separationArcsec: 2, extendedness: 1 })!;
+    const out = classifyWithCatalog(morph('galaxy', 0.5), [cand], { matchRadiusArcsec: 5 });
+    expect(out.cls).toBe('galaxy');
+    expect(out.reason).toMatch(/confirms image morphology/);
+  });
+
+  it('takes precedence over a conflicting otype on the SAME candidate (extendedness is authoritative)', () => {
+    // A candidate that carries BOTH a stellar otype and extendedness=1 → galaxy wins.
+    expect(catalogClass({ source: 'rubin', otype: 'Star', extendedness: 1, separationArcsec: 0.3 })).toBe('galaxy');
+  });
+
+  it('rubinObjectToCandidate returns null when extendedness is absent (morphology must stand)', () => {
+    expect(rubinObjectToCandidate({ separationArcsec: 1, extendedness: null })).toBeNull();
+    expect(rubinObjectToCandidate({ separationArcsec: 1, extendedness: undefined })).toBeNull();
+    // …and a null candidate filtered out leaves morphology unchanged.
+    const cands = [rubinObjectToCandidate({ separationArcsec: 1, extendedness: null })].filter(Boolean) as CatalogCandidate[];
+    expect(classifyWithCatalog(morph('star'), cands)).toEqual(morph('star'));
+  });
+
+  it('an out-of-radius Rubin match does NOT override (nearest-primary safety)', () => {
+    const cand = rubinObjectToCandidate({ separationArcsec: 9, extendedness: 1 })!;
+    expect(classifyWithCatalog(morph('star'), [cand], { matchRadiusArcsec: 3 })).toEqual(morph('star'));
   });
 });

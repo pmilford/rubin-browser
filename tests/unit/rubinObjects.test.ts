@@ -3,6 +3,7 @@ import {
   buildObjectConeSearch,
   parseRubinObjects,
   fetchRubinObjects,
+  fetchNearestRubinObject,
   RUBIN_OBJECT_BANDS,
   RUBIN_OBJECT_COLUMNS,
 } from '../../src/api/rubinObjects.js';
@@ -259,5 +260,64 @@ describe('fetchRubinObjects', () => {
     await expect(
       fetchRubinObjects({ ra: 53.13, dec: -28.1, radiusDeg: 0.05 })
     ).rejects.toThrow(/Network error fetching DP1 Objects/i);
+  });
+});
+
+describe('buildObjectConeSearch — refExtendedness column (recognizer fix)', () => {
+  it('selects refExtendedness (Rubin\'s own star/galaxy flag)', () => {
+    const adql = buildObjectConeSearch({ ra: 53.13, dec: -28.1, radiusDeg: 0.001 });
+    expect(adql).toContain('refExtendedness');
+    expect(RUBIN_OBJECT_COLUMNS).toContain('refExtendedness');
+  });
+});
+
+describe('fetchNearestRubinObject', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('throws sign-in-required and does NOT query when unauthenticated', async () => {
+    mockedIsAuth.mockReturnValue(false);
+    await expect(fetchNearestRubinObject({ ra: 53.13, dec: -28.1 })).rejects.toThrow(/Sign-in required/i);
+    expect(mockedQuery).not.toHaveBeenCalled();
+  });
+
+  it('returns the NEAREST object to the click with its refExtendedness (a farther one does not win)', async () => {
+    mockedIsAuth.mockReturnValue(true);
+    // Two objects: one ~1″ away (extended galaxy), one ~2.5″ away (star). Nearest wins.
+    mockedQuery.mockResolvedValue(tapResult([
+      { objectId: '111', coord_ra: 53.1303, coord_dec: -28.1, refExtendedness: 0, r_cModelMag: 21.0 },   // ~0.95″ E
+      { objectId: '222', coord_ra: 53.13, coord_dec: -28.10070, refExtendedness: 1, r_cModelMag: 22.5 }, // ~2.5″ S
+    ]));
+    const m = await fetchNearestRubinObject({ ra: 53.13, dec: -28.1, radiusArcsec: 3 });
+    expect(m).not.toBeNull();
+    expect(m!.objectId).toBe('111');
+    expect(m!.extendedness).toBe(0); // the nearest object's flag (star)
+    expect(m!.separationArcsec).toBeLessThan(2);
+    expect(m!.rMag).toBe(21.0);
+  });
+
+  it('carries a galaxy extendedness=1 through unchanged (the fix drives a galaxy call)', async () => {
+    mockedIsAuth.mockReturnValue(true);
+    mockedQuery.mockResolvedValue(tapResult([
+      { objectId: '999', coord_ra: 53.13, coord_dec: -28.1, refExtendedness: 1, r_cModelMag: 20.2 },
+    ]));
+    const m = await fetchNearestRubinObject({ ra: 53.13, dec: -28.1 });
+    expect(m!.extendedness).toBe(1);
+    expect(m!.separationArcsec).toBeLessThan(0.5);
+  });
+
+  it('returns null (not an error) for an empty cone — caller keeps morphology', async () => {
+    mockedIsAuth.mockReturnValue(true);
+    mockedQuery.mockResolvedValue(tapResult([]));
+    expect(await fetchNearestRubinObject({ ra: 53.13, dec: -28.1 })).toBeNull();
+  });
+
+  it('surfaces a null refExtendedness as null (faint/unmeasured → no override)', async () => {
+    mockedIsAuth.mockReturnValue(true);
+    mockedQuery.mockResolvedValue(tapResult([
+      { objectId: '333', coord_ra: 53.13, coord_dec: -28.1, refExtendedness: null, r_cModelMag: 24.9 },
+    ]));
+    const m = await fetchNearestRubinObject({ ra: 53.13, dec: -28.1 });
+    expect(m!.extendedness).toBeNull();
   });
 });

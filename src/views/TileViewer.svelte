@@ -14,7 +14,7 @@
   import ObjectInfoPanel from '../components/ObjectInfoPanel.svelte';
   import SimbadPanel from '../components/SimbadPanel.svelte';
   import { objectsNear, type SimbadObject } from '../api/simbad.js';
-  import { classifyWithCatalog, type CatalogCandidate } from '../utils/catalogClassify.js';
+  import { classifyWithCatalog, rubinObjectToCandidate, type CatalogCandidate } from '../utils/catalogClassify.js';
   import DiffPanel from '../components/DiffPanel.svelte';
   import VariabilityPanel from '../components/VariabilityPanel.svelte';
   import CutoutPanel from '../components/CutoutPanel.svelte';
@@ -27,7 +27,7 @@
   import CatalogTable from '../components/CatalogTable.svelte';
   import ColorMagnitudeDiagram from '../components/ColorMagnitudeDiagram.svelte';
   import { fetchGaiaCone, type GaiaCatalog } from '../api/gaia.js';
-  import { fetchRubinObjects, RUBIN_OBJECT_DEFAULT_RADIUS_DEG } from '../api/rubinObjects.js';
+  import { fetchRubinObjects, fetchNearestRubinObject, RUBIN_OBJECT_DEFAULT_RADIUS_DEG, type NearestRubinObject } from '../api/rubinObjects.js';
   import { gaiaToCatalogSet, type CatalogSet } from '../data/catalog.js';
   import { lensCatalogSet } from '../data/lenses.js';
   import SurfacePlot from '../components/SurfacePlot.svelte';
@@ -261,11 +261,27 @@
   // This is the RAW luminance-morphology call; the displayed `imageClass` below
   // applies a catalog cross-match on top of it (TODO 151).
   let rawImageClass = $state<ImageClassification | null>(null);
+  // Live Rubin dp1.Object cross-match at the click (authoritative refExtendedness
+  // star/galaxy flag) — only fetched on a Rubin base when authenticated; folded into
+  // `imageClass` below. Best-effort + debounced-by-generation so a slow response for
+  // a previous click never clobbers a newer one.
+  let rubinClassMatch = $state<NearestRubinObject | null>(null);
+  let identifyGeneration = 0;
   function handleIdentify(info: IdentifyInfo) {
     identifyInfo = info;
+    const gen = ++identifyGeneration;
+    rubinClassMatch = null;
     statusMessage = info.match
       ? `Identified: ${info.match.object.name} (${info.match.object.type}, mag ${info.match.object.magnitude.toFixed(1)})`
       : `No catalogued object within ${(info.matchRadiusDeg * 60).toFixed(0)}′ of the click`;
+    // On a Rubin base with a token, ask the pipeline what THIS object is (its own
+    // star/galaxy flag) — the authoritative fix for morphology mis-calls. Never
+    // blocks: a network failure / empty cone silently leaves morphology in charge.
+    if (rubinActive && authenticated && Number.isFinite(info.ra) && Number.isFinite(info.dec)) {
+      void fetchNearestRubinObject({ ra: info.ra, dec: info.dec, radiusArcsec: 3 })
+        .then((m) => { if (gen === identifyGeneration) rubinClassMatch = m; })
+        .catch(() => { /* best-effort: keep morphology */ });
+    }
   }
   function handleClassify(result: ImageClassification | null) {
     rawImageClass = result;
@@ -280,15 +296,34 @@
   // catalogue object here ⇒ the raw morphology call passes through unchanged.
   const imageClass = $derived.by((): ImageClassification | null => {
     if (!rawImageClass) return null;
+    const candidates: CatalogCandidate[] = [];
+    // Default acceptance radius for the (small-cone) Rubin match when there is no
+    // bundled match to set a wider one.
+    let radiusArcsec = 5;
     const m = identifyInfo?.match;
-    if (!m || !identifyInfo) return rawImageClass;
-    const candidate: CatalogCandidate = {
-      source: 'simbad',
-      otype: m.object.type, // ObjectType text ('star'/'galaxy'/'double-star'/… → catalogClass)
-      separationArcsec: m.separationDeg * 3600,
-      magnitude: m.object.magnitude,
-    };
-    return classifyWithCatalog(rawImageClass, [candidate], { matchRadiusArcsec: identifyInfo.matchRadiusDeg * 3600 });
+    if (m && identifyInfo) {
+      candidates.push({
+        source: 'simbad',
+        otype: m.object.type, // ObjectType text ('star'/'galaxy'/'double-star'/… → catalogClass)
+        separationArcsec: m.separationDeg * 3600,
+        magnitude: m.object.magnitude,
+      });
+      radiusArcsec = identifyInfo.matchRadiusDeg * 3600;
+    }
+    // Rubin's OWN star/galaxy flag for the object under the click — AUTHORITATIVE.
+    // Its small separation (≤ the 3″ cone) beats a far bundled match in nearest-wins,
+    // and refExtendedness waives the separation penalty, so an "obvious galaxy" the
+    // morphology mis-calls a star is corrected. Null extendedness ⇒ candidate dropped.
+    const rc = rubinClassMatch
+      ? rubinObjectToCandidate({
+          separationArcsec: rubinClassMatch.separationArcsec,
+          extendedness: rubinClassMatch.extendedness,
+          magnitude: rubinClassMatch.rMag ?? undefined,
+        })
+      : null;
+    if (rc) candidates.push(rc);
+    if (candidates.length === 0) return rawImageClass;
+    return classifyWithCatalog(rawImageClass, candidates, { matchRadiusArcsec: radiusArcsec });
   });
 
   // Cross-section / line-profile tool
@@ -1973,7 +2008,7 @@
           <ObjectInfoPanel
             info={identifyInfo}
             imageClass={imageClass}
-            onClose={() => { identifyInfo = null; rawImageClass = null; }}
+            onClose={() => { identifyInfo = null; rawImageClass = null; rubinClassMatch = null; }}
           />
         {/if}
         {#if simbadQuery}

@@ -79,6 +79,15 @@ export interface CatalogCandidate {
   parallaxMas?: number;
   /** Optional total proper motion, mas/yr. A significant PM ⇒ a nearby star. */
   properMotionMasYr?: number;
+  /**
+   * Optional Rubin pipeline `refExtendedness` (0 = point source ⇒ star, 1 = extended
+   * ⇒ galaxy). This is Rubin's OWN measured star/galaxy separator (CModel-vs-PSF
+   * flux, which we cannot fit in-browser), so when present it is DECISIVE — the
+   * authoritative answer our luminance morphology only approximates. A value in
+   * (0,1) is treated by the ≥0.5 threshold (Rubin emits it as a 0/1 flag, but be
+   * robust to a probabilistic value). Only meaningful for `source:'rubin'`.
+   */
+  extendedness?: number;
 }
 
 /** Coarse class a catalog candidate implies for the star/galaxy decision. */
@@ -152,6 +161,13 @@ const CLUSTER_KEYWORDS = ['cluster of', 'globular', 'open (galactic) cluster', '
 export function catalogClass(c: CatalogCandidate): CatalogMatchClass {
   const otype = (c.otype ?? '').trim().toLowerCase();
 
+  // Rubin refExtendedness — the pipeline's OWN star/galaxy call — is authoritative
+  // and checked FIRST: 0 ⇒ point source (star), 1 ⇒ extended (galaxy). This is the
+  // measurement our morphology proxies only approximate, so it wins outright.
+  if (Number.isFinite(c.extendedness)) {
+    return (c.extendedness as number) >= 0.5 ? 'galaxy' : 'star';
+  }
+
   // Gaia astrometry: a measurable parallax/PM is unambiguous stellar evidence.
   if (
     (Number.isFinite(c.parallaxMas) && Math.abs(c.parallaxMas as number) >= GAIA_PARALLAX_SIGNIFICANT_MAS) ||
@@ -188,6 +204,24 @@ export function simbadObjectToCandidate(o: SimbadObject): CatalogCandidate {
     source: 'simbad',
     otype: o.objectType,
     separationArcsec: Number.isFinite(o.separationArcsec) ? (o.separationArcsec as number) : Infinity,
+  };
+}
+
+/**
+ * Adapt a Rubin `dp1.Object` match into a decisive {@link CatalogCandidate} using
+ * its `refExtendedness` flag. Returns null when extendedness is absent/non-finite
+ * (nothing decisive to add — morphology should stand), so the caller can
+ * `.filter(Boolean)` it into the candidate list.
+ */
+export function rubinObjectToCandidate(
+  o: { separationArcsec: number; extendedness: number | null | undefined; magnitude?: number },
+): CatalogCandidate | null {
+  if (o.extendedness == null || !Number.isFinite(o.extendedness)) return null;
+  return {
+    source: 'rubin',
+    extendedness: o.extendedness,
+    separationArcsec: Number.isFinite(o.separationArcsec) ? o.separationArcsec : Infinity,
+    ...(typeof o.magnitude === 'number' && Number.isFinite(o.magnitude) ? { magnitude: o.magnitude } : {}),
   };
 }
 
@@ -235,16 +269,26 @@ export function classifyWithCatalog(
   // Confidence: high, softened as the match approaches the radius edge. Gaia
   // astrometric confirmations (measurable parallax/PM) waive the separation penalty.
   const base = best.cls === 'star' ? starConf : galaxyConf;
-  const astrometric =
+  // A Rubin refExtendedness match is the pipeline's own measurement of THIS object,
+  // so — like a Gaia astrometric confirmation — it waives the separation penalty.
+  const authoritative =
+    Number.isFinite(best.cand.extendedness) ||
     (Number.isFinite(best.cand.parallaxMas) && Math.abs(best.cand.parallaxMas as number) >= GAIA_PARALLAX_SIGNIFICANT_MAS) ||
     (Number.isFinite(best.cand.properMotionMasYr) && Math.abs(best.cand.properMotionMasYr as number) >= GAIA_PM_SIGNIFICANT_MAS_YR);
-  const sepPenalty = astrometric ? 0 : 0.35 * (radius > 0 ? best.sep / radius : 0);
+  const sepPenalty = authoritative ? 0 : 0.35 * (radius > 0 ? best.sep / radius : 0);
   const confidence = clamp01(base * (1 - sepPenalty));
 
   const cls: InferredClass = best.cls;
   const flipped = morph.cls !== cls;
-  const src = best.cand.source === 'gaia' ? 'Gaia' : best.cand.source === 'simbad' ? 'SIMBAD' : String(best.cand.source);
-  const typeStr = best.cand.otype && best.cand.otype.trim() !== '' ? ` (${best.cand.otype.trim()})` : '';
+  const src =
+    best.cand.source === 'gaia' ? 'Gaia'
+    : best.cand.source === 'simbad' ? 'SIMBAD'
+    : best.cand.source === 'rubin' ? 'Rubin'
+    : String(best.cand.source);
+  // For a Rubin extendedness match, describe the measured flag rather than an otype.
+  const typeStr = Number.isFinite(best.cand.extendedness)
+    ? ` (refExtendedness ${(best.cand.extendedness as number) >= 0.5 ? 'extended' : 'point source'})`
+    : best.cand.otype && best.cand.otype.trim() !== '' ? ` (${best.cand.otype.trim()})` : '';
   const sepStr = `${best.sep.toFixed(1)}″`;
   const verb = flipped ? `overrides image morphology (${morph.cls})` : 'confirms image morphology';
   const reason = `${src} ${cls} match${typeStr} ${sepStr} away — ${verb}`;
