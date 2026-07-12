@@ -47,7 +47,7 @@
   import { fovToZoom } from '../utils/projection.js';
   import { GLOSSARY } from '../data/glossary.js';
   import { getToken, isAuthenticated } from '../api/auth.js';
-  import { fetchLightCurve, toLightCurvePoints } from '../api/lightcurve.js';
+  import { fetchLightCurve, toLightCurvePoints, type ParsedLightCurve } from '../api/lightcurve.js';
   import { fetchGaiaLightCurves } from '../api/gaiaLightCurve.js';
   import { fetchDiaAlerts } from '../api/diaSource.js';
   import { fetchVisitImageSeries, type EpochImage } from '../api/visitImageSeries.js';
@@ -841,21 +841,33 @@
   );
   // Rubin light curve is available when a Rubin base is active AND authenticated.
   const rubinLcAvailable = $derived(rubinActive && authenticated);
-  let rubinLcCurve = $state<LightCurvePoint[] | null>(null);
+  // The full parsed curve (ALL six bands) is fetched ONCE; the displayed series is
+  // DERIVED from the user-selected band, so switching band / luminance never
+  // re-queries the network. 'all' = luminance (every band's samples combined).
+  let rubinLcParsed = $state<ParsedLightCurve | null>(null);
+  let rubinLcBand = $state('r');
   let rubinLcStatus = $state<string | null>(null);
+  const rubinLcCurve = $derived(
+    rubinLcParsed
+      ? toLightCurvePoints(rubinLcParsed, { band: rubinLcBand === 'all' ? undefined : rubinLcBand })
+      : null
+  );
+  // Bands actually present in the fetched curve, plus an 'all' (luminance) option.
+  const rubinLcBands = $derived(rubinLcParsed ? [...rubinLcParsed.bands, 'all'] : []);
 
   async function fetchRubinLc() {
-    rubinLcCurve = null;
+    rubinLcParsed = null;
     rubinLcStatus = `Fetching DP1 light curve at ${currentRa.toFixed(3)}, ${currentDec.toFixed(3)}…`;
     try {
       const parsed = await fetchLightCurve({ ra: currentRa, dec: currentDec, radiusArcsec: 2 });
-      const pts = toLightCurvePoints(parsed, { band: 'r' });
-      if (pts.length === 0) {
+      if (parsed.samples.length === 0) {
         rubinLcStatus = 'No DP1 epochs here (DP1 covers only a few small fields — try an on-field source).';
       } else {
-        rubinLcCurve = pts;
+        rubinLcParsed = parsed;
+        // Default to r if present, else the first band that returned data.
+        rubinLcBand = parsed.bands.includes('r') ? 'r' : (parsed.bands[0] ?? 'r');
         rubinLcStatus = null;
-        statusMessage = `Rubin light curve: ${pts.length} r-band epochs`;
+        statusMessage = `Rubin light curve: ${parsed.samples.length} epochs across ${parsed.bands.length} band(s)`;
       }
     } catch (e) {
       rubinLcStatus = e instanceof Error ? e.message : 'Light-curve fetch failed.';
@@ -871,7 +883,7 @@
       const why = !rubinActive
         ? 'switch the base layer to Rubin (DP1) or the Offline demo'
         : 'sign in with an RSP token that has DP1 data rights';
-      rubinLcCurve = null;
+      rubinLcParsed = null;
       rubinLcStatus = `No light-curve source — ${why}.`;
       statusMessage = `Light curve: no source — ${why}.`;
       return;
@@ -1948,10 +1960,13 @@
         {:else if lightCurveMode && rubinLcAvailable}
           <LightCurvePlot
             curve={rubinLcCurve}
-            band="r"
+            band={rubinLcBand}
+            bands={rubinLcBands}
+            onBandSelect={(b) => (rubinLcBand = b)}
+            yLabel="flux (nJy)"
             title="Rubin light curve"
             status={rubinLcStatus}
-            footNote="DP1 forced photometry (r-band) via TAP · requires RSP token + DP1 rights"
+            footNote="DP1 forced photometry via TAP · requires RSP token + DP1 rights"
             onRefresh={fetchRubinLc}
             onClose={toggleLightCurve}
           />

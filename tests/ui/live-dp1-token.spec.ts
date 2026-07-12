@@ -147,12 +147,33 @@ test.describe('LIVE Rubin DP1 (requires RSP_TOKEN with DP1 rights)', () => {
 
     // Real ForcedSource epochs → plotted points on the intensity-vs-time SVG. A
     // no-data / error state (or the old JSON-parse break) shows zero points.
+    // Real ForcedSource epochs → plotted points on the intensity-vs-time SVG. A
+    // no-data / error state (or the old JSON-parse break) shows zero points.
     await expect
       .poll(() => page.locator('[aria-label="Intensity vs time"] circle').count(), {
         timeout: 30000,
         message: `no light-curve points plotted. RSP errors: ${rspFailures().join(' | ') || 'none'}`,
       })
       .toBeGreaterThan(1);
+
+    // Axis labels are present (both axes named), not a bare plot.
+    await expect(page.locator('[aria-label="X axis"]')).toContainText(/MJD/);
+    await expect(page.locator('[aria-label="Y axis"]')).toContainText(/flux/i);
+
+    // The fetch pulls ALL bands, so the band picker offers more than one option
+    // plus a luminance choice; switching band re-plots WITHOUT a re-fetch.
+    const bandSelect = page.locator('select[aria-label="Light curve band"]');
+    await expect(bandSelect).toBeVisible();
+    const options = await bandSelect.locator('option').allInnerTexts();
+    expect(options).toContain('luminance');
+    expect(options.length).toBeGreaterThan(2); // >1 real band + luminance
+    const before = page.locator('[aria-label="Intensity vs time"] circle');
+    const rCount = await before.count();
+    await bandSelect.selectOption('luminance');
+    // Luminance combines every band's samples → at least as many points as one band.
+    await expect
+      .poll(() => page.locator('[aria-label="Intensity vs time"] circle').count())
+      .toBeGreaterThanOrEqual(rCount);
   });
 
   test('Live DIA alert overlay fetches real DiaSource detections over a DP1 field', async ({

@@ -13,6 +13,9 @@
     curve = null as LightCurvePoint[] | null,
     currentIndex = 0,
     band = 'r',
+    bands = [] as string[],
+    onBandSelect,
+    yLabel = 'intensity',
     title = 'Light curve',
     status = null as string | null,
     footNote = 'ground-truth synthetic intensity (counts) at the view centre · not real observations',
@@ -22,6 +25,12 @@
     curve?: LightCurvePoint[] | null;
     currentIndex?: number;
     band?: string;
+    /** Selectable bands (e.g. u,g,r,i,z,y,'all'); when >1 a band picker is shown. */
+    bands?: string[];
+    /** Called with the chosen band ('all' = luminance) when the picker changes. */
+    onBandSelect?: (band: string) => void;
+    /** Y-axis quantity label (e.g. 'flux (nJy)', 'intensity'). */
+    yLabel?: string;
     title?: string;
     /** Loading / error / info message shown when there is no curve. */
     status?: string | null;
@@ -52,7 +61,21 @@
 
 <div class="lc-plot" role="region" aria-label="Light curve">
   <div class="header">
-    <span class="title">{title} · {band}</span>
+    <span class="title">{title}</span>
+    {#if bands.length > 1 && onBandSelect}
+      <select
+        class="band-select"
+        aria-label="Light curve band"
+        value={band}
+        onchange={(e) => onBandSelect?.((e.currentTarget as HTMLSelectElement).value)}
+      >
+        {#each bands as b (b)}
+          <option value={b}>{b === 'all' ? 'luminance' : b}</option>
+        {/each}
+      </select>
+    {:else}
+      <span class="band-tag">{band === 'all' ? 'luminance' : band}</span>
+    {/if}
     {#if onRefresh}
       <button class="close-btn" aria-label="Refresh light curve" title="Fetch at the current centre" onclick={onRefresh}>↻</button>
     {/if}
@@ -64,7 +87,9 @@
   {#if !hasData}
     <div class="no-data" aria-label="Light curve status">{status ?? 'no time axis (offline cube only)'}</div>
   {:else}
-    <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} class="plot-svg" aria-label="Intensity vs time">
+    <div class="plot-row">
+      <span class="y-axis-label" aria-label="Y axis">{yLabel}</span>
+      <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} class="plot-svg" aria-label="Intensity vs time">
       <rect x="0" y="0" width={W} height={H} fill="rgba(8,10,22,0.95)" />
       {#each [0.5] as g (g)}
         <line x1="0" y1={H * g} x2={W} y2={H * g} stroke="rgba(120,140,220,0.12)" stroke-width="0.5" />
@@ -78,12 +103,14 @@
         <line x1={marker[0]} y1="0" x2={marker[0]} y2={H} stroke="#fc6" stroke-width="1" stroke-dasharray="2,2" />
         <circle cx={marker[0]} cy={marker[1]} r="3.2" fill="#fc6" aria-label="Current epoch marker" />
       {/if}
-    </svg>
+      </svg>
+    </div>
     <div class="axes">
       <span class="ax">MJD {mjdRange[0].toFixed(0)}</span>
       <span class="ax-label">{mjdToIso(mjdRange[0])} → {mjdToIso(mjdRange[1])}</span>
       <span class="ax">MJD {mjdRange[1].toFixed(0)}</span>
     </div>
+    <div class="x-axis-label" aria-label="X axis">Time (MJD)</div>
   {/if}
   <div class="foot">{footNote}</div>
 </div>
@@ -105,6 +132,17 @@
     background: #22243a; border: 1px solid #445; border-radius: 4px; color: #ccd;
     cursor: pointer; font-size: 10px; padding: 2px 7px; font-family: inherit;
   }
+  .band-select {
+    background: #22243a; border: 1px solid #445; border-radius: 4px; color: #9fd;
+    font-size: 10px; padding: 1px 4px; font-family: inherit; cursor: pointer;
+  }
+  .band-tag { color: #9fd; font-weight: 600; }
+  .plot-row { display: flex; align-items: stretch; gap: 3px; }
+  .y-axis-label {
+    writing-mode: vertical-rl; transform: rotate(180deg);
+    font-size: 8px; color: #89a; text-align: center; align-self: center;
+  }
+  .x-axis-label { text-align: center; font-size: 9px; color: #89a; margin-top: 1px; }
   .plot-svg { display: block; border-radius: 3px; }
   .no-data { padding: 24px 8px; text-align: center; color: #889; font-style: italic; }
   .axes {
