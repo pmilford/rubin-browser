@@ -861,6 +861,12 @@
   );
   // Rubin light curve is available when a Rubin base is active AND authenticated.
   const rubinLcAvailable = $derived(rubinActive && authenticated);
+  // Whether the light curve / surface actually HAVE a data source at the current
+  // base — surfaced on the toolbar buttons so a public-DSS user sees the "needs the
+  // Offline or Rubin base" prerequisite BEFORE clicking (the panel message was the
+  // only prior signal, which read as "broken"). Light curve: offline cube or an
+  // authenticated Rubin base. Surface: offline cube only (needs the multi-epoch axis).
+  const lcSourceReady = $derived(baseLayerId === 'offline' || rubinLcAvailable);
   // The full parsed curve (ALL six bands) is fetched ONCE; the displayed series is
   // DERIVED from the user-selected band, so switching band / luminance never
   // re-queries the network. 'all' = luminance (every band's samples combined).
@@ -1529,12 +1535,15 @@
         <button
           class="xsection-toggle"
           class:on={surfaceMode}
+          class:needs-source={baseLayerId !== 'offline'}
           aria-pressed={surfaceMode}
           aria-label="Toggle 3D surface plot"
-          title="Show the central region's intensity as a 3D relief / mountain plot"
+          title={baseLayerId === 'offline'
+            ? "Show the central region's intensity as a 3D relief / mountain plot"
+            : 'Needs the Offline demo base (the multi-epoch synthetic cube) — switch the Base layer to “Offline demo”'}
           onclick={toggleSurface}
         >
-          ▲ 3D surface
+          ▲ 3D surface{#if baseLayerId !== 'offline'} ·⚠{/if}
         </button>
 
         <button
@@ -1768,14 +1777,17 @@
           <button
             class="xsection-toggle"
             class:on={lightCurveMode}
+            class:needs-source={!lcSourceReady}
             aria-pressed={lightCurveMode}
             aria-label="Toggle light curve"
-            title={baseLayerId === 'offline'
-              ? 'Synthetic intensity vs time at the view centre (offline cube)'
-              : 'Fetch a real DP1 forced-photometry light curve at the view centre (TAP)'}
+            title={lcSourceReady
+              ? baseLayerId === 'offline'
+                ? 'Synthetic intensity vs time at the view centre (offline cube)'
+                : 'Fetch a real DP1 forced-photometry light curve at the view centre (TAP)'
+              : 'Needs the Offline demo base or a signed-in Rubin (DP1) base — switch the Base layer'}
             onclick={toggleLightCurve}
           >
-            ⌇ Light curve
+            ⌇ Light curve{#if !lcSourceReady} ·⚠{/if}
           </button>
           <button
             class="xsection-toggle"
@@ -2279,6 +2291,14 @@
     background: rgba(20, 40, 60, 0.9);
     color: #bdf;
     border-color: rgba(120, 200, 255, 0.7);
+  }
+
+  /* Prerequisite not met at the current base (needs Offline / Rubin): dim + amber
+     border so the requirement is visible before the click, not just in the panel. */
+  .xsection-toggle.needs-source {
+    color: #caa06a;
+    border-color: rgba(220, 170, 90, 0.35);
+    opacity: 0.75;
   }
 
   .lc-nosource {

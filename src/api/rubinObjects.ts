@@ -116,6 +116,21 @@ export const RUBIN_OBJECT_COLUMNS: readonly string[] = [
  * DEGREES at the boundary (no arcsec→degree division here); ra/dec/radius are
  * finite-checked so nothing user-controlled is interpolated as an un-vetted string.
  *
+ * QUALITY CUT — `detect_isPrimary = 1` (always): the deep-coadd `dp1.Object` table
+ * carries, for every blended source, BOTH the blended-parent row AND its deblended
+ * child rows (plus non-primary sky/duplicate detections). `detect_isPrimary`
+ * flags the single canonical, non-duplicated version to use — deblended children
+ * where a parent was deblended, isolated sources otherwise. WITHOUT this predicate
+ * a cone returns the parent AND its children stacked at nearly the same position,
+ * so the overlay draws overlapping DUPLICATE markers that read as "spam"/noise.
+ * This is the Object-catalog analogue of the DIA `reliability` cut and the
+ * project's own documented rule ("Use `detect_isPrimary = 1` to avoid duplicates",
+ * .claude/skills/adql-builder/SKILL.md; standard LSST Science Pipelines Object flag,
+ * boolean). It is unconditional because a non-primary duplicate is never something
+ * a position overlay should plot. NOTE: token-gated — schema-derived, not yet
+ * validated against a live dp1.Object response (no token in hand); run
+ * `npm run test:live` when a token is available to confirm.
+ *
  * See https://dp1.lsst.io/products/adql_queries.html and the schema at
  * https://sdm-schemas.lsst.io/dp1.html.
  */
@@ -137,7 +152,8 @@ FROM dp1.Object
 WHERE CONTAINS(
   POINT('ICRS', coord_ra, coord_dec),
   CIRCLE('ICRS', ${formatNum(raDeg)}, ${formatNum(decDeg)}, ${formatNum(radius)})
-) = 1`;
+) = 1
+  AND detect_isPrimary = 1`;
 }
 
 /* -------------------------------------------------------------------------- */

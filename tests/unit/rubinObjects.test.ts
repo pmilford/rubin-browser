@@ -66,6 +66,17 @@ describe('buildObjectConeSearch', () => {
     expect(adql).not.toMatch(/ORDER BY/i);
   });
 
+  // Kills an impl that omits the primary-detection cut: without detect_isPrimary=1
+  // the deep-coadd cone returns blended-parent AND deblended-child rows stacked at
+  // the same position, so the overlay draws overlapping DUPLICATE markers ("spam
+  // noise"). The project's own rule: "Use detect_isPrimary = 1 to avoid duplicates".
+  it('filters to primary detections only (detect_isPrimary = 1) to avoid duplicate/deblend-child markers', () => {
+    const adql = buildObjectConeSearch(params);
+    expect(adql).toMatch(/AND\s+detect_isPrimary\s*=\s*1/);
+    // It must be AND-ed onto the cone (a WHERE-replacing bug would drop the cone).
+    expect(adql).toContain('CONTAINS(');
+  });
+
   it('honours maxRows via TOP, defaulting when omitted', () => {
     expect(buildObjectConeSearch({ ra: 10, dec: 10, radiusDeg: 0.1 })).toMatch(/SELECT TOP 2000/);
     expect(buildObjectConeSearch({ ra: 10, dec: 10, radiusDeg: 0.1, maxRows: 7 })).toMatch(

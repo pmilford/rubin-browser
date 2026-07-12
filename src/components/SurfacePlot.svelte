@@ -61,7 +61,13 @@
   </div>
 
   {#if !hasData || !geom}
-    <div class="no-data">{emptyMessage}</div>
+    <!-- Prerequisite / empty state. Rendered as a clear, actionable callout (not a
+         faint "nothing") so a user who toggled this on the public base understands
+         WHY the surface is blank and what to do, rather than reading it as broken. -->
+    <div class="no-data" aria-label="Surface unavailable" role="status">
+      <span class="no-data-icon" aria-hidden="true">⛰</span>
+      <span class="no-data-msg">{emptyMessage}</span>
+    </div>
   {:else}
     <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} class="plot-svg" aria-label="Intensity surface">
       <rect x="0" y="0" width={W} height={H} fill="rgba(6,6,16,0.95)" />
@@ -131,10 +137,24 @@
     border-radius: 3px;
   }
   .no-data {
-    padding: 30px 8px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 22px 12px;
     text-align: center;
-    color: #889;
-    font-style: italic;
+    color: #b9c2d6;
+    background: rgba(40, 60, 110, 0.18);
+    border: 1px dashed rgba(120, 150, 230, 0.4);
+    border-radius: 5px;
+    line-height: 1.35;
+  }
+  .no-data-icon {
+    font-size: 20px;
+    opacity: 0.8;
+  }
+  .no-data-msg {
+    font-size: 11px;
   }
   .axes {
     display: flex;
